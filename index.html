@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="WIwKHQPPNyTO9U6NJ94Hdp">
+<head data-page-node-id="2GFxuCFoAaVrVDmDZXvbBi">
+<meta charset="UTF-8" data-page-node-id="04ESXdjdI9200d4R7rDo7s" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="GSqFQ6KRV7IDZwicMjTXtE" />
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" data-page-node-id="eARpX5DyCtk5eTASVAyg1G" />
+<meta http-equiv="Pragma" content="no-cache" data-page-node-id="TxqexwLIVDeqCwcgy04dJQ" />
+<meta http-equiv="Expires" content="0" data-page-node-id="eHaf3KuCAKCdvpKdQUGKmW" />
+<title>视频生成工作台</title>
+
+<link rel="stylesheet" href="/api/base_style.css?v=20261003s">
+</head>
+<body data-page-node-id="HsjgyXIv9KRAMASK9LZ2lp">
+
+
+<aside class="sidebar" id="sidebar" data-page-node-id="n8O4Jgd0dd4jOy0N7Hxva3">
+  
+  <div class="ws-brand" data-page-node-id="wsBrandBlk0000000000001">
+    <span class="ws-mark" role="img" aria-label="AI WORKSTATION" data-page-node-id="wsBrandMark000000000002"><span class="ws-ai" data-page-node-id="wsBrandAi0000000000003">AI</span><span class="ws-word" data-page-node-id="wsBrandWord000000000004">WORKSTATION</span></span>
+    <button id="sideExpandBtn" class="side-expand-btn" type="button" title="展开侧边栏" aria-label="展开侧边栏" data-page-node-id="sideExpandBtn0000000001"><svg viewBox="0 0 24 24" width="14" height="14" class="sc-ico" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 9l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><line x1="13.5" y1="6" x2="13.5" y2="18" stroke="currentColor" stroke-width="1.8"/></svg></button>
+  </div>
+  <button id="sideCollapseBtn" class="side-collapse-btn" type="button" title="收起侧边栏" aria-label="收起侧边栏" data-page-node-id="sideCollapseBtn0000000001"><svg viewBox="0 0 24 24" width="14" height="14" class="sc-ico" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M14 9l-3 3 3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><line x1="10.5" y1="6" x2="10.5" y2="18" stroke="currentColor" stroke-width="1.8"/></svg></button>
+  <div class="side-hd" data-page-node-id="sEZFHk1lfkLvbM3pWnTA73">
+    
+    <button class="side-entry" id="newSessBtn" data-page-node-id="FoxlSYN6ZcQLsyVsAEVpUo"><span class="ic ic-plus" aria-hidden="true"></span><span class="side-txt">新会话</span></button>
+  </div>
+  
+  <div class="side-lib" data-page-node-id="aL1b7rArY0000000000003">
+    <button class="side-entry" id="assetLibBtn" title="打开资产库（创作资产 / 主体资产）" data-page-node-id="aL1b7rArY0000000000001"><span class="ic al-lib" aria-hidden="true" data-page-node-id="aL1b7rArIc000000000001"></span><span class="side-txt">资产库</span></button>
+    <button class="side-entry" id="canvasBtn" title="画布：可视化执行操作台（项目列表）"><span class="ic cv-canvas" aria-hidden="true"></span><span class="side-txt">画布</span></button>
+  </div>
+  <div class="sess-list" id="sessList" data-page-node-id="QWXfJ2jj7fSqgoImfqEAGI"></div>
+  <div class="batch-bar" id="batchBar" data-page-node-id="kVK5X5urQnTOqf9AqSX29z">
+    <label class="bb-all"><input type="checkbox" id="batchAllBox">全选</label>
+    <button class="bb-del cancel" id="batchDel" data-page-node-id="s4xcywowaimsAsw6TOwgx0"><span class="bb-cancel-t">取消</span><span class="bb-del-t">删除选中（<span class="bb-del-cnt">0</span>）</span></button>
+  </div>
+  <div class="side-foot" data-page-node-id="pR0v1d3rF00t000000001">
+    <button class="side-entry" id="provBtn" title="配置上游接口地址与密钥" data-page-node-id="pR0v1d3rBtN00000000001"><span class="prov-gear" aria-hidden="true" data-page-node-id="pR0v1d3rGe000000000001"></span><span class="side-txt">服务商设置</span></button>
+  </div>
+</aside>
+
+
+<main class="main-area" data-page-node-id="ERTQMaLu6iUPZqgFk9Gquf">
+
+
+<div class="stream" id="stream" data-page-node-id="wx68X82c6gfhwsfHJK2pdK">
+  <div class="welcome" id="welcome" data-page-node-id="EL3QGpBvfLZJycEa0ahHas">
+    <div class="bg ic ic-video" data-page-node-id="cfNDCR1z0IwBkHyRtT5wbx"></div>
+    在下方输入提示词，上传素材后图片会直接<b data-page-node-id="6sQMVaGcFtaxN73pHwwZoh">插入到光标处</b>，文字与缩略图混排<br data-page-node-id="gc4Qe5419ywBHdZEufm0g6"/>
+    底部可切换 全能参考 / 首尾帧控制，生成后结果会显示在这里<br data-page-node-id="3E9zbYnzRrCQZLmHJRRIoX"/>
+    每条记录可「返回编辑」一键回填，结果可分享
+  </div>
+</div>
+
+
+<div class="asset-lib-view" id="assetLibPanel" hidden data-page-node-id="aL1b7rArY0000000000002"></div>
+
+
+<div class="canvas-view" id="canvasPanelView" hidden></div>
+<div id="canvasStage" hidden></div>
+
+
+<div class="prov-page" id="provPageView" hidden>
+  <div class="prov-hd prov-page-hd">
+    <div class="prov-ttl">服务商设置</div>
+  </div>
+<div class="prov-tabs" id="provTabs">
+      <button class="prov-tab on" id="provTabMedia" data-tab="media" type="button" title="视频生成 / 图片生成 / 猫灵助手 / 长视频分镜引擎">Agnes</button>
+      <button class="prov-tab" id="provTabAudio" data-tab="audio" type="button" title="底部「音频生成」用的语音合成服务">OpenRouter</button>
+      <button class="prov-tab" id="provTabArk" data-tab="ark" type="button" title="火山方舟 · 豆包 Seedream 生图">火山方舟</button>
+      <button class="prov-tab" id="provTabMs" data-tab="ms" type="button" title="魔搭社区 ModelScope · 生图与多角度改机位">魔搭</button>
+      <button class="prov-tab" id="provTabCustom" data-tab="custom" type="button" title="自定义 OpenAI 兼容接口 · 猫灵助手与长视频分镜引擎">自定义 OpenAI</button>
+    </div>
+    <div class="prov-body">
+      <div class="prov-pane" id="provPaneMedia">
+      <div class="prov-lead">视频生成、图片生成、猫灵助手与长视频分镜引擎，都走这一套 Agnes 端点。</div>
+      <div class="prov-fld">
+        <label for="provBase">接口地址（Base URL）</label>
+        <input id="provBase" type="text" spellcheck="false" autocomplete="off" placeholder="https://api.agnes-ai.cn/v1">
+      </div>
+      <div class="prov-fld">
+        <label for="provKey">访问密钥（API Key）</label>
+        <input id="provKey" type="password" spellcheck="false" autocomplete="off" placeholder="未配置">
+        <a class="prov-key-link" href="https://platform.agnes-ai.cn/login" target="_blank" rel="noopener noreferrer">获取密钥</a>
+      </div>
+      <div class="prov-fld">
+        <label for="provPoll">轮询地址（可选）</label>
+        <input id="provPoll" type="text" spellcheck="false" autocomplete="off" placeholder="https://api.agnes-ai.cn/agnesapi">
+      </div>
+      <div class="prov-fld">
+        <label for="provAgentModels">助手模型（逗号分隔，首个为默认）</label>
+        <input id="provAgentModels" type="text" spellcheck="false" autocomplete="off" placeholder="agnes-3.0-flash, agnes-2.5-flash">
+        <div class="prov-hint">可接入：agnes-3.0-flash、agnes-2.5-flash</div>
+        <div class="prov-adv" id="provAgentAdv">
+          <div class="adv-row">
+            <label title="不用管这个勾——Agnes 的模型本来就支持工具调用，勾不勾效果都一样"><input type="checkbox" id="provAgentCapsTools" checked> 工具调用</label>
+            <label title="不用管这个勾——Agnes 的模型本来就能看图，勾不勾效果都一样"><input type="checkbox" id="provAgentCapsVision" checked> 图片识别</label>
+            <label><input type="checkbox" id="provAgentThinking" checked> 思考模式</label>
+          </div>
+          <div class="adv-row" id="provAgentBudgetRow" hidden>
+            <span class="adv-lbl">思考强度</span>
+            <div class="seg adv-seg-dis" id="segAgnesBudgetAssistant" title="Agnes 的思考是开关式（enable_thinking），接口无强度参数">
+              <select id="provAgentBudget" style="display:none" disabled>
+                <option value="auto">自动</option>
+                <option value="low">低</option>
+                <option value="medium">中</option>
+                <option value="high">高</option>
+              </select>
+              <button type="button" class="seg-cur"><span class="seg-tx">自动</span><span class="seg-ar ic ic-chevron-down"></span></button>
+              <div class="seg-pop" data-seg="segAgnesBudgetAssistant"></div>
+            </div>
+            <span class="adv-note">本模型不支持强度调节（开关式思考）</span>
+          </div>
+          <div class="adv-row">
+            <span class="adv-lbl">输出上限</span><input type="text" id="provAgentMaxOutput" placeholder="留空 = 默认">
+            <span class="adv-note">token</span>
+            <span class="adv-lbl">上下文上限</span><input type="text" id="provAgentCtxLimit" placeholder="从模型文档抄">
+            <span class="adv-note">token</span>
+          </div>
+        </div>
+      </div>
+      <div class="prov-fld">
+        <label for="provVideoModels">视频模型（逗号分隔，首个为默认）</label>
+        <input id="provVideoModels" type="text" spellcheck="false" autocomplete="off" placeholder="agnes-video-2.5-flash, agnes-video-2.5">
+        <div class="prov-hint">可接入：agnes-video-2.5-flash、agnes-video-2.5</div>
+      </div>
+      <div class="prov-fld">
+        <label for="provImageModels">生图模型（逗号分隔，首个为默认）</label>
+        <input id="provImageModels" type="text" spellcheck="false" autocomplete="off" placeholder="agnes-image-2.1-flash, agnes-image-2.5-flash">
+        <div class="prov-hint">可接入：agnes-image-2.1-flash、agnes-image-2.5-flash</div>
+      </div>
+      <div class="prov-fld">
+        <label for="provLlmModels">分镜引擎模型（逗号分隔，首个为默认）</label>
+        <input id="provLlmModels" type="text" spellcheck="false" autocomplete="off" placeholder="agnes-2.5-flash, agnes-3.0-flash">
+        <div class="prov-hint">可接入：agnes-2.5-flash、agnes-3.0-flash</div>
+        <div class="prov-adv" id="provLlmAdv">
+          <div class="adv-row">
+            <label title="不用管这个勾——Agnes 的模型本来就支持工具调用，勾不勾效果都一样"><input type="checkbox" id="provLlmCapsTools" checked> 工具调用</label>
+            <label title="不用管这个勾——Agnes 的模型本来就能看图，勾不勾效果都一样"><input type="checkbox" id="provLlmCapsVision" checked> 图片识别</label>
+            <label><input type="checkbox" id="provLlmThinking"> 思考模式</label>
+          </div>
+          <div class="adv-row" id="provLlmBudgetRow" hidden>
+            <span class="adv-lbl">思考强度</span>
+            <div class="seg adv-seg-dis" id="segAgnesBudgetStoryboard" title="Agnes 的思考是开关式（enable_thinking），接口无强度参数">
+              <select id="provLlmBudget" style="display:none" disabled>
+                <option value="auto">自动</option>
+                <option value="low">低</option>
+                <option value="medium">中</option>
+                <option value="high">高</option>
+              </select>
+              <button type="button" class="seg-cur"><span class="seg-tx">自动</span><span class="seg-ar ic ic-chevron-down"></span></button>
+              <div class="seg-pop" data-seg="segAgnesBudgetStoryboard"></div>
+            </div>
+            <span class="adv-note">本模型不支持强度调节（开关式思考）</span>
+          </div>
+          <div class="adv-row">
+            <span class="adv-lbl">输出上限</span><input type="text" id="provLlmMaxOutput" placeholder="留空 = 默认">
+            <span class="adv-note">token</span>
+            <span class="adv-lbl">上下文上限</span><input type="text" id="provLlmCtxLimit" placeholder="从模型文档抄">
+            <span class="adv-note">token</span>
+          </div>
+        </div>
+      </div>
+      <div class="prov-test-row">
+        <button class="prov-test" id="provTest">测试连接</button>
+        <span class="prov-test-out" id="provTestOut"></span>
+      </div>
+      </div>
+
+      <div class="prov-pane" id="provPaneAudio" style="display:none">
+        <div class="prov-lead">底部「音频生成」的语音合成服务，通过 OpenRouter 调用。</div>
+        <div class="prov-fld">
+          <label for="ttsBase">接口地址（Base URL）</label>
+        <input id="ttsBase" type="text" spellcheck="false" autocomplete="off" placeholder="https://openrouter.ai/api/v1">
+      </div>
+        <div class="prov-fld">
+          <label for="ttsKey">访问密钥（OpenRouter API Key）</label>
+        <input id="ttsKey" type="password" spellcheck="false" autocomplete="off" placeholder="未配置">
+        <a class="prov-key-link" href="https://openrouter.ai/sign-up" target="_blank" rel="noopener noreferrer">获取密钥</a>
+      </div>
+        <div class="prov-fld">
+          <label for="ttsModel">TTS 模型（单个）</label>
+        <input id="ttsModel" type="text" spellcheck="false" autocomplete="off" placeholder="fish-audio/s2.1-pro-free:free">
+        <div class="prov-hint">可接入：fish-audio/s2.1-pro-free:free</div>
+        </div>
+        <div class="prov-test-row">
+          <button class="prov-test" id="ttsTest">测试连接</button>
+          <span class="prov-test-out" id="ttsTestOut"></span>
+        </div>
+      </div>
+
+      <div class="prov-pane" id="provPaneArk" style="display:none">
+        <div class="prov-lead">火山方舟（豆包 Seedream），可整体替代 Agnes 承担生图。</div>
+        <div class="prov-fld">
+          <label for="arkBase">接口地址（Base URL）</label>
+        <input id="arkBase" type="text" spellcheck="false" autocomplete="off" placeholder="https://ark.cn-beijing.volces.com/api/v3">
+      </div>
+        <div class="prov-fld">
+          <label for="arkKey">访问密钥（ARK_API_KEY）</label>
+        <input id="arkKey" type="password" spellcheck="false" autocomplete="off" placeholder="未配置">
+        <a class="prov-key-link" href="https://signin.volcengine.com/auth/login" target="_blank" rel="noopener noreferrer">获取密钥</a>
+      </div>
+        <div class="prov-fld">
+          <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
+            <label class="prov-chk" for="arkEnabled" title="勾选 = 把生图切到火山方舟。生图服务商只能选一家，勾上这家会自动取消另一家。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+              <input type="checkbox" id="arkEnabled" style="margin:0">
+            </label>
+            <label for="arkModels" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">生图模型（逗号分隔，首个为默认，勾选启用为生图服务商）</label>
+            <span class="prov-hint" id="arkStateHint" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
+          </div>
+          <input id="arkModels" type="text" spellcheck="false" autocomplete="off" placeholder="doubao-seedream-4-0-250828, doubao-seedream-4-5-251128">
+          <div class="prov-hint">可接入：doubao-seedream-5-0-flash-260915、doubao-seedream-5-0-pro-260628、doubao-seedream-5-0-260128、doubao-seedream-5-0-lite-260128、doubao-seedream-4-5-251128、doubao-seedream-4-0-250828</div>
+        </div>
+        <div class="prov-fld">
+          <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
+            <label class="prov-chk" for="arkVideoEnabled" title="勾选 = 把视频切到火山方舟（Agnes 视频停用）；取消 = 回 Agnes 视频。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+              <input type="checkbox" id="arkVideoEnabled" style="margin:0">
+            </label>
+            <label for="arkVideoModels" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">视频模型（逗号分隔，首个为默认，勾选启用为视频服务商）</label>
+            <span class="prov-hint" id="arkVideoStateHint" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
+          </div>
+          <input id="arkVideoModels" type="text" spellcheck="false" autocomplete="off" placeholder="doubao-seedance-2-0-260128, doubao-seedance-2-5-260628">
+          <div class="prov-hint">可接入：doubao-seedance-2-5-260628、doubao-seedance-2-0-260128、doubao-seedance-2-0-fast-260128、doubao-seedance-2-0-mini-260615</div>
+        </div>
+        <div class="prov-test-row">
+          <button class="prov-test" id="arkTest">测试连接</button>
+          <span class="prov-test-out" id="arkTestOut"></span>
+        </div>
+      </div>
+
+      <div class="prov-pane" id="provPaneMs" style="display:none">
+        <div class="prov-lead">魔搭社区（ModelScope）API-Inference，可整体替代 Agnes 承担生图。</div>
+        <div class="prov-fld">
+          <label for="msBase">接口地址（Base URL）</label>
+        <input id="msBase" type="text" spellcheck="false" autocomplete="off" placeholder="https://api-inference.modelscope.cn/v1">
+      </div>
+        <div class="prov-fld">
+          <label for="msKey">访问令牌（ModelScope Access Token）</label>
+        <input id="msKey" type="password" spellcheck="false" autocomplete="off" placeholder="未配置">
+        <a class="prov-key-link" href="https://modelscope.cn/register?inviteCode=gxchang&invitorName=gxchang" target="_blank" rel="noopener noreferrer">获取密钥</a>
+      </div>
+        <div class="prov-fld">
+          <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
+            <label class="prov-chk" for="msEnabled" title="勾选 = 把生图切到魔搭。生图服务商只能选一家，勾上这家会自动取消另一家。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+              <input type="checkbox" id="msEnabled" style="margin:0">
+            </label>
+            <label for="msModels" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">生图模型（逗号分隔，首个为默认，勾选启用为生图服务商）</label>
+            <span class="prov-hint" id="msStateHint" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
+          </div>
+          <input id="msModels" type="text" spellcheck="false" autocomplete="off" placeholder="Qwen/Qwen-Image-2.1, Qwen/Qwen-Image-Edit-2511">
+          <div class="prov-hint">可接入：Qwen/Qwen-Image-2.1、Qwen/Qwen-Image-Edit-2511</div>
+        </div>
+        <div class="prov-fld">
+          <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
+            <label class="prov-chk" for="provMsChatAssistantEnabled" title="勾选 = 猫灵助手（智能模式）切换到魔搭接口；不勾选 = 回落 Agnes。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+              <input type="checkbox" id="provMsChatAssistantEnabled" style="margin:0">
+            </label>
+            <label for="provMsChatModelsAssistant" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">助手模型（逗号分隔，首个为默认，勾选切换到魔搭接口）</label>
+            <span class="prov-hint" id="provMsChatAssistantState" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
+          </div>
+          <input id="provMsChatModelsAssistant" type="text" spellcheck="false" autocomplete="off" placeholder="模型所有者/模型名（如 Qwen/Qwen3.8-Flash-Next）">
+          <div class="prov-hint">可接入：魔搭 API-Inference 任意兼容 /v1/chat/completions 的对话模型</div>
+          <div class="prov-adv" id="provMsAdvAssistant">
+            <div class="adv-row">
+              <label><input type="checkbox" id="provMsAdvAssistantTools" checked> 工具调用</label>
+              <label><input type="checkbox" id="provMsAdvAssistantVision" checked> 图片识别</label>
+              <label><input type="checkbox" id="provMsAdvAssistantThinking" checked> 思考模式</label>
+            </div>
+            <div class="adv-row" id="provMsBudgetAssistantRow" hidden>
+              <span class="adv-lbl">思考强度</span>
+              <div class="seg" id="segMsBudgetAssistant">
+                <select id="provMsBudgetAssistant" style="display:none">
+                  <option value="auto">自动</option>
+                  <option value="low">低</option>
+                  <option value="medium">中</option>
+                  <option value="high">高</option>
+                </select>
+                <button type="button" class="seg-cur"><span class="seg-tx">自动</span><span class="seg-ar ic ic-chevron-down"></span></button>
+                <div class="seg-pop" data-seg="segMsBudgetAssistant"></div>
+              </div>
+              <span class="adv-note">档位切换根据模型实际反馈为准，不做保障</span>
+            </div>
+            <div class="adv-row">
+              <span class="adv-lbl">输出上限</span><input type="text" id="provMsMaxOutputAssistant" placeholder="留空 = 默认">
+              <span class="adv-note">token</span>
+              <span class="adv-lbl">上下文上限</span><input type="text" id="provMsCtxAssistant" placeholder="从模型文档抄">
+              <span class="adv-note">token</span>
+            </div>
+          </div>
+        </div>
+        <div class="prov-fld">
+          <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
+            <label class="prov-chk" for="provMsChatStoryboardEnabled" title="勾选 = 长视频分镜引擎切换到魔搭接口；不勾选 = 回落 Agnes。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+              <input type="checkbox" id="provMsChatStoryboardEnabled" style="margin:0">
+            </label>
+            <label for="provMsChatModelsStoryboard" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">分镜引擎模型（逗号分隔，首个为默认，勾选切换到魔搭接口）</label>
+            <span class="prov-hint" id="provMsChatStoryboardState" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
+          </div>
+          <input id="provMsChatModelsStoryboard" type="text" spellcheck="false" autocomplete="off" placeholder="模型所有者/模型名（如 Qwen/Qwen3.8-Flash-Next）">
+          <div class="prov-hint">可接入：魔搭 API-Inference 任意兼容 /v1/chat/completions 的对话模型</div>
+          <div class="prov-adv" id="provMsAdvStoryboard">
+            <div class="adv-row">
+              <label><input type="checkbox" id="provMsAdvStoryboardTools" checked> 工具调用</label>
+              <label><input type="checkbox" id="provMsAdvStoryboardVision" checked> 图片识别</label>
+              <label><input type="checkbox" id="provMsAdvStoryboardThinking"> 思考模式</label>
+            </div>
+            <div class="adv-row" id="provMsBudgetStoryboardRow" hidden>
+              <span class="adv-lbl">思考强度</span>
+              <div class="seg" id="segMsBudgetStoryboard">
+                <select id="provMsBudgetStoryboard" style="display:none">
+                  <option value="auto">自动</option>
+                  <option value="low">低</option>
+                  <option value="medium">中</option>
+                  <option value="high">高</option>
+                </select>
+                <button type="button" class="seg-cur"><span class="seg-tx">自动</span><span class="seg-ar ic ic-chevron-down"></span></button>
+                <div class="seg-pop" data-seg="segMsBudgetStoryboard"></div>
+              </div>
+              <span class="adv-note">档位切换根据模型实际反馈为准，不做保障</span>
+            </div>
+            <div class="adv-row">
+              <span class="adv-lbl">输出上限</span><input type="text" id="provMsMaxOutputStoryboard" placeholder="留空 = 默认">
+              <span class="adv-note">token</span>
+              <span class="adv-lbl">上下文上限</span><input type="text" id="provMsCtxStoryboard" placeholder="从模型文档抄">
+              <span class="adv-note">token</span>
+            </div>
+          </div>
+        </div>
+        <div class="prov-test-row">
+          <button class="prov-test" id="msTest">测试连接</button>
+          <span class="prov-test-out" id="msTestOut"></span>
+        </div>
+      </div>
+
+      <div class="prov-pane" id="provPaneCustom" style="display:none">
+        <div class="prov-lead">自定义 OpenAI 兼容接口（本地 Ollama·vLLM 均可），用于猫灵助手与长视频分镜引擎。</div>
+        <div class="prov-fld">
+          <label for="customBase">接口地址（Base URL，OpenAI 兼容）</label>
+          <input id="customBase" type="text" spellcheck="false" autocomplete="off" placeholder="https://api.deepseek.com/v1">
+          <div class="prov-hint">填到 /v1 即可（不含 /chat/completions）；本地服务如 http://localhost:11434/v1</div>
+        </div>
+        <div class="prov-fld">
+          <label for="customKey">访问令牌（API Key）</label>
+          <input id="customKey" type="password" spellcheck="false" autocomplete="off" placeholder="未配置">
+        </div>
+        <div class="prov-fld">
+          <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
+            <label class="prov-chk" for="provCustomChatAssistantEnabled" title="勾选 = 猫灵助手（智能模式）切换到本接口；不勾选 = 回落 Agnes / 魔搭。勾选本页会自动取消魔搭页同用例的勾选。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+              <input type="checkbox" id="provCustomChatAssistantEnabled" style="margin:0">
+            </label>
+            <label for="provCustomChatModelsAssistant" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">助手模型（逗号分隔，首个为默认，勾选切换到本接口）</label>
+            <span class="prov-hint" id="provCustomChatAssistantState" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
+          </div>
+          <input id="provCustomChatModelsAssistant" type="text" spellcheck="false" autocomplete="off" placeholder="模型名（如 deepseek-chat）">
+          <div class="prov-hint">填任意该服务提供的对话模型 ID（多模型用逗号分隔，首项为默认）</div>
+          <div class="prov-adv" id="provCustomAdvAssistant">
+            <div class="adv-row">
+              <label><input type="checkbox" id="provCustomAdvAssistantTools" checked> 工具调用</label>
+              <label><input type="checkbox" id="provCustomAdvAssistantVision" checked> 图片识别</label>
+              <label><input type="checkbox" id="provCustomAdvAssistantThinking" checked> 思考模式</label>
+            </div>
+            <div class="adv-row" id="provCustomBudgetAssistantRow" hidden>
+              <span class="adv-lbl">思考强度</span>
+              <div class="seg" id="segCustomBudgetAssistant">
+                <select id="provCustomBudgetAssistant" style="display:none">
+                  <option value="auto">自动</option>
+                  <option value="low">低</option>
+                  <option value="medium">中</option>
+                  <option value="high">高</option>
+                </select>
+                <button type="button" class="seg-cur"><span class="seg-tx">自动</span><span class="seg-ar ic ic-chevron-down"></span></button>
+                <div class="seg-pop" data-seg="segCustomBudgetAssistant"></div>
+              </div>
+              <span class="adv-note">透传 reasoning_effort，不支持的服务会忽略</span>
+            </div>
+            <div class="adv-row">
+              <span class="adv-lbl">输出上限</span><input type="text" id="provCustomMaxOutputAssistant" placeholder="留空 = 默认">
+              <span class="adv-note">token</span>
+              <span class="adv-lbl">上下文上限</span><input type="text" id="provCustomCtxAssistant" placeholder="从模型文档抄">
+              <span class="adv-note">token</span>
+            </div>
+          </div>
+        </div>
+        <div class="prov-fld">
+          <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
+            <label class="prov-chk" for="provCustomChatStoryboardEnabled" title="勾选 = 长视频分镜引擎切换到本接口；不勾选 = 回落 Agnes / 魔搭。勾选本页会自动取消魔搭页同用例的勾选。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+              <input type="checkbox" id="provCustomChatStoryboardEnabled" style="margin:0">
+            </label>
+            <label for="provCustomChatModelsStoryboard" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">分镜引擎模型（逗号分隔，首个为默认，勾选切换到本接口）</label>
+            <span class="prov-hint" id="provCustomChatStoryboardState" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
+          </div>
+          <input id="provCustomChatModelsStoryboard" type="text" spellcheck="false" autocomplete="off" placeholder="模型名（如 deepseek-chat）">
+          <div class="prov-hint">填任意该服务提供的对话模型 ID（建议选支持结构化输出 / 工具调用的模型）</div>
+          <div class="prov-adv" id="provCustomAdvStoryboard">
+            <div class="adv-row">
+              <label><input type="checkbox" id="provCustomAdvStoryboardTools" checked> 工具调用</label>
+              <label><input type="checkbox" id="provCustomAdvStoryboardVision" checked> 图片识别</label>
+              <label><input type="checkbox" id="provCustomAdvStoryboardThinking"> 思考模式</label>
+            </div>
+            <div class="adv-row" id="provCustomBudgetStoryboardRow" hidden>
+              <span class="adv-lbl">思考强度</span>
+              <div class="seg" id="segCustomBudgetStoryboard">
+                <select id="provCustomBudgetStoryboard" style="display:none">
+                  <option value="auto">自动</option>
+                  <option value="low">低</option>
+                  <option value="medium">中</option>
+                  <option value="high">高</option>
+                </select>
+                <button type="button" class="seg-cur"><span class="seg-tx">自动</span><span class="seg-ar ic ic-chevron-down"></span></button>
+                <div class="seg-pop" data-seg="segCustomBudgetStoryboard"></div>
+              </div>
+              <span class="adv-note">透传 reasoning_effort，不支持的服务会忽略</span>
+            </div>
+            <div class="adv-row">
+              <span class="adv-lbl">输出上限</span><input type="text" id="provCustomMaxOutputStoryboard" placeholder="留空 = 默认">
+              <span class="adv-note">token</span>
+              <span class="adv-lbl">上下文上限</span><input type="text" id="provCustomCtxStoryboard" placeholder="从模型文档抄">
+              <span class="adv-note">token</span>
+            </div>
+          </div>
+        </div>
+        <div class="prov-test-row">
+          <button class="prov-test" id="customTest">测试连接</button>
+          <span class="prov-test-out" id="customTestOut"></span>
+        </div>
+      </div>
+    </div>
+  <div class="prov-ft" id="provFt">
+      <button class="prov-reset" id="provReset">恢复默认</button>
+      <span class="prov-ft-gap"></span>
+      
+      <button class="prov-save" id="provSave">保存并生效</button>
+    </div>
+</div>
+
+
+<div class="composer" id="composerBox" data-page-node-id="TXRjUsbp4vd6AZVTDDtgOx">
+  <div class="composer-inner" data-page-node-id="Ix2SbAghrtyZqZJ0VVTmZT">
+    <div class="comp-card" data-page-node-id="UhIOuKLoWugf525iSNcLNy">
+      
+      <div class="kf-area" id="kfArea" style="display:none" data-page-node-id="k0VoHOfr0m7HAIkHyipd5T">
+        <button class="kf-slot" id="kfFirst" type="button" data-page-node-id="FLUIIZWpBsDHwctJolsfuN">
+          <span class="kf-ic ic ic-image" data-page-node-id="j8Rf6Gzio8JBC1dmsrb9u7"></span>
+          <span class="kf-tx" data-page-node-id="qn0bRe8NnUr2gLIzdMReEC">首帧</span>
+          <span class="kf-ph" data-page-node-id="MG6CRSfU7DJbvhILmbrYSg">首帧图</span>
+        </button>
+        <button class="kf-slot" id="kfLast" type="button" data-page-node-id="1sjHE3Dc4frU3DmaLRpwDX">
+          <span class="kf-ic ic ic-image" data-page-node-id="kMUZUo2zI4h404mcRiakQK"></span>
+          <span class="kf-tx" data-page-node-id="h3GJMtqDkt2IOIC6Bo6nDl">尾帧</span>
+          <span class="kf-ph" data-page-node-id="hPl4T6aTSlpucHROu7HhHq">尾帧图</span>
+        </button>
+        <span class="up-help" data-page-node-id="iE4WXyOUHlSmE96aErkb3q">上传两张图分别作为首帧与尾帧，无需在 prompt 额外填写 @ 引用</span>
+      </div>
+
+      
+      <div class="upload-strip" id="ustrip" data-page-node-id="0nuOOaF9xHR5JxYfRecP2C"></div>
+
+      
+      <div id="prompt" class="editable" contenteditable="true" data-ph="描述你想要的画面，例如：一只猫咪在雨中奔跑，电影级运镜" data-page-node-id="Bcx82zGcU1AgDwXPjW4CdP"></div>
+
+      
+      <div class="up-area" id="upArea" style="display:none" data-page-node-id="ODB46PSwHSqiufJOoMq3LK">
+        <input type="file" id="file" accept="image/*,audio/*,video/*" multiple style="display:none" data-page-node-id="qktjMISUMEvdA9iEffIwau" />
+        <span class="up-help" id="upHelp" data-page-node-id="vEPMO1AU1M7Apn6YpXQPT1"></span>
+      </div>
+
+      <div class="bar" data-page-node-id="Ub1gYRDRfQoU34nbqgldGj">
+        <button class="icon-btn" id="upIconBtn" title="上传素材" data-page-node-id="OchmDr4kDmEWUMOdFVzPvl"><span data-page-node-id="WbpxGfoXnt2SWyD08yCyXA">＋</span></button>
+        <button class="icon-btn" id="atChip" title="引用素材" data-page-node-id="UQTSzyYtmKLO4n3zuz7AwE"><span data-page-node-id="9xcnLaq9ICB1a5pB8WfxN8">@</span></button>
+        <div class="seg" id="mediaSel" data-seg="media" data-page-node-id="lggRRtSqSfHdmzMoSTLIyg">
+          <button type="button" class="seg-cur" data-page-node-id="PdAffcl1STe9tR8rJ67CzK"><span class="seg-tx" data-page-node-id="WOGAIi9eqtDSB73TAMNpaa">视频生成</span><span class="seg-ar ic ic-chevron-down" data-page-node-id="mVy2jD8BB6IcTVWtE8DWUb"></span></button>
+          <select id="media" style="display:none" data-page-node-id="cK5ACMyMgdTqQtzO9hkBjp">
+            <option value="video" selected data-page-node-id="B1QffQa0DmKNtw1Ez3eGHm">视频生成</option>
+            <option value="image" data-page-node-id="1LpKviERJYEBlVDgGapEEB">图片生成</option>
+            <option value="longvideo" data-page-node-id="EEZEYXpIeimqbDWGKYJyzz">长视频生成</option>
+            <option value="audio" data-page-node-id="aUdi0Opt1onB1QffQa0DmKN">音频生成</option>
+          </select>
+          <div class="seg-pop" data-page-node-id="XIE2DYGj7y0VAgDb8QbFcJ"></div>
+        </div>
+        <span class="bar-sep" id="atSep" data-page-node-id="trsGHbDZti6GYNuEU8fDz6">|</span>
+        
+        <div class="seg" id="audioLibSel" data-seg="audioLib" style="display:none">
+          <button type="button" class="seg-cur"><span class="seg-tx">音色库</span><span class="seg-ar ic ic-chevron-down"></span></button>
+        </div>
+        <div class="seg" id="audioSpeedSel" data-seg="audioSpeed" style="display:none">
+          <button type="button" class="seg-cur"><span class="seg-tx">1×</span><span class="seg-ar ic ic-chevron-down"></span></button>
+          <select id="audioSpeed" style="display:none"></select>
+          <div class="seg-pop"></div>
+        </div>
+        
+        <div class="seg" id="audioRefSrcSel" data-seg="audioRefSrc" style="display:none" title="生成时发给接口的参考音频取自哪一份：原样本＝你上传的原始录音；转换后＝系统用统一话术生成的样本（二次克隆，音色可能有漂移）">
+          <button type="button" class="seg-cur" title="生成时发给接口的参考音频取自哪一份：原样本＝你上传的原始录音；转换后＝系统用统一话术生成的样本（二次克隆，音色可能有漂移）"><span class="seg-tx">参考：原样本</span><span class="seg-ar ic ic-chevron-down"></span></button>
+          <select id="audioRefSrc" style="display:none"></select>
+          <div class="seg-pop"></div>
+        </div>
+        <div class="seg" id="modeSel" data-seg="mode" data-page-node-id="CqgzoZLpPpNR73G7Rm7avE">
+          <button type="button" class="seg-cur" data-page-node-id="7eHVabN9gYCmO6CNoO2NlU"><span class="seg-tx" data-page-node-id="B0nrXlKgM8nWVhYcGXPN74">全能参考</span><span class="seg-ar ic ic-chevron-down" data-page-node-id="AHFLQ9Wl7Hsrsl1PcZdxET"></span></button>
+          <select id="mode" style="display:none" data-page-node-id="Hzze65Aff7Gge7ijWdpmEx">
+            
+            <option value="reference" selected data-page-node-id="s5mMaw3oklhHD5CWwVp09m">全能参考</option>
+            <option value="keyframe" data-page-node-id="oR4DHEBieVpweP0vvHCQXK">首尾帧控制</option>
+          </select>
+          <div class="seg-pop" data-page-node-id="9vfoNtSuU8iD8vVrQnAnyj"></div>
+        </div>
+
+        <div class="seg" id="modelSel" data-seg="model" data-page-node-id="c3fDUcdxcN3kwJDqMWA5w7">
+          <button type="button" class="seg-cur" data-page-node-id="9bssGXHgHoobFyww1trCZF"><span class="seg-tx" data-page-node-id="XfKyAkf9IxXxYA9VbGWCkB">Agnes 2.5 Video Flash</span><span class="seg-ar ic ic-chevron-down" data-page-node-id="i3G58wRP5g79NluGGRneWj"></span></button>
+          <select id="model" style="display:none" data-page-node-id="ec8kntDJPT5KkLDB99avFj">
+            <option value="agnes-video-2.5-flash" selected data-page-node-id="oSsRVEe1wKhyCffO4eHgYZ">Agnes 2.5 Video Flash</option>
+            <option value="agnes-video-2.5" data-page-node-id="m1EMB5KabEGMaotSlY7nqd">Agnes 2.5 Video</option>
+          </select>
+          <div class="seg-pop" data-page-node-id="F1VSI6MdOjPI89iMPuzVjH"></div>
+        </div>
+
+        <div class="seg" id="arsec" data-seg="arsec" data-page-node-id="eOQSoS96v1SdlPd801UA6t">
+          <button type="button" class="seg-cur" data-page-node-id="unQRxLby2SVN8P9O9IUa6M"><span class="seg-tx" id="arsecTx" data-page-node-id="AknhzpOdliOa1o6zQfEGSB">16:9 · 5s · 720p</span><span class="seg-ar ic ic-chevron-down" data-page-node-id="dfTkfq72EMlDFqTccuH4hn"></span></button>
+          <select id="ar" style="display:none" data-page-node-id="yUW0C1EXj5aehVOj3JEdjC">
+            
+            <option value="16:9" selected data-page-node-id="R6sq5HACLnk5GjnZnXHHAX">16:9</option>
+            <option value="9:16" data-page-node-id="HjO5jLuvdB9xlkaR8KRUhS">9:16</option>
+            <option value="1:1" data-page-node-id="ShM1pmgwDAbgC0MEvpdxOh">1:1</option>
+            <option value="4:3" data-page-node-id="Dw0K2HNKDB2k9Xmjr4cYHJ">4:3</option>
+            <option value="3:4" data-page-node-id="z97uTfHLofdawttAVcGDOs">3:4</option>
+            <option value="21:9" data-page-node-id="fFqsjaEO3Lzt1pmYCzShHD">21:9</option>
+          </select>
+          <select id="sec" style="display:none" data-page-node-id="Lq3gpOxRwck5IbqGZf0wx2">
+            <option value="4" data-page-node-id="eOW9goU5UJuft9EJwgyAk5">4</option><option value="5" selected data-page-node-id="h0Jj4kZa4uB8yT73zhYSn0">5</option><option value="6" data-page-node-id="nL0bNVm1ZKexapqfV4GXuH">6</option>
+            <option value="7" data-page-node-id="VEYQVkUjrNGA0FTzkBMZCV">7</option><option value="8" data-page-node-id="6QNqnAIoY2CHeCjoWHW4Xr">8</option><option value="9" data-page-node-id="RInLSXdqmrtYRuYZM8vrSI">9</option>
+            <option value="10" data-page-node-id="4uov0LF6hfqiRggQZkwPdx">10</option><option value="11" data-page-node-id="Z4itFwARSdRopXGYlaa2QO">11</option><option value="12" data-page-node-id="0lU8d2mAk5v2y1gh1zZ51L">12</option>
+          </select>
+          <select id="size" style="display:none" data-page-node-id="3zdyEzUwwRTNU7k707Kup5">
+            <option value="720P" selected data-page-node-id="KCxd26DikFegRqG4pnw3jP">720P</option>
+            <option value="1080P" data-page-node-id="SM7CY5x7eLkU32KWaHTouV">1080P</option>
+            <option value="1K" data-page-node-id="SM7CY5x7eLkU32KWaHTouW">1K</option>
+            <option value="2K" data-page-node-id="SM7CY5x7eLkU32KWaHTouX">2K</option>
+          </select>
+        </div>
+
+        <div class="seg" id="styleSel" data-seg="style" style="display:none" data-page-node-id="QCNeLOO9CRLN7elpkBWxMj">
+          <button type="button" class="seg-cur" data-page-node-id="dVE38A9uM9Cfo3Zd0V4Z7V"><span class="seg-tx" data-page-node-id="507rjzemEXsUuBaLYtTzJ6">无风格</span><span class="seg-ar ic ic-chevron-down" data-page-node-id="iFr0rZjFIB2hg6NHACoDvE"></span></button>
+          <select id="style" style="display:none" data-page-node-id="RiV1lVLsXmbbJgtJyd8oqU"></select>
+          <div class="seg-pop sty-grid" data-page-node-id="PPJ7A9Uta8FG7PlYyoz9oy"></div>
+        </div>
+
+        <div class="send-row" data-page-node-id="YJ1zJvAmz9ni7dpYEovtuJ">
+          <button class="send" id="send" title="生成" data-page-node-id="aaraEf2BHrY8rbIGNdPtiO"><span class="ic ic-arrow-up" data-page-node-id="E3lpQBLKoHJGdRwYpbj7I1"></span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</main>
+
+
+
+<script src="/api/longvideo_ui.js?v=20260930a"></script>
+<div class="at-pop" id="atpop" data-page-node-id="RouEFDOwMOhgyF1Ngo2Ym9">
+  <div class="at-hd" id="atHead" data-page-node-id="i0vFw3jzxFqIJpw8v6A4QP">选择素材插入</div>
+  <div id="atList" data-page-node-id="l2hwoVK4rSw6pEqG2URnEL"></div>
+  <div class="at-empty" id="atEmpty" data-page-node-id="1Q7QgkPF3t8YCpWSvxqJhk"><span id="atEmptyText" data-page-node-id="7z8pegvH3VeUp0kcBSqW7Q"></span></div>
+</div>
+
+<div class="lightbox" id="lightbox" data-page-node-id="morv864TuGCh9gFRT0yA9A">
+  <button class="lb-close" id="lbClose" title="关闭 (Esc)" data-page-node-id="eKdJjEnIiSxJ9VcsJvZCwC"><span class="ic ic-cancel" data-page-node-id="qcitM80zqMpJCm0rU8U3yw"></span></button>
+  
+  <div class="lb-acts" id="lbActs"></div>
+  <button class="lb-nav lb-prev" id="lbPrev" title="上一张 (←)" data-page-node-id="lvD2hHaCVzP6KqBIy4lTHZ"><span class="ic ic-chevron-left" data-page-node-id="BrhDzUMyURAEOATEGGPeVV"></span></button>
+  <img id="lbImg" alt="预览" data-page-node-id="pv5zlSIftr8WAoEUZDiOn5">
+  <button class="lb-nav lb-next" id="lbNext" title="下一张 (→)" data-page-node-id="TvgGXx80BVcWZrthWwXDjp"><span class="ic ic-chevron-right" data-page-node-id="KMA69GImsXF9bdVGKJNYvb"></span></button>
+  <div class="cap" id="lbCap" data-page-node-id="FpLGBRGLl5JAAIKKyHqPqK"></div>
+</div>
+
+
+<div class="lightbox" id="mediaPreview">
+  <div class="lb-acts" id="mpActs">
+    <button class="lb-btn" id="mpCopy" title="复制链接" aria-label="复制链接"><span class="ic ic-link"></span></button>
+    <a class="lb-btn" id="mpDl" href="#" download title="下载" aria-label="下载"><span class="ic ic-dl"></span></a>
+    <button class="lb-close" id="mpClose" title="关闭 (Esc)" aria-label="关闭"><span class="ic ic-cancel"></span></button>
+  </div>
+  <div class="mp-main" id="mpMain">
+    <div class="mp-stage" id="mpStage"></div>
+    <div class="mp-info" id="mpInfo"></div>
+  </div>
+  <div class="cap" id="mpCap"></div>
+</div>
+
+
+
+
+
+
+<div class="agent-fab" id="agentFab" title="猫灵助手" role="button" tabindex="0" aria-label="猫灵助手">
+  <span class="cat-orb" aria-hidden="true">
+    <i class="cat-spin"></i><i class="cat-spin2"></i><i class="cat-core"></i><i class="cat-face"></i>
+  </span>
+</div>
+<div class="agent-panel" id="agentPanel">
+  <div class="agent-body">
+    <aside class="agent-side" id="agentSide">
+      <div class="agent-side-hd">
+        <button class="agent-new" id="agentNewSess">+ 新会话</button>
+        
+      </div>
+      <div class="agent-sess-list" id="agentSessList"></div>
+      <div class="agent-batch-bar" id="agentBatchBar">
+        <label class="abb-all"><input type="checkbox" id="agentBatchBox">全选</label>
+        <button class="abb-del cancel" id="agentBatchDel"><span class="abb-cancel-t">取消</span><span class="abb-del-t">删除选中（<span class="abb-del-cnt">0</span>）</span></button>
+      </div>
+    </aside>
+    <div class="agent-main">
+      <div class="agent-hd">
+        <span class="cat-orb cat-orb-mini" aria-hidden="true"><i class="cat-spin"></i><i class="cat-spin2"></i><i class="cat-core"></i></span>
+        <div class="agent-hd-txt">
+          <span class="agent-title">猫灵助手</span>
+          <span class="agent-sub">说人话，出片</span>
+        </div>
+        <button class="agent-hd-btn agent-hd-ic" id="agentNewSessTop" title="新建会话" aria-label="新建会话">
+          <svg viewBox="0 0 18 18" width="15" height="15" fill="none" stroke="currentColor"
+               stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M15.5 7.4c0 3-2.9 5.4-6.5 5.4-.8 0-1.6-.1-2.3-.4l-3.2 1.7.7-2.6C2.7 10.5 2 9 2 7.4 2 4.4 4.9 2 8.5 2s7 2.4 7 5.4z"/>
+            <path d="M8.5 5.2v4.4M6.3 7.4h4.4"/>
+          </svg>
+        </button>
+        <button class="agent-hd-btn" id="agentFull" title="展开 / 还原会话列表"><span class="ic ic-max" aria-hidden="true"></span><span class="lbl">历史</span></button>
+        <button class="agent-hd-btn" id="agentClose" title="收起"><span class="ic ic-cancel" aria-hidden="true"></span></button>
+      </div>
+      <div class="agent-stream" id="agentStream">
+        <div class="agent-hello" id="agentHello">
+          <div class="agent-hello-t">说一句话，我来出片</div>
+          <div class="agent-hello-s">例如：「生成一段 5 秒的猫在雪地里的视频」「画一张雨夜便利店的图」</div>
+        </div>
+      </div>
+      <div class="agent-input">
+        <div class="upload-strip" id="agentUstrip"></div>
+        <div class="editable" id="agentPrompt" contenteditable="true"
+             data-ph="说一句话…（Enter 发送，Shift+Enter 换行）"></div>
+        <div class="agent-bar">
+          <button class="agent-ic-btn" id="agentUpIcon" title="上传素材：从本地上传 / 从资产库上传（图片 / 音频 / 视频）">＋</button>
+          <button class="agent-ic-btn" id="agentAtChip" title="引用素材（会话内已上传或已生成的图）">@</button>
+          <span class="agent-up-tip" id="agentUpTip"></span>
+          <button class="agent-send" id="agentSend">发送</button>
+        </div>
+        <input type="file" id="agentFile" accept="image/*,audio/*,video/*" multiple style="display:none">
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<div class="at-pop ag-atpop" id="agentAtPop">
+  <div class="at-hd" id="agentAtHead">选择素材插入</div>
+  <div id="agentAtList"></div>
+  <div class="at-empty" id="agentAtEmpty"><span id="agentAtEmptyText"></span></div>
+</div>
+
+<script src="/api/base_ui.js?v=20261003u"></script>
+
+  <script src="/api/assets_ui.js?v=20260930g"></script>
+  <script src="/api/assets_picker.js?v=20260922b"></script>
+  <script src="/api/imageedit_ui.js?v=20260923o"></script>
+  <link rel="stylesheet" href="/api/canvas_style.css?v=20261007o2">
+  <script src="/api/canvas_dagre.js?v=20260930i"></script>
+  <script src="/api/canvas_manager.js?v=20260930i"></script>
+  
+  <script src="/api/canvas_timeline.js?v=20261007o2"></script>
+  <script src="/api/canvas_stage.js?v=20261007o2"></script>
+<script src="/api/tts_upload.js?v=20260918d"></script>
+<script src="/api/audio_ui.js?v=20261003a"></script>
+
+</body>
+</html>

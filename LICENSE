@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 gxchang
+Copyright (c) 2026 gxchang and contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,3 +19,19 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+--------------------------------------------------------------------------
+Third-party attribution
+
+The image-editing panel is based on:
+
+  Open Storyboard Canvas - https://github.com/ganbo-gab/open-storyboard-canvas
+  Copyright (c) 2026 ganbo-gab and contributors
+  (MIT, applies to that project's additions)
+
+which is itself a continued development of:
+  Storyboard-Copilot by henjicc / 痕继痕迹
+  https://github.com/henjicc/Storyboard-Copilot
+
+The original author name and original project link above are retained as
+required by the upstream attribution terms.

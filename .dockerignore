@@ -1,0 +1,12 @@
+.git
+.env
+data/
+logs/
+storage/
+archive/
+__pycache__/
+*.pyc
+*.log
+.workbuddy/
+.playwright-cli/
+node_modules/
