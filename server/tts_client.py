@@ -788,13 +788,6 @@ def delete_voice(vid):
     row = get_voice_row(vid)
     if not row:
         return False
-    for rel in (row.get("audio_path"), row.get("preview_path")):
-        try:
-            p = abs_path(rel)
-            if p and os.path.isfile(p):
-                os.remove(p)
-        except Exception:
-            pass
     with _LOCK:
         conn = _conn()
         try:

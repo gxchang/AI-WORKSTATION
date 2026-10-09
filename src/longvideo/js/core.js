@@ -1030,7 +1030,7 @@
   }
 
   async function deleteJob(jobId, label) {
-    if (!(await lvConfirm({ title: "删除任务", message: "确定删除任务「" + (label || jobId) + "」？该任务的片段与成片将一并删除（资产库素材不受影响）。", danger: true, okText: "删除" }))) return;
+    if (!(await lvConfirm({ title: "删除任务", message: "确定删除任务「" + (label || jobId) + "」？成片与分段可在资产库中查看。", danger: true, okText: "删除" }))) return;
     setMsg("删除中…");
     try {
       const r = await fetch(API + "/api/jobs/" + encodeURIComponent(jobId), { method: "DELETE" });
@@ -1056,7 +1056,7 @@
     if (!box) return;
     const ids = [...box.querySelectorAll(".lv-job-sel:checked")].map((c) => c.getAttribute("data-id"));
     if (!ids.length) return;
-    if (!(await lvConfirm({ title: "批量删除任务", message: "确定批量删除选中的 " + ids.length + " 个任务？片段与成片将一并删除（资产库素材不受影响）。", danger: true, okText: "删除" }))) return;
+    if (!(await lvConfirm({ title: "删除任务", message: "确定删除选中的 " + ids.length + " 个任务？成片与分段可在资产库中查看。", danger: true, okText: "删除" }))) return;
     setMsg("批量删除中…");
     try {
       const r = await fetch(API + "/api/jobs/delete_batch", {

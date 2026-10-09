@@ -3438,15 +3438,11 @@ def api_delete_segment_history(job_id, seg_no, idx):
         con.commit()
     finally:
         con.close()
+
+
+
+
     removed_video = None
-    if isinstance(video_ver, int) and 1 <= video_ver <= 99:
-        target = os.path.join(JOBS_DIR, job_id, f"seg_{seg_no:02d}_v{video_ver}.mp4")
-        if os.path.isfile(target):
-            try:
-                os.remove(target)
-                removed_video = f"seg_{seg_no:02d}_v{video_ver}.mp4"
-            except OSError:
-                pass
     return jsonify(ok=True, removed_video=removed_video)
 
 
@@ -3624,51 +3620,54 @@ def _purge_session_refs(job_id):
     return removed
 
 
+def _job_static_name(job_id, basename):
+    
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", str(job_id))[:48]
+    base = re.sub(r"[^A-Za-z0-9._-]", "_", str(basename))
+    name = "%s__%s" % (safe, base)
+    if os.path.exists(os.path.join(ASSETS_DIR, name)):
+        stem, ext = os.path.splitext(name)
+        name = "%s_%d%s" % (stem, int(time.time()), ext)
+    return name
+
+
 def _delete_job(job_id):
     
     con = _db()
+    migrated, kept = 0, 0
     try:
         job = con.execute("SELECT id FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
         if not job:
             return 404, {"error": "not found", "job_id": job_id}
         con.execute("DELETE FROM lv_segments WHERE job_id=?", (job_id,))
 
-
-
-
         priv = con.execute(
             "SELECT name,url FROM assets WHERE job_id=?", (job_id,)
         ).fetchall()
+        dyn_prefix = "/api/jobs/%s/" % job_id
         for r in priv:
-            other_jobs = con.execute(
-                "SELECT id FROM lv_jobs WHERE id != ? AND assets_json LIKE ?",
-                (job_id, "%" + r["name"] + "%"),
-            ).fetchall()
-            if other_jobs:
+            u = r["url"] or ""
+            new_url = None
+            if u.startswith(dyn_prefix):
 
-                con.execute(
-                    "UPDATE assets SET job_id=NULL WHERE name=?", (r["name"],)
-                )
-                logging.getLogger(__name__).info(
-                    "删除任务 %s：素材 %s 仍被 %d 个其他任务引用，已转为共享保留",
-                    job_id, r["name"], len(other_jobs),
-                )
-                continue
-            con.execute("DELETE FROM assets WHERE name=?", (r["name"],))
-            u = r["url"]
-            if u and u.startswith("/assets/"):
-                p = os.path.join(ASSETS_DIR, os.path.basename(u))
-                if os.path.isfile(p):
+                src = os.path.join(JOBS_DIR, job_id, os.path.basename(u))
+                static_name = _job_static_name(job_id, os.path.basename(u))
+                if os.path.isfile(src):
                     try:
-                        os.remove(p)
+                        shutil.copy2(src, os.path.join(ASSETS_DIR, static_name))
+                        new_url = "/assets/" + static_name
+                        migrated += 1
                     except Exception as e:
-                        logging.getLogger(__name__).warning("删除任务私有素材文件失败 %s: %s", p, e)
-
-            try:
-                import asset_index
-                asset_index.forget(name=r["name"])
-            except Exception as e:
-                logging.getLogger(__name__).warning("清理内容索引失败 %s: %s", r["name"], e)
+                        logging.getLogger(__name__).warning(
+                            "删除任务 %s：成片/分段迁移失败，保留原状 %s: %s", job_id, u, e)
+            if new_url:
+                con.execute("UPDATE assets SET job_id=NULL, url=? WHERE name=?",
+                            (new_url, r["name"]))
+            else:
+                con.execute("UPDATE assets SET job_id=NULL WHERE name=?", (r["name"],))
+                kept += 1
+                logging.getLogger(__name__).info(
+                    "删除任务 %s：资产 %s 已脱离任务，保留在资产库", job_id, r["name"])
         con.execute("DELETE FROM lv_jobs WHERE id=?", (job_id,))
 
         try:
@@ -3687,7 +3686,8 @@ def _delete_job(job_id):
             logging.getLogger(__name__).warning("删除任务目录失败 %s: %s", d, e)
 
     n_ref = _purge_session_refs(job_id)
-    return 200, {"ok": True, "job_id": job_id, "sessionRefsRemoved": n_ref}
+    return 200, {"ok": True, "job_id": job_id, "sessionRefsRemoved": n_ref,
+                 "assetsMigrated": migrated, "assetsKept": kept}
 
 
 @lv_bp.route("/jobs/<job_id>", methods=["DELETE"])
@@ -3956,11 +3956,32 @@ def api_segment_version_mp4(job_id, seg_no, ver):
 
 
 
+def _deleted_job_asset_file(name):
+    
+    try:
+        con = _db()
+        try:
+            row = con.execute("SELECT url FROM assets WHERE name=?", (name,)).fetchone()
+        finally:
+            con.close()
+    except Exception:
+        return None
+    u = ((row["url"] if row else "") or "")
+    if not u.startswith("/assets/"):
+        return None
+    p = os.path.join(ASSETS_DIR, os.path.basename(u))
+    return p if os.path.isfile(p) else None
+
+
 @lv_bp.route("/jobs/<job_id>/final.mp4")
 def api_final_mp4(job_id):
     p = os.path.join(JOBS_DIR, job_id, "final.mp4")
     if not os.path.exists(p):
-        return jsonify(error="not ready"), 404
+
+        gp = _deleted_job_asset_file("%s/final.mp4" % job_id)
+        if not gp:
+            return jsonify(error="not ready"), 404
+        p = gp
     from flask import send_file
     return send_file(p, mimetype="video/mp4")
 
@@ -3970,7 +3991,10 @@ def api_final_mp4(job_id):
 def api_segment_mp4(job_id, seg_no):
     p = os.path.join(JOBS_DIR, job_id, f"seg_{seg_no:02d}.mp4")
     if not os.path.exists(p):
-        return jsonify(error="not ready"), 404
+        gp = _deleted_job_asset_file("%s/seg_%02d.mp4" % (job_id, seg_no))
+        if not gp:
+            return jsonify(error="not ready"), 404
+        p = gp
     from flask import send_file
     return send_file(p, mimetype="video/mp4")
 

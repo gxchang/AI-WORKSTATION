@@ -324,9 +324,44 @@ def _init_db():
 
 
             conn.execute("CREATE TABLE IF NOT EXISTS agent_sessions (id TEXT PRIMARY KEY, name TEXT, created_at INTEGER, data TEXT)")
+
+            conn.execute("CREATE TABLE IF NOT EXISTS deleted_sessions "
+                         "(id TEXT PRIMARY KEY, deleted_at INTEGER)")
             conn.commit()
         finally:
             conn.close()
+
+
+def _tombstoned_session_ids(conn):
+    
+    try:
+        return {r[0] for r in conn.execute("SELECT id FROM deleted_sessions")}
+    except sqlite3.Error:
+        return set()
+
+
+def _server_tombstones():
+    
+    _ensure_db()
+    try:
+        conn = _db_conn()
+        try:
+            return [r[0] for r in conn.execute("SELECT id FROM deleted_sessions")]
+        finally:
+            conn.close()
+    except Exception:
+        return []
+
+
+def _mark_session_deleted(conn, ids):
+    
+    now = int(time.time() * 1000)
+    for sid in (ids or []):
+        if not sid:
+            continue
+        conn.execute(
+            "INSERT INTO deleted_sessions(id, deleted_at) VALUES(?,?) "
+            "ON CONFLICT(id) DO UPDATE SET deleted_at=excluded.deleted_at", (sid, now))
 
 
 def _ensure_db():
@@ -1179,6 +1214,9 @@ def _save_sessions(data):
         conn = _db_conn()
         try:
             stored_tombs, stored_msgs = {}, {}
+
+
+            _tomb = _tombstoned_session_ids(conn)
             if not force:
                 for row in conn.execute("SELECT id, data FROM sessions"):
                     try:
@@ -1191,6 +1229,11 @@ def _save_sessions(data):
                         stored_msgs[row[0]] = []
             for s in sessions:
                 if not isinstance(s, dict) or "id" not in s:
+                    continue
+
+
+
+                if s["id"] in _tomb:
                     continue
                 s = _merge_tombstones(s, stored_tombs)
                 incoming = s.get("messages") or []
@@ -1229,6 +1272,7 @@ def _save_sessions(data):
                             "SELECT data FROM sessions WHERE id IN (%s)" % _ph, _pruned_ids):
                         _pruned_urls.extend(_mgc.urls_in(r["data"]))
                 conn.execute(f"DELETE FROM sessions WHERE id NOT IN ({placeholders})", ids)
+                _mark_session_deleted(conn, _pruned_ids)
             else:
 
 
@@ -1236,6 +1280,7 @@ def _save_sessions(data):
                 for r in conn.execute("SELECT data FROM sessions"):
                     _pruned_urls.extend(_mgc.urls_in(r["data"]))
                 conn.execute("DELETE FROM sessions")
+                _mark_session_deleted(conn, _pruned_ids)
 
             if _pruned_ids:
                 for r in conn.execute("SELECT tid, data FROM tasks"):
@@ -1259,15 +1304,11 @@ def _save_sessions(data):
             conn.close()
 
 
-    if _pruned_urls:
-        try:
-            _r = _mgc.reclaim_urls(_pruned_urls)
-            if _r["removed"]:
-                print(f"[sessions] 已回收 {len(_r['removed'])} 个无引用媒体文件"
-                      f"（{sum(s for _k, _n, s in _r['removed']) / 1024:.0f} KB）"
-                      f"；另清理 {len(_pruned_tids)} 条任务行")
-        except Exception as e:
-            print(f"[warn] 会话 prune 后的媒体回收失败（不影响保存）：{e}")
+
+
+
+    if _pruned_tids:
+        print(f"[sessions] prune 清理 {len(_pruned_tids)} 条任务行（媒体文件一律保留）")
 
 
 def _load_agent_sessions():
@@ -1373,14 +1414,9 @@ def _save_agent_sessions(data):
             conn.commit()
         finally:
             conn.close()
+
     if _pruned_urls:
-        try:
-            _r = _mgc.reclaim_urls(_pruned_urls)
-            if _r["removed"]:
-                print(f"[agent_sessions] 已回收 {len(_r['removed'])} 个无引用媒体文件"
-                      f"（{sum(s for _k, _n, s in _r['removed']) / 1024:.0f} KB）")
-        except Exception as e:
-            print(f"[warn] 助手会话 prune 后的媒体回收失败（不影响保存）：{e}")
+        print(f"[agent_sessions] prune 保留 {len(_pruned_urls)} 个媒体 URL 对应文件（不删）")
 
 
 def _sync_result_to_session(session_id, dedup_key, kind, model, media_url, prompt="",

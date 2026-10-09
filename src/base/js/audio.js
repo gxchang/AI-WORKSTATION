@@ -84,7 +84,7 @@ input.addEventListener("keydown",function(ev){if(ev.key==="Enter"){ev.preventDef
 else if(ev.key==="Escape"){ev.preventDefault();finish(false);}});input.addEventListener("blur",function(){finish(true);});input.addEventListener("click",function(ev){ev.stopPropagation();});}
 async function libRenameTo(id,name){try{var r=await fetch(API+"/api/tts/voices/"+encodeURIComponent(id),{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:name}),});var d=await r.json().catch(function(){return{};});if(!r.ok||d.error){_toast("重命名失败："+(d.error||r.status));return;}
 await audioLoadVoices();audioRenderLib();_toast("已重命名");}catch(e){_toast("重命名失败："+e.message);}}
-async function libDelete(id){var v=_voiceById(id);if(!v)return;if(!confirm("删除音色「"+v.name+"」？将同时删除其参考音频与试听样本，不可恢复。"))return;try{var r=await fetch(API+"/api/tts/voices/"+encodeURIComponent(id),{method:"DELETE"});var d=await r.json().catch(function(){return{};});if(!r.ok||d.error){_toast("删除失败："+(d.error||r.status));return;}
+async function libDelete(id){var v=_voiceById(id);if(!v)return;if(!confirm("确定删除音色「"+v.name+"」？它的参考音频可在资产库中查看。"))return;try{var r=await fetch(API+"/api/tts/voices/"+encodeURIComponent(id),{method:"DELETE"});var d=await r.json().catch(function(){return{};});if(!r.ok||d.error){_toast("删除失败："+(d.error||r.status));return;}
 await audioLoadVoices();audioRenderLib();_toast("已删除");}catch(e){_toast("删除失败："+e.message);}}
 function libToggleTags(item){var box=item.querySelector(".alib-tagedit");if(!box)return;if(box.style.display!=="none"){box.style.display="none";panelCloseAllDd();return;}
 var v=_voiceById(item.dataset.id)||{};AS.tagDraft={gender:v.gender||"",age:v.age||"",dialect:v.dialect||""};libRenderTagEdit(item);box.style.display="";}

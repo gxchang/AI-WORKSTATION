@@ -428,7 +428,7 @@
         ${f.voiceField}
         ${f.postureField}
         ${_appearanceBlockHtml(a)}
-        <button class="lv-del" type="button" data-name="${a.name}" title="${isInLib ? "仅从当前任务移除使用，资产库不受影响" : "连同文件删除，不可撤销"}">${isInLib ? "移除" : "删除"}</button>`;
+        <button class="lv-del" type="button" data-name="${a.name}" title="${isInLib ? "当前任务不再用它，素材还在资产库" : "文件会一起删除"}">${isInLib ? "移除" : "删除"}</button>`;
       card.querySelector(".lv-i-label").addEventListener("input", (e) => { a.label = e.target.value; saveDraft(); });
       const kindEl = card.querySelector(".lv-i-kind");
       if (kindEl) kindEl.addEventListener("change", (e) => { a.kind = e.target.value; saveDraft(); renderAssets(); });
@@ -495,9 +495,10 @@
       const a = lv.assets.find((x) => x.name === n);
       if (a && _isInLibrary(a)) sharedNames.push(n); else mineNames.push(n);
     });
-    let msg = "";
-    if (mineNames.length) msg += `删除 ${mineNames.length} 个本任务素材（连同文件，不可撤销）`;
-    if (sharedNames.length) msg += (msg ? "；" : "") + `移除 ${sharedNames.length} 个资产库素材的使用（资产库本体与其他任务不受影响）`;
+    let msg = "确定";
+    if (mineNames.length) msg += `删除 ${mineNames.length} 个本任务素材（文件一并删除）`;
+    if (sharedNames.length) msg += (mineNames.length ? "、移除 " : "删除 ") + `${sharedNames.length} 个库素材的使用`;
+    msg += "？";
     if (!(await lvConfirm({ title: "删除素材", message: msg, danger: mineNames.length > 0, okText: mineNames.length ? "删除" : "移除" }))) return;
     setMsg("删除中…");
     try {
@@ -541,13 +542,13 @@
     
     
     if (a && _isInLibrary(a)) {
-      if (!(await lvConfirm({ title: "移除引用", message: "从当前任务移除素材「" + name + "」的使用？\n资产库本体与其他任务不受影响（真删请到「资产库」里操作）。", okText: "移除" }))) return;
+      if (!(await lvConfirm({ title: "移除引用", message: "确定移除素材「" + name + "」的使用？它本身还在资产库中。", okText: "移除" }))) return;
       lv.assets = lv.assets.filter((x) => x.name !== name);
       renderAssets();
       setMsg("已从当前任务移除（资产库不受影响）");
       return;
     }
-    if (!(await lvConfirm({ title: "删除素材", message: "确定删除素材「" + name + "」？将连同文件删除，不可撤销。", danger: true, okText: "删除" }))) return;
+    if (!(await lvConfirm({ title: "删除素材", message: "确定删除素材「" + name + "」？文件会一并删除。", danger: true, okText: "删除" }))) return;
     setMsg("删除中…");
     try {
       
@@ -1123,7 +1124,7 @@
         const k = parseInt(it.dataset.k, 10);
         if (e.target.closest(".sh-del")) {
           e.stopImmediatePropagation();
-          if (!(await lvConfirm({ title: "删除分镜历史", message: `将永久删除第 ${k} 版分镜（提示词编辑记录，不含视频），不可恢复。确认删除？`, danger: true, okText: "删除" }))) return;
+          if (!(await lvConfirm({ title: "删除分镜历史", message: `确定删除第 ${k} 版分镜？相关的视频可在资产库中查看。`, danger: true, okText: "删除" }))) return;
           try {
             const r = await fetch(API + `/api/jobs/${lv.jobId}/shots_history/${idx}`, { method: "DELETE" });
             if (!r.ok) { const j = await r.json().catch(() => ({})); err("删除失败：" + (j.error || "")); return; }
@@ -1622,11 +1623,7 @@
         if (_ro) return;
         if (lv.jobStatus && lv.jobStatus !== "draft") { err("已开始生成的任务不可删除镜头"); return; }
         
-        
-        const _hasGen = (lv.segs || []).length > 0;
-        const _delMsg = _hasGen
-          ? `将删除镜头 ${s.shot_no} 及其已生成的全部数据（成片视频、提示词历史）。\n如需保留该分镜视频，请先到第 3 步预览并右键另存。\n删除后可继续编排其他镜头。确认删除？`
-          : `确认删除镜头 ${s.shot_no}？`;
+        const _delMsg = `确定删除镜头 ${s.shot_no}？相关的画面可在资产库中查看。`;
         if (!(await lvConfirm({ title: "删除镜头", message: _delMsg, danger: true, okText: "删除" }))) return;
         lv.shots.splice(idx, 1);
         
@@ -2953,7 +2950,7 @@ async function _pickImageForShot(s) {
               ? `<button class="h-vid" data-url="${vid.url}" type="button" title="在预览区播放这一版当时生成的画面（不会重新生成）"><span class="ic ic-resume" aria-hidden="true"></span>看这版画面</button>`
               : `<span class="h-novid" title="历史画面最多保留 3 版，这一版已被更新的版本顶掉">旧画面已超出保留数量</span>`;
             
-            const delBtn = `<button class="h-del" data-didx="${idx - 1}" data-dver="${ver}" type="button" title="删除这一版旧记录${vid ? "（含这版的旧画面）" : ""}">删除</button>`;
+            const delBtn = `<button class="h-del" data-didx="${idx - 1}" data-dver="${ver}" type="button" title="删除这一版旧记录">删除</button>`;
             return `<div class="lv-hist-it" data-i="${idx - 1}" data-role="old">
               <div class="h-when"><b>v${ver}</b><span>${_fmtTs(h.ts)}</span><span>${(h.seconds || 5)}s</span><span style="margin-left:auto;color:var(--vio);font-size:11px">点击放回编辑器</span></div>
               <div class="h-txt">${_esc((h.prompt || "").slice(0, 160) || "（空）")}</div>
@@ -3006,7 +3003,7 @@ async function _pickImageForShot(s) {
           (async () => {
             if (!(await lvConfirm({
               title: "删除历史版本",
-              message: `确定删除第 ${dver} 版旧记录吗？\n将同时删除这一版的旧提示词${_hasVid ? "和旧画面" : ""}，删除后无法恢复。\n正在使用的版本不受影响。`,
+              message: `确定删除第 ${dver} 版旧记录？`,
               danger: true, okText: "删除",
             }))) return;
             try {

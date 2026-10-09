@@ -2675,7 +2675,12 @@ def api_result(rid):
     return jsonify({"error": "未找到该生成记录。"}), 404
 @app.route("/api/sessions", methods=["GET"])
 def api_get_sessions():
-    return jsonify(_load_sessions())
+    payload = _load_sessions()
+
+
+
+    payload["deletedIds"] = _server_tombstones()
+    return jsonify(payload)
 @app.route("/api/sessions", methods=["POST"])
 def api_post_sessions():
     data = request.get_json(silent=True) or {}
@@ -2741,6 +2746,9 @@ def api_delete_session(sid):
             _urls.extend(_core_mod._purge_history_rows(conn, [sid]))
             _nhist = _h0 - conn.execute("SELECT COUNT(*) AS c FROM history").fetchone()["c"]
             conn.execute("DELETE FROM sessions WHERE id=?", (sid,))
+
+
+            _mark_session_deleted(conn, [sid])
             cur = conn.execute("SELECT value FROM meta WHERE key='currentId'").fetchone()
             new_cur = cur["value"] if cur else None
             if new_cur == sid:
@@ -2758,13 +2766,10 @@ def api_delete_session(sid):
         finally:
             conn.close()
 
+
+
+
     _freed, _freed_n = 0, 0
-    try:
-        _r = _mgc.reclaim_urls(_urls)
-        _freed = sum(s for _k, _n, s in _r["removed"])
-        _freed_n = len(_r["removed"])
-    except Exception as e:
-        print(f"[warn] 删会话后的媒体回收失败（不影响删除）：{e}")
 
 
     if with_assets and _asset_names:
