@@ -3288,6 +3288,16 @@ def api_media_waveform():
     data = request.get_json(silent=True) or {}
     full = _tl_local(data.get("url"))
     if not full:
+
+
+        u = (data.get("url") or "").strip()
+        if u.startswith("/api/tts/file/"):
+            rel = u[len("/api/tts/file/"):].replace("\\", "/").lstrip("/")
+            if _ttsclient.is_public_rel(rel):
+                p = _ttsclient.abs_path(rel)
+                if p and os.path.isfile(p):
+                    full = p
+    if not full:
         return jsonify(error="素材不在站内资产库，无法解析"), 400
     try:
         buckets = int(data.get("buckets") or 600)

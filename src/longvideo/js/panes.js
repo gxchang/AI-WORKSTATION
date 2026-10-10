@@ -129,8 +129,7 @@
     for (const f of fileList) fd.append("files", f);
     setMsg("上传中…");
     try {
-      if (!lv.jobId) await ensureJob();   
-      fd.append("job_id", lv.jobId || "");
+      
       const r = await fetch(API + "/api/assets/batch_upload", { method: "POST", body: fd });
       const j = await r.json();
       if (!r.ok) { err(j.error || "上传失败"); return; }
@@ -139,7 +138,7 @@
       lv.assets.forEach((a) => (prev[a.name] = a));
       j.uploaded.forEach((u) => {
         const ex = prev[u.name];
-        lv.assets.push(ex ? { ...u, label: ex.label, kind: ex.kind, owner: ex.owner, posture: ex.posture, job_id: lv.jobId } : { ...u, posture: "", job_id: lv.jobId, kind: u.type === "audio" ? "voice" : "" });
+        lv.assets.push(ex ? { ...u, label: ex.label, kind: ex.kind, owner: ex.owner, posture: ex.posture, job_id: null } : { ...u, posture: "", job_id: null, kind: u.type === "audio" ? "voice" : "" });
       });
       renderAssets();
       setMsg(`已上传 ${j.uploaded.length} 个素材`);
@@ -157,12 +156,6 @@
   
   
   
-  
-  function _libItem(a) {
-    if (!a) return null;
-    return (currentLibraryItems || []).find((x) => x.name === a.name) || null;
-  }
-  function _isInLibrary(a) { return !!_libItem(a); }
   function esc(s) {
     return String(s == null ? "" : s)
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -408,17 +401,12 @@
     _list.forEach((a) => {
       const card = document.createElement("div");
       card.className = "lv-ac";
-      const isInLib = _isInLibrary(a);   
-      const badge = `<span class="lv-badges">` +
-        (isInLib ? `<span class="lv-badge shared" title="在资产库中">资产库</span>` : "") +
-        `<span class="lv-badge" title="已登记进本任务">本任务</span>` +
-        `</span>`;
+      
       const th = a.type === "image"
         ? `<div class="lv-th"><img src="${_esc(_thumb(a.url))}" alt="" loading="lazy" decoding="async"></div>`
-        : `<div class="lv-th"><button type="button" class="lv-play" data-url="${a.url}" title="试听这条声线"><span class="ic ic-resume" aria-hidden="true"></span>试听</button></div>`;
+        : `<div class="lv-th"><canvas class="lv-th-wave" data-wave-url="${a.url}"></canvas><button type="button" class="lv-play" data-url="${a.url}" title="试听这条声线"><span class="ic ic-resume" aria-hidden="true"></span>试听</button></div>`;
       const f = _assetCardInner(a);
       card.innerHTML = `
-        ${badge}
         <input type="checkbox" class="lv-i-sel" data-name="${a.name}"${_selNames.has(a.name) ? " checked" : ""}>
         ${th}
         <input class="lv-i-label" title="${f.labelTitle}" placeholder="${f.isAudio ? "标签＝声线名（如 橘猫声线）" : (a.kind === "scene" ? "标签＝场景名（如 客厅）" : a.kind === "prop" ? "标签＝道具名（如 毛线球）" : "标签＝角色名（如 橘猫）")}" value="${esc(a.label)}">
@@ -428,8 +416,11 @@
         ${f.voiceField}
         ${f.postureField}
         ${_appearanceBlockHtml(a)}
-        <button class="lv-del" type="button" data-name="${a.name}" title="${isInLib ? "当前任务不再用它，素材还在资产库" : "文件会一起删除"}">${isInLib ? "移除" : "删除"}</button>`;
+        <button class="lv-del" type="button" data-name="${a.name}" title="从本任务移除使用；若被别处引用，文件保留">移除</button>`;
       card.querySelector(".lv-i-label").addEventListener("input", (e) => { a.label = e.target.value; saveDraft(); });
+      
+      const _tw = card.querySelector(".lv-th-wave");
+      if (_tw && window.Wave) window.Wave.mountStatic(_tw, a.url);
       const kindEl = card.querySelector(".lv-i-kind");
       if (kindEl) kindEl.addEventListener("change", (e) => { a.kind = e.target.value; saveDraft(); renderAssets(); });
       const postEl = card.querySelector(".lv-i-posture");
@@ -472,15 +463,7 @@
     $("lvSelAll").checked = all.length > 0 && checked.length === all.length;
     $("lvSelAll").indeterminate = checked.length > 0 && checked.length < all.length;
     
-    let mineCnt = 0, sharedCnt = 0;
-    picked.forEach((a) => {
-      if (_isInLibrary(a)) sharedCnt++; else mineCnt++;
-    });
-    const promoteBtn = $("lvPromote");
-    if (promoteBtn) promoteBtn.disabled = mineCnt === 0;
-    
-    
-    $("lvBulkHint").textContent = sharedCnt ? `其中 ${sharedCnt} 个为资产库素材（仅移除使用，不影响资产库）` : "";
+    $("lvBulkHint").textContent = picked.length ? "移除只是解除本任务的使用；若被别处引用，文件仍保留" : "";
   }
 
   async function deleteSelected() {
@@ -489,40 +472,25 @@
     if (!names.length) return;
     
     
-    
-    let mineNames = [], sharedNames = [];
-    names.forEach((n) => {
-      const a = lv.assets.find((x) => x.name === n);
-      if (a && _isInLibrary(a)) sharedNames.push(n); else mineNames.push(n);
-    });
-    let msg = "确定";
-    if (mineNames.length) msg += `删除 ${mineNames.length} 个本任务素材（文件一并删除）`;
-    if (sharedNames.length) msg += (mineNames.length ? "、移除 " : "删除 ") + `${sharedNames.length} 个库素材的使用`;
-    msg += "？";
-    if (!(await lvConfirm({ title: "删除素材", message: msg, danger: mineNames.length > 0, okText: mineNames.length ? "删除" : "移除" }))) return;
-    setMsg("删除中…");
+    const msg = `确定移除选中的 ${names.length} 个素材的使用？若被别处引用，文件仍保留。`;
+    if (!(await lvConfirm({ title: "移除素材", message: msg, okText: "移除" }))) return;
+    setMsg("移除中…");
     try {
-      let delCnt = 0, failCnt = 0, heldMsg = "";
-      if (mineNames.length) {
-        const r = await fetch(API + "/api/assets/delete_batch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ names: mineNames, from_job: lv.jobId }),
-        });
-        const j = await r.json();
-        if (!r.ok) { err(j.error || "批量删除失败"); return; }
-        delCnt = j.count || 0;
-        
-        
-        heldMsg = summarizeStillReferenced(j.still_referenced);
-        failCnt = (j.failed && j.failed.length) || 0;
-      }
-      const gone = new Set([...mineNames, ...sharedNames]);
-      lv.assets = lv.assets.filter((a) => !gone.has(a.name));
+      const r = await fetch(API + "/api/assets/delete_batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ names: names, from_job: lv.jobId }),
+      });
+      const j = await r.json();
+      if (!r.ok) { err(j.error || "批量删除失败"); return; }
+      
+      const heldMsg = summarizeStillReferenced(j.still_referenced);
+      const failCnt = (j.failed && j.failed.length) || 0;
+      lv.assets = lv.assets.filter((a) => !names.includes(a.name));
       renderAssets();   
       if (heldMsg) err(heldMsg.trim());
-      else setMsg(`已删除 ${delCnt} 个素材` + (sharedNames.length ? `，移除使用 ${sharedNames.length} 个` : "") + (failCnt ? `，${failCnt} 个失败` : ""));
-    } catch (e) { err("批量删除异常：" + e.message); }
+      else setMsg(`已移除 ${j.count || names.length} 个素材` + (failCnt ? `，${failCnt} 个失败` : ""));
+    } catch (e) { err("批量移除异常：" + e.message); }
   }
 
   $("lvBulkDel").addEventListener("click", deleteSelected);
@@ -540,19 +508,9 @@
     const a = lv.assets.find((x) => x.name === name);
     
     
-    
-    if (a && _isInLibrary(a)) {
-      if (!(await lvConfirm({ title: "移除引用", message: "确定移除素材「" + name + "」的使用？它本身还在资产库中。", okText: "移除" }))) return;
-      lv.assets = lv.assets.filter((x) => x.name !== name);
-      renderAssets();
-      setMsg("已从当前任务移除（资产库不受影响）");
-      return;
-    }
-    if (!(await lvConfirm({ title: "删除素材", message: "确定删除素材「" + name + "」？文件会一并删除。", danger: true, okText: "删除" }))) return;
-    setMsg("删除中…");
+    if (!(await lvConfirm({ title: "移除素材", message: "确定移除素材「" + name + "」的使用？若被别处引用，文件仍保留。", okText: "移除" }))) return;
+    setMsg("移除中…");
     try {
-      
-      
       const r = await fetch(API + "/api/assets/delete/" + encodeURIComponent(name), {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
@@ -560,11 +518,11 @@
       });
       const j = await r.json();
       if (!r.ok) { err(j.error || "删除失败"); return; }
-      lv.assets = lv.assets.filter((a) => a.name !== name);
+      lv.assets = lv.assets.filter((x) => x.name !== name);
       renderAssets();
       
       const held = summarizeStillReferenced({ [name]: j.still_referenced });
-      if (held) err(held.trim()); else setMsg("已删除 " + name);
+      if (held) err(held.trim()); else setMsg("已移除 " + name);
     } catch (e) { err("删除异常：" + e.message); }
   }
 
@@ -634,36 +592,6 @@
     AssetPicker.open({ source: "library", multi: true, title: "从资产库选择素材", onPick: (items) => addItemsToTask(items) });
   });
   loadLibrary();   
-
-  $("lvPromote").addEventListener("click", async () => {
-    const names = [...lvAssets.querySelectorAll(".lv-i-sel:checked")].map((c) => c.getAttribute("data-name"));
-    const mine = names.filter((n) => { const a = lv.assets.find((x) => x.name === n); return a && !_isInLibrary(a); });
-    if (!mine.length) { err("请先勾选本任务的私有素材（资产库素材无需提升）"); return; }
-    if (!(await lvConfirm({ title: "加入资产库", message: `确定把选中的 ${mine.length} 个本任务素材加入资产库？加入后所有任务都可用；之后在各任务里只能"移除使用"，真删需到「资产库」操作（将影响所有任务）。` }))) return;
-    setMsg("加入资产库中…");
-    try {
-      
-      const items = mine.map((n) => {
-        const a = lv.assets.find((x) => x.name === n) || {};
-        return {
-          name: n, label: a.label || "", kind: a.kind || "", owner: a.owner || "", posture: a.posture || "",
-          appearance: a.appearance == null ? null : a.appearance,
-        };
-      });
-      const r = await fetch(API + "/api/assets/promote", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ names: mine, job_id: lv.jobId, items: items }),
-      });
-      const j = await r.json();
-      if (!r.ok) { err(j.error || "提升失败"); return; }
-      lv.assets.forEach((a) => { if (mine.includes(a.name)) a.job_id = null; });
-      renderAssets();
-      await loadLibrary().catch(() => {});   
-      renderAssets();
-      setMsg(`已将 ${j.count} 个素材加入资产库`);
-    } catch (e) { err("加入资产库异常：" + e.message); }
-  });
 
   $("lvTo2").addEventListener("click", () => goStep(2));
   $("lvBack1").addEventListener("click", () => goStep(1));

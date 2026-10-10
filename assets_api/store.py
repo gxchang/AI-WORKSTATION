@@ -26,8 +26,8 @@ AUD_EXTS = {"mp3", "wav", "m4a", "aac", "ogg", "flac"}
 DOC_EXTS = {"pdf", "txt", "md", "json", "csv"}
 VID_EXTS = {"mp4", "mov", "webm", "mkv"}
 ALLOWED = IMG_EXTS | AUD_EXTS
-MAX_LONGVIDEO_ASSETS = 50
 VISUALSPEC_VERSION = 1
+
 
 
 T_ASSETS = "assets"
@@ -374,22 +374,10 @@ def batch_upload():
     if not files:
         return jsonify(error="no files"), 400
 
-    job_id = (request.form.get("job_id") or "").strip() or None
-    con = _db()
-    try:
 
 
 
-
-
-        existing = con.execute(
-            "SELECT COUNT(*) c FROM assets WHERE job_id=? AND type IN ('image','audio')",
-            (job_id,)
-        ).fetchone()["c"]
-    finally:
-        con.close()
-    if existing + len(files) > MAX_LONGVIDEO_ASSETS:
-        return jsonify(error=f"超出长视频素材上限 {MAX_LONGVIDEO_ASSETS}"), 413
+    job_id = None
 
     out = []
     con = _db()
@@ -689,53 +677,8 @@ def move_assets():
                    orphan_subjects_removed=gone)
 
 
-@assets_bp.route("/promote", methods=["POST"])
-def promote():
-    
-    data = request.get_json(silent=True) or {}
-    job_id = (data.get("job_id") or "").strip() or None
-    names = data.get("names") or []
-    if not job_id:
-        return jsonify(error="需要 job_id"), 400
-    if not isinstance(names, list) or not names:
-        return jsonify(error="需要 names 数组"), 400
-    ann = {}
-    for it in (data.get("items") or []):
-        if isinstance(it, dict) and it.get("name"):
-            ann[it["name"]] = it
-    con = _db()
-    gone = 0
-    try:
-        promoted = []
-        for n in names:
-            cur = con.execute(
-                "UPDATE assets SET job_id=NULL WHERE name=? AND job_id=?",
-                (n, job_id),
-            )
-            if cur.rowcount:
-                promoted.append(n)
-                it = ann.get(n)
-                if it:
-                    fields = ["label=?", "kind=?", "owner=?", "posture=?", "updated_at=?"]
-                    vals = [it.get("label"), it.get("kind"), it.get("owner"), it.get("posture"), time.time()]
-                    k = (it.get("kind") or "").strip()
-                    if k in ("character", "voice", "scene", "prop"):
-                        fields.append("subject_id=?")
-                        vals.append(sync_subject(con, owner=it.get("owner"), kind=k, label=it.get("label")))
-                    ap = it.get("appearance")
-                    if ap is not None:
-                        fields.append("appearance=?")
-                        vals.append(_appearance_to_spec(ap))
-                    vals.append(n)
-                    con.execute(
-                        "UPDATE assets SET %s WHERE name=? AND job_id IS NULL" % ", ".join(fields),
-                        vals,
-                    )
-        gone = prune_orphan_subjects(con)
-        con.commit()
-    finally:
-        con.close()
-    return jsonify(ok=True, promoted=promoted, count=len(promoted), orphan_subjects_removed=gone)
+
+
 
 
 def _file_fate(name, url=None):

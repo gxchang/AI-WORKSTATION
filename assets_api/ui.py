@@ -57,3 +57,18 @@ def assets_picker_js():
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
     return resp
+
+
+@ui_bp.route("/waveform.js")
+def waveform_js():
+    
+    try:
+        body = _read(os.path.join(_ROOT, "src", "base", "js", "waveform.js"))
+    except OSError as e:
+        return Response("/* 波形组件资源缺失：%s */" % e,
+                        status=404, mimetype="application/javascript")
+    resp = Response(body, mimetype="application/javascript")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp

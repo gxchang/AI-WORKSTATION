@@ -97,14 +97,13 @@
     <div class="lv-body">
     <section class="lv-pane" data-pane="1">
       <div class="lv-h">素材登记<span class="lv-sub">上传后给每张图填准确的角色 / 场景 / 道具名（<b>须与脚本中的称呼完全一致</b>），并标注</span></div>
-      <div class="lv-drop" id="lvDrop"><span class="lv-drop-ic"><span class="ic ic-upload" aria-hidden="true"></span></span>点击或拖拽上传（图片 / 音频，最多 50 个）</div>
+      <div class="lv-drop" id="lvDrop"><span class="lv-drop-ic"><span class="ic ic-upload" aria-hidden="true"></span></span>点击或拖拽上传（图片 / 音频，数量不限）</div>
       <input type="file" id="lvFile" accept="image/*,audio/*" multiple hidden>
       
       <div class="lv-bulkrow">
         <div class="lv-bulkbar" id="lvBulk" hidden>
           <label><input type="checkbox" id="lvSelAll"> 全选</label>
-          <button class="lv-btn ghost" id="lvPromote" disabled title="把勾选的本任务素材加入资产库">加入资产库</button>
-          <button class="lv-bdel" id="lvBulkDel" disabled>删除选中（<span id="lvSelCnt">0</span>）</button>
+          <button class="lv-bdel" id="lvBulkDel" disabled>移除选中（<span id="lvSelCnt">0</span>）</button>
           <span class="cc" id="lvBulkHint"></span>
         </div>
         <button class="lv-btn ghost" id="lvPickFromLib" type="button" title="从资产库选择已有素材加入当前任务"><span class="ic ic-library" aria-hidden="true" style="margin-right:5px"></span>从资产库选</button>
