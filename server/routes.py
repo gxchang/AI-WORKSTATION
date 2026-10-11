@@ -503,7 +503,8 @@ def _submit_video_to_agnes(data):
         if audios:
             payload["audios"] = [_to_b64_if_local(u) for u in audios]
         if videos:
-            payload["videos"] = [_to_b64_if_local(u) for u in videos]
+
+            payload["videos"] = [{"url": _to_b64_if_local(u)} for u in videos]
 
 
 
