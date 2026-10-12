@@ -493,7 +493,7 @@ def test_connection(base_url=None, api_key=None, model=None):
 
     if not key:
         out.update(ok=False, verdict="no_key",
-                   detail="地址可达性无法验证：未配置令牌。请先在「魔搭生图」标签页填入 ModelScope 访问令牌")
+                   detail="地址可达性无法验证：未配置令牌。请先在「魔搭」标签页填入 ModelScope 访问令牌")
         return out
 
     def _lat():

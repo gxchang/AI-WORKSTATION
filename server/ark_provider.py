@@ -359,41 +359,46 @@ VIDEO_MODEL_LIMITS = {
         "label": "豆包 Seedance 2.5",
         "sizes": ["480p", "720p", "1080p"],
         "min_seconds": 4, "max_seconds": 30,
-        "max_images": 30, "max_audios": 3, "allow_video": True,
+        "max_images": 30, "max_audios": 10, "max_videos": 10, "allow_video": True,
         "submit_gap_base": 10,
-        "note": "时长 4~30s；参考图≤30；成片 24h 有效自动转存",
+        "note": "时长 4~30s；参考图≤30 / 参考音频≤10 / 参考视频≤10（合计≤50）；成片 24h 有效自动转存",
     },
     "doubao-seedance-2-0-260128": {
         "label": "豆包 Seedance 2.0",
         "sizes": ["480p", "720p", "1080p", "4k"],
         "min_seconds": 4, "max_seconds": 15,
-        "max_images": 12, "max_audios": 3, "allow_video": True,
+        "max_images": 9, "max_audios": 3, "max_videos": 3, "allow_video": True,
         "submit_gap_base": 10,
-        "note": "时长 4~15s；支持 4K；参考图≤12；成片 24h 有效自动转存",
+        "note": "时长 4~15s；支持 4K；参考图≤9 / 参考音频≤3 / 参考视频≤3；成片 24h 有效自动转存",
     },
     "doubao-seedance-2-0-fast-260128": {
         "label": "豆包 Seedance 2.0 Fast",
         "sizes": ["480p", "720p"],
         "min_seconds": 4, "max_seconds": 15,
-        "max_images": 12, "max_audios": 3, "allow_video": True,
+        "max_images": 9, "max_audios": 3, "max_videos": 3, "allow_video": True,
         "submit_gap_base": 10,
-        "note": "时长 4~15s；不支持 1080p；参考图≤12",
+        "note": "时长 4~15s；不支持 1080p；参考图≤9 / 参考音频≤3 / 参考视频≤3",
     },
     "doubao-seedance-2-0-mini-260615": {
         "label": "豆包 Seedance 2.0 Mini",
         "sizes": ["480p", "720p"],
         "min_seconds": 4, "max_seconds": 15,
-        "max_images": 12, "max_audios": 3, "allow_video": True,
+        "max_images": 9, "max_audios": 3, "max_videos": 3, "allow_video": True,
         "submit_gap_base": 10,
-        "note": "时长 4~15s；不支持 1080p；参考图≤12",
+        "note": "时长 4~15s；不支持 1080p；参考图≤9 / 参考音频≤3 / 参考视频≤3",
     },
 }
+
+
+
+
+
 
 _VIDEO_FALLBACK_LIMITS = {
     "label": "", "sizes": None,
     "min_seconds": None, "max_seconds": None,
-    "max_images": 12, "max_audios": 0, "allow_video": True, "submit_gap_base": 10,
-    "note": "未识别的方舟视频模型：不限时长/分辨率，由上游校验",
+    "max_images": 9, "max_audios": 3, "max_videos": 3, "allow_video": True, "submit_gap_base": 10,
+    "note": "未识别的方舟视频模型：不限时长/分辨率；参考素材按已登记模型最保守的一组（图9/音3/视3）",
 }
 
 
@@ -411,7 +416,9 @@ def to_ark_video_payload(data, b64_fn=None):
     
     model = str(data.get("model") or "").strip()
     mode = data.get("mode", "text")
-    prompt = str(data.get("prompt") or "")
+
+
+    prompt = translate_prompt_marks(str(data.get("prompt") or ""))
 
     content = [{"type": "text", "text": prompt}]
     if mode == "keyframe":
@@ -431,8 +438,16 @@ def to_ark_video_payload(data, b64_fn=None):
             return None, "全能参考模式至少需要提供一份参考素材。"
         lim = video_limits(model)
         total = len(imgs) + len(audios) + len(vids)
-        cap = int(lim.get("max_images") or 12)
-        if total > cap:
+
+
+
+
+
+
+        cap = (int(lim.get("max_images") or 0) + int(lim.get("max_audios") or 0)
+               + int(lim.get("max_videos") or 0))
+
+        if cap and total > cap:
             return None, f"当前方舟视频模型参考素材最多 {cap} 份（图+音频+视频合计），你传了 {total} 份。"
         for u in imgs:
             content.append({"type": "image_url",
@@ -481,15 +496,36 @@ def wxh_for(size, ratio, limits=None):
     return _imgen.solve_size(size, ratio, "pixel_range", limits or _FALLBACK_LIMITS)
 
 
+
+
+
+
+
+
+
+
+
+
+
+_MARK_RE = re.compile(r"<\s*(Picture|Audio|Video)\s*(\d+)\s*>", re.I)
+_MARK_ZH = {"picture": "图", "audio": "音频", "video": "视频"}
+
+
+def translate_prompt_marks(text):
+    
+    if not text:
+        return text
+    return _MARK_RE.sub(lambda m: _MARK_ZH[m.group(1).lower()] + m.group(2), str(text))
+
+
 def to_ark_payload(p):
     
     first = (image_models() or DEFAULTS["image_models"])[0]
-    return _imgen.build_payload("ark", p, first_model=first)
+    pl = _imgen.build_payload("ark", p, first_model=first)
 
-
-def seed_supported(model):
-    
-    return bool(model_limits(model).get("seed"))
+    if isinstance(pl, dict) and isinstance(pl.get("prompt"), str):
+        pl["prompt"] = translate_prompt_marks(pl["prompt"])
+    return pl
 
 
 
@@ -506,7 +542,7 @@ def test_connection(base_url=None, api_key=None, model=None):
 
     if not key:
         out.update(ok=False, verdict="no_key",
-                   detail="地址可达性无法验证：未配置密钥。请先在「豆包生图」标签页填入方舟 API Key")
+                   detail="地址可达性无法验证：未配置密钥。请先在「火山方舟」标签页填入方舟 API Key")
         return out
 
     def _lat():

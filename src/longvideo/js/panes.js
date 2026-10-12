@@ -130,6 +130,7 @@
     setMsg("上传中…");
     try {
       
+      if (!lv.jobId) await ensureJob();
       const r = await fetch(API + "/api/assets/batch_upload", { method: "POST", body: fd });
       const j = await r.json();
       if (!r.ok) { err(j.error || "上传失败"); return; }

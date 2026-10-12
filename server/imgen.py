@@ -46,6 +46,17 @@ CAPS = {
         "sequential": False, "seed": False, "png": True,
         "can_t2i": True, "can_edit": True,
     },
+
+
+
+
+
+    "doubao-seedream-5-0-flash-260915": {
+        "tiers": ["1K", "1.5K", "2K"], "min_px": 921600, "max_px": 4624220,
+        "max_ref_images": 10,
+        "sequential": False, "seed": False, "png": True,
+        "can_t2i": True, "can_edit": True,
+    },
     "doubao-seedream-5-0-260128": {
         "tiers": ["2K", "3K", "4K"], "min_px": 3686400, "max_px": 16777216,
         "max_ref_images": 14,

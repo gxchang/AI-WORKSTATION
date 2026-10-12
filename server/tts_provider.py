@@ -226,7 +226,7 @@ def test_connection(base_url=None, api_key=None, model=None):
 
     if not key:
         out.update(ok=False, verdict="no_key",
-                   detail="地址可达性无法验证：未配置密钥。请先在「音频生成」标签页填入 OpenRouter Key")
+                   detail="地址可达性无法验证：未配置密钥。请先在「OpenRouter」标签页填入 OpenRouter Key")
         return out
 
     try:

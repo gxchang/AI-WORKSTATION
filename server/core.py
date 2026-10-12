@@ -9,11 +9,9 @@ import uuid
 import re
 import requests
 import sqlite3
-import unicodedata
-from urllib.parse import unquote
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
-from flask import Flask, request, jsonify, send_from_directory, send_file, Response, abort
+from flask import Flask, request
 
 
 
@@ -188,9 +186,6 @@ IMG_EXTS = {"png", "jpg", "jpeg", "webp", "bmp", "gif"}
 AUD_EXTS = {"mp3", "wav", "m4a", "aac", "ogg", "flac"}
 VID_EXTS = {"mp4", "mov", "webm", "mkv"}
 ALLOWED_EXTS = IMG_EXTS | AUD_EXTS | VID_EXTS
-
-
-MAX_ASSETS = 12
 
 
 
@@ -1536,5 +1531,5 @@ def _infer_ext_and_mime(url, content_type):
     return "bin", ct or "application/octet-stream"
 
 
-__all__ = ['AGNES_API_KEY', 'AGNES_BASE_URL', 'ALLOWED_EXTS', 'ASSETS_DIR', 'AUD_EXTS', 'DB_FILE', 'DEFAULT_MODEL', 'DOWNLOAD_ALLOW_HOSTS', 'FRONTEND_DIR', 'HISTORY_FILE', 'IMG_EXTS', 'MAX_ASSETS', 'MODEL_LIMITS', 'POLL_ENDPOINT', 'PUBLIC_BASE_URL', 'SESSIONS_FILE', 'TASKS_FILE', 'VID_EXTS', '_AGNES_SESSION', '_DB_LOCK', '_DB_READY', '_EXT_MIME', '_ROOT', '_TASKS_LOCK', '_WORKER_LOCK', '_WORKER_STARTED', '_add_cors', '_build_agnes_session', '_create_task', '_db_conn', '_deinline_payload_media', '_ensure_db', '_infer_ext_and_mime',
+__all__ = ['AGNES_API_KEY', 'AGNES_BASE_URL', 'ALLOWED_EXTS', 'ASSETS_DIR', 'AUD_EXTS', 'DB_FILE', 'DEFAULT_MODEL', 'DOWNLOAD_ALLOW_HOSTS', 'FRONTEND_DIR', 'HISTORY_FILE', 'IMG_EXTS', 'MODEL_LIMITS', 'PUBLIC_BASE_URL', 'SESSIONS_FILE', 'TASKS_FILE', 'VID_EXTS', '_AGNES_SESSION', '_DB_LOCK', '_DB_READY', '_EXT_MIME', '_ROOT', '_TASKS_LOCK', '_WORKER_LOCK', '_WORKER_STARTED', '_add_cors', '_build_agnes_session', '_create_task', '_db_conn', '_deinline_payload_media', '_ensure_db', '_infer_ext_and_mime',
  '_init_db', '_inline_payload_media', '_load_env', '_load_history', '_load_sessions', '_load_tasks', '_migrate_legacy_json', '_persist_generated_image', '_progress_one', '_public_base', '_purge_history_rows', '_query_agnes_video', '_safe_name', '_save_history', '_save_sessions', '_save_tasks', '_start_worker_once', '_submit_image', '_submit_image_to_agnes', '_sync_result_to_session', '_table_empty', '_task_worker', '_to_b64_if_local', '_update_task', 'app']

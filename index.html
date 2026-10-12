@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0" data-page-node-id="eHaf3KuCAKCdvpKdQUGKmW" />
 <title>视频生成工作台</title>
 
-<link rel="stylesheet" href="/api/base_style.css?v=20261003s">
+<link rel="stylesheet" href="/api/base_style.css?v=20261012a">
 </head>
 <body data-page-node-id="HsjgyXIv9KRAMASK9LZ2lp">
 
@@ -67,8 +67,8 @@
 <div class="prov-tabs" id="provTabs">
       <button class="prov-tab on" id="provTabMedia" data-tab="media" type="button" title="视频生成 / 图片生成 / 猫灵助手 / 长视频分镜引擎">Agnes</button>
       <button class="prov-tab" id="provTabAudio" data-tab="audio" type="button" title="底部「音频生成」用的语音合成服务">OpenRouter</button>
-      <button class="prov-tab" id="provTabArk" data-tab="ark" type="button" title="火山方舟 · 豆包 Seedream 生图">火山方舟</button>
-      <button class="prov-tab" id="provTabMs" data-tab="ms" type="button" title="魔搭社区 ModelScope · 生图与多角度改机位">魔搭</button>
+      <button class="prov-tab" id="provTabArk" data-tab="ark" type="button" title="火山方舟 · 豆包 Seedream 生图 + 豆包 Seedance 视频">火山方舟</button>
+      <button class="prov-tab" id="provTabMs" data-tab="ms" type="button" title="魔搭社区 ModelScope · 生图与多角度改机位 + 猫灵助手与长视频分镜引擎">魔搭</button>
       <button class="prov-tab" id="provTabCustom" data-tab="custom" type="button" title="自定义 OpenAI 兼容接口 · 猫灵助手与长视频分镜引擎">自定义 OpenAI</button>
     </div>
     <div class="prov-body">
@@ -190,7 +190,7 @@
       </div>
 
       <div class="prov-pane" id="provPaneArk" style="display:none">
-        <div class="prov-lead">火山方舟（豆包 Seedream），可整体替代 Agnes 承担生图。</div>
+        <div class="prov-lead">火山方舟（豆包 Seedream 生图 / 豆包 Seedance 视频），可整体替代 Agnes 承担生图与视频；两个开关各自独立。</div>
         <div class="prov-fld">
           <label for="arkBase">接口地址（Base URL）</label>
         <input id="arkBase" type="text" spellcheck="false" autocomplete="off" placeholder="https://ark.cn-beijing.volces.com/api/v3">
@@ -229,7 +229,7 @@
       </div>
 
       <div class="prov-pane" id="provPaneMs" style="display:none">
-        <div class="prov-lead">魔搭社区（ModelScope）API-Inference，可整体替代 Agnes 承担生图。</div>
+        <div class="prov-lead">魔搭社区（ModelScope）API-Inference，可整体替代 Agnes 承担生图，也可作为猫灵助手与长视频分镜引擎（各自独立切换，留空 = 回落 Agnes）。</div>
         <div class="prov-fld">
           <label for="msBase">接口地址（Base URL）</label>
         <input id="msBase" type="text" spellcheck="false" autocomplete="off" placeholder="https://api-inference.modelscope.cn/v1">
@@ -556,7 +556,7 @@
 
 <script src="/api/waveform.js?v=20261010a"></script>
 
-<script src="/api/longvideo_ui.js?v=20260930a"></script>
+<script src="/api/longvideo_ui.js?v=20261012b"></script>
 <div class="at-pop" id="atpop" data-page-node-id="RouEFDOwMOhgyF1Ngo2Ym9">
   <div class="at-hd" id="atHead" data-page-node-id="i0vFw3jzxFqIJpw8v6A4QP">选择素材插入</div>
   <div id="atList" data-page-node-id="l2hwoVK4rSw6pEqG2URnEL"></div>

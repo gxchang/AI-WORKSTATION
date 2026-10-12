@@ -296,7 +296,7 @@ def _post_speech(cfg, payload):
 
     base, key, _model = cfg
     if not key:
-        raise TtsError("未配置音频接口密钥。请在「服务商设置 → 音频生成」填入 OpenRouter Key。",
+        raise TtsError("未配置音频接口密钥。请在「服务商设置 → OpenRouter」填入 OpenRouter Key。",
                        code="no_key")
     url = f"{base}/audio/speech"
     try:

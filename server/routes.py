@@ -1,8 +1,14 @@
 
-import sys
-from flask import request, jsonify, send_file, send_from_directory, Response, abort, session, make_response
+import json
+import os
+import re
+import unicodedata
+from urllib.parse import unquote
 
+import requests
+from flask import request, jsonify, send_file, send_from_directory, Response, abort, make_response
 
+import server.payload_media as _pm
 
 
 import server.core as _core_mod
@@ -19,10 +25,28 @@ import thumbs as _thumbs
 import server.tts_client as _ttsclient
 import server.msg_store as _msgst
 import assets_api.store as _assets_store
-_THIS_MODULE = sys.modules[__name__]
-for _n in dir(_core_mod):
-    if not (_n.startswith("__") and _n.endswith("__")):
-        setattr(_THIS_MODULE, _n, getattr(_core_mod, _n))
+
+
+
+
+
+
+
+
+
+
+from server.core import (
+    ALLOWED_EXTS, ASSETS_DIR, DOWNLOAD_ALLOW_HOSTS, FRONTEND_DIR, IMG_EXTS,
+    MODEL_LIMITS, VID_EXTS,
+    _AGNES_SESSION, _BOOT_ID, _DB_LOCK, _ROOT, _TASKS_LOCK,
+    _cfg_base, _cfg_key, _cfg_poll, _create_task, _db_conn, _ensure_db,
+    _infer_ext_and_mime, _llm_chat_completions, _load_agent_sessions,
+    _load_history, _load_sessions, _load_tasks, _mark_session_deleted,
+    _persist_generated_video, _public_base, _register_generated_video,
+    _safe_name, _save_agent_sessions, _save_history, _save_sessions,
+    _server_tombstones, _sync_result_to_session, _to_b64_if_local,
+    app,
+)
 
 import uuid, time
 import queue as _queue, threading as _threading
@@ -223,7 +247,6 @@ def api_config():
         "model": _vm_out[0],
         "free": True,
         "hasKey": bool(_cfg_key()),
-        "maxAssets": MAX_ASSETS,
         "sizes": ["720P", "1080P", "1K", "2K"],
         "modelLimits": _video_limits,
         "models": list(_video_limits.keys()),
@@ -679,10 +702,10 @@ def _submit_image_task(data):
     if not use_ark and not use_ms and not _cfg_key():
         tip = "尚未配置访问密钥。请点击左侧「服务商设置」填入密钥（或 .env 配置 AGNES_API_KEY 后重启）。"
         if _arkprov.get("enabled") and not _arkprov.get("api_key"):
-            tip = ("「豆包生图」已开启但未填 ARK 访问密钥，已回落 Agnes —— 而 Agnes 也未配密钥。"
-                   "请在「服务商设置」里补齐其中任意一个（Agnes 页或豆包生图页）。")
+            tip = ("「火山方舟」的**生图**开关已开启但未填 ARK 访问密钥，已回落 Agnes —— 而 Agnes 也未配密钥。"
+                   "请在「服务商设置」里补齐其中任意一个（Agnes 页或火山方舟页）。")
         elif _msprov.get("enabled") and not _msprov.get("api_key"):
-            tip = ("「魔搭生图」已开启但未填 ModelScope 访问令牌，已回落 Agnes —— 而 Agnes 也未配密钥。"
+            tip = ("「魔搭」的**生图**开关已开启但未填 ModelScope 访问令牌，已回落 Agnes —— 而 Agnes 也未配密钥。"
                    "请在「服务商设置」里补齐其中任意一个（Agnes 页或魔搭页）。")
         return {"error": tip}, 500
 
@@ -1066,8 +1089,10 @@ def _agent_tools():
             if isinstance(vprops.get("size"), dict) and _vlim.get("sizes"):
                 vprops["size"]["enum"] = list(_vlim["sizes"])
 
+
             _vcap_img, _vcap_aud = int(_vlim.get("max_images") or 5), int(_vlim.get("max_audios") or 0)
-            _vcap_vid = 1 if _vlim.get("allow_video") else 0
+            _vcap_vid = int(_vlim["max_videos"]) if _vlim.get("max_videos") is not None \
+                else (1 if _vlim.get("allow_video") else 0)
             for _k, _cap in (("images", _vcap_img), ("audios", _vcap_aud), ("videos", _vcap_vid)):
                 if isinstance(vprops.get(_k), dict) and isinstance(vprops[_k].get("items"), dict):
                     vprops[_k]["maxItems"] = _cap
