@@ -2948,6 +2948,91 @@ def api_download():
 
     return Response(_gen(), status=200, headers=headers)
 
+
+
+_PACK_MAX_FILES = 300
+_PACK_MAX_BYTES = 1024 * 1024 * 1024
+
+
+@app.route("/api/download-pack", methods=["POST", "GET"])
+def api_download_pack():
+    
+    import tempfile as _tempfile
+    import zipfile as _zipfile
+    from flask import after_this_request
+
+    urls = []
+    data = request.get_json(silent=True) or {}
+    if isinstance(data.get("urls"), list):
+        urls = [str(u) for u in data["urls"] if u]
+    urls += [u for u in request.args.getlist("url") if u]
+
+    seen, picked, skipped = set(), [], []
+    for u in urls:
+        if u in seen:
+            continue
+        seen.add(u)
+        (picked if u.startswith("/assets/") else skipped).append(u)
+    if not picked:
+        return jsonify({"error": "没有可打包的站内产物（只支持 /assets/ 路径）"}), 400
+    if len(picked) > _PACK_MAX_FILES:
+        return jsonify({"error": "一次最多打包 %d 个文件（本次 %d 个），请分批下载" % (_PACK_MAX_FILES, len(picked))}), 400
+
+    tmpdir = _tempfile.mkdtemp(prefix="dlpack_")
+    tmp = os.path.join(tmpdir, "pack.zip")
+    added, used, total = 0, {}, 0
+    try:
+        with _zipfile.ZipFile(tmp, "w", _zipfile.ZIP_DEFLATED) as z:
+            for u in picked:
+                name = _safe_name(u[len("/assets/"):])
+                full = os.path.join(ASSETS_DIR, name)
+                if not os.path.isfile(full):
+                    skipped.append(u)
+                    continue
+                total += os.path.getsize(full)
+                if total > _PACK_MAX_BYTES:
+                    return jsonify({"error": "这批产物合计超过 %d MB，请分批下载" % (_PACK_MAX_BYTES // (1024 * 1024))}), 400
+                arc, n = name, 2
+                while arc in used:
+                    stem, dot, ext = name.rpartition(".")
+                    arc = (stem + "-" + str(n) + (dot + ext if dot else "")) if dot else (name + "-" + str(n))
+                    n += 1
+                used[arc] = 1
+                z.write(full, arcname=arc)
+                added += 1
+    except Exception as e:
+        _rm_tree(tmpdir)
+        return jsonify({"error": "打包失败：%s" % e}), 500
+    if not added:
+        _rm_tree(tmpdir)
+        return jsonify({"error": "这些产物在磁盘上都不存在", "skipped": len(skipped)}), 404
+
+    @after_this_request
+    def _cleanup(resp):
+        _rm_tree(tmpdir)
+        return resp
+
+    resp = make_response(send_file(tmp, mimetype="application/zip",
+                                   as_attachment=True, download_name="产物打包.zip"))
+    resp.headers["X-Pack-Count"] = str(added)
+    resp.headers["X-Pack-Skipped"] = str(len(skipped))
+    return resp
+
+
+def _rm_tree(path):
+    
+    try:
+        for name in os.listdir(path):
+            try:
+                os.remove(os.path.join(path, name))
+            except Exception:
+                pass
+        os.rmdir(path)
+    except Exception:
+        pass
+
+
+
 @app.route("/api/base_style.css")
 def base_style_css():
     f = os.path.join(_ROOT, "src", "base", "css", "base.css")
