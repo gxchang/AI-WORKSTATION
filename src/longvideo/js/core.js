@@ -96,22 +96,23 @@
     </aside>
     <div class="lv-body">
     <section class="lv-pane" data-pane="1">
-      <div class="lv-h">素材登记<span class="lv-sub">上传后给每张图填准确的角色 / 场景 / 道具名（<b>须与脚本中的称呼完全一致</b>），并标注</span></div>
-      <div class="lv-drop" id="lvDrop"><span class="lv-drop-ic"><span class="ic ic-upload" aria-hidden="true"></span></span>点击或拖拽上传（图片 / 音频，数量不限）</div>
-      <input type="file" id="lvFile" accept="image/*,audio/*" multiple hidden>
       
-      <div class="lv-bulkrow">
+      <div class="lv-scroll1" id="lvScroll1">
+        <div class="lv-drop" id="lvDrop"><span class="lv-drop-ic"><span class="ic ic-upload" aria-hidden="true"></span></span><span class="lv-drop-tx">点击或拖拽上传（图片 / 音频，数量不限）</span><span class="lv-drop-sub">上传后给每张图填入脚本中的角色 / 场景 / 道具名</span></div>
+        <input type="file" id="lvFile" accept="image/*,audio/*" multiple hidden>
+        <div class="lv-afilter" id="lvAFilter" hidden></div>
+        <div class="lv-assets" id="lvAssets"></div>
+      </div>
+      
+      <div class="lv-dock" id="lvDock">
         <div class="lv-bulkbar" id="lvBulk" hidden>
           <label><input type="checkbox" id="lvSelAll"> 全选</label>
           <button class="lv-bdel" id="lvBulkDel" disabled>移除选中（<span id="lvSelCnt">0</span>）</button>
-          <span class="cc" id="lvBulkHint"></span>
         </div>
-        <button class="lv-btn ghost" id="lvPickFromLib" type="button" title="从资产库选择已有素材加入当前任务"><span class="ic ic-library" aria-hidden="true" style="margin-right:5px"></span>从资产库选</button>
-      </div>
-      <div class="lv-afilter" id="lvAFilter" hidden></div>
-      <div class="lv-assets" id="lvAssets"></div>
-      <div class="lv-actions">
-        <button class="lv-btn primary" id="lvTo2">下一步：分镜预览</button>
+        <span class="lv-dock-gap"></span>
+        <button class="lv-btn ghost" id="lvPickFromLib" type="button" title="从资产库选择已有素材加入当前任务"><span class="ic ic-library" aria-hidden="true"></span>从资产库选</button>
+        <button class="lv-btn ghost" id="lvToUp" type="button" hidden title="上传素材（图片 / 音频）"><span class="ic ic-upload" aria-hidden="true"></span>上传</button>
+        <button class="lv-btn primary" id="lvTo2">下一步</button>
       </div>
     </section>
     <section class="lv-pane" data-pane="2" hidden>
@@ -458,6 +459,7 @@
       goStep(1);   
     }
     
+    loadJobs();
   }
 
   

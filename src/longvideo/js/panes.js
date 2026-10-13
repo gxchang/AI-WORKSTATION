@@ -119,6 +119,20 @@
     e.preventDefault();
     if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
   });
+  
+  const lvUpBtn = $("lvToUp");
+  const lvScroll1 = $("lvScroll1");
+  if (lvUpBtn) {
+    lvUpBtn.addEventListener("click", () => lvFile.click());
+    if ("IntersectionObserver" in window && lvScroll1) {
+      new IntersectionObserver(
+        (es) => { lvUpBtn.hidden = es[0].isIntersecting; },
+        { root: lvScroll1, threshold: 0 }
+      ).observe(lvDrop);
+    } else {
+      lvUpBtn.hidden = false;   
+    }
+  }
   lvFile.addEventListener("change", () => {
     if (lvFile.files.length) uploadFiles(lvFile.files);
     lvFile.value = "";
@@ -337,12 +351,13 @@
     });
     return c;
   }
-  
-  function _renderFilterRow(box, list, cur, onPick) {
-    if (!box) return;
-    if (!list.length) { box.hidden = true; box.innerHTML = ""; return; }
-    const cnt = _filterCounts(list);
-    box.innerHTML = `<span class="lbl">筛选</span>` + _FILTER_DEFS
+    
+    
+    function _renderFilterRow(box, list, cur, onPick) {
+      if (!box) return;
+      if (!list.length) { box.hidden = true; box.innerHTML = ""; return; }
+      const cnt = _filterCounts(list);
+      box.innerHTML = _FILTER_DEFS
       .filter((d) => d.key === "" || cnt[d.key] > 0)
       .map((d) => `<button type="button" data-k="${d.key}" class="${cur === d.key ? "on" : ""}">${d.label} ${d.key === "" ? list.length : cnt[d.key]}</button>`)
       .join("");
@@ -463,8 +478,6 @@
     $("lvBulkDel").disabled = picked.length === 0;
     $("lvSelAll").checked = all.length > 0 && checked.length === all.length;
     $("lvSelAll").indeterminate = checked.length > 0 && checked.length < all.length;
-    
-    $("lvBulkHint").textContent = picked.length ? "移除只是解除本任务的使用；若被别处引用，文件仍保留" : "";
   }
 
   async function deleteSelected() {
@@ -987,9 +1000,65 @@
         }
       } catch (_) {  }
       $("lvShotsHist").hidden = !lv.shotsHist.length;
+      
+      if (lv.shots.length) lvShowOptTip();
       saveDraftNow().then(loadJobs);   
     });
   });
+
+  
+  const _OPT_TIP_KEY = "wb_lv_opt_tip_v1";
+  function _optTipSeen() {
+    try { return localStorage.getItem(_OPT_TIP_KEY) === "1"; } catch (e) { return false; }
+  }
+  function _optTipMark() {
+    try { localStorage.setItem(_OPT_TIP_KEY, "1"); } catch (e) {}
+  }
+  function lvHideOptTip() { const t = $("lvOptTip"); if (t) t.hidden = true; }
+  function lvShowOptTip() {
+    if (_optTipSeen()) return;
+    const btn = $("lvOptimize"), host = $("lvOpts");
+    if (!btn || !host) return;
+    let tip = $("lvOptTip");
+    if (!tip) {
+      tip = document.createElement("div");
+      tip.className = "lv-opt-tip";
+      tip.id = "lvOptTip";
+      tip.hidden = true;
+      tip.innerHTML =
+        '<div class="lv-opt-tip-tx">对分镜结果不满意吗？可再次进行智能分镜哦~</div>' +
+        '<div class="lv-opt-tip-ft"><button type="button" class="lv-opt-tip-ok">知道啦</button></div>';
+      host.appendChild(tip);
+      tip.querySelector(".lv-opt-tip-ok").addEventListener("click", (e) => {
+        e.stopPropagation();
+        _optTipMark();
+        lvHideOptTip();
+      });
+    }
+    tip.hidden = false;
+    
+    requestAnimationFrame(() => {
+      if (tip.hidden) return;
+      const hr = host.getBoundingClientRect();
+      const br = btn.getBoundingClientRect();
+      const tw = tip.offsetWidth, th = tip.offsetHeight;
+      const bx = (br.left - hr.left) + br.width / 2;             
+      let left = bx - tw / 2;
+      left = Math.max(0, Math.min(left, host.clientWidth - tw)); 
+      tip.style.left = Math.round(left) + "px";
+      tip.style.top = Math.round((br.top - hr.top) - th - 10) + "px";  
+      
+      tip.style.setProperty("--tip-ar-x", Math.round(bx - Math.round(left)) + "px");
+    });
+    
+    setTimeout(() => document.addEventListener("mousedown", _optTipOutside, { once: true }), 0);
+  }
+  function _optTipOutside(e) {
+    const t = $("lvOptTip");
+    if (!t || t.hidden || t.contains(e.target)) return;
+    _optTipMark();
+    lvHideOptTip();
+  }
 
   
   const _unlockBtn = $("lvUnlockEdit");
