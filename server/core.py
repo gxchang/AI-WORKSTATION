@@ -1204,7 +1204,15 @@ def _save_sessions(data):
 
 
 
-    _pruned_urls, _pruned_ids, _pruned_tids = [], [], []
+
+
+
+
+
+
+
+
+
     with _DB_LOCK:
         conn = _db_conn()
         try:
@@ -1256,38 +1264,7 @@ def _save_sessions(data):
                 )
 
 
-            if ids:
-                placeholders = ",".join("?" * len(ids))
-                _keep = set(ids)
-                _pruned_ids = [r["id"] for r in conn.execute("SELECT id FROM sessions")
-                               if r["id"] not in _keep]
-                if _pruned_ids:
-                    _ph = ",".join("?" * len(_pruned_ids))
-                    for r in conn.execute(
-                            "SELECT data FROM sessions WHERE id IN (%s)" % _ph, _pruned_ids):
-                        _pruned_urls.extend(_mgc.urls_in(r["data"]))
-                conn.execute(f"DELETE FROM sessions WHERE id NOT IN ({placeholders})", ids)
-                _mark_session_deleted(conn, _pruned_ids)
-            else:
 
-
-                _pruned_ids = [r["id"] for r in conn.execute("SELECT id FROM sessions")]
-                for r in conn.execute("SELECT data FROM sessions"):
-                    _pruned_urls.extend(_mgc.urls_in(r["data"]))
-                conn.execute("DELETE FROM sessions")
-                _mark_session_deleted(conn, _pruned_ids)
-
-            if _pruned_ids:
-                for r in conn.execute("SELECT tid, data FROM tasks"):
-                    try:
-                        if json.loads(r["data"] or "{}").get("session_id") in _pruned_ids:
-                            _pruned_tids.append(r["tid"])
-                    except Exception:
-                        continue
-                for t in _pruned_tids:
-                    conn.execute("DELETE FROM tasks WHERE tid=?", (t,))
-
-                _pruned_urls.extend(_purge_history_rows(conn, _pruned_ids))
             if current_id is not None:
                 conn.execute(
                     "INSERT INTO meta(key, value) VALUES('currentId', ?) "
@@ -1302,8 +1279,7 @@ def _save_sessions(data):
 
 
 
-    if _pruned_tids:
-        print(f"[sessions] prune 清理 {len(_pruned_tids)} 条任务行（媒体文件一律保留）")
+
 
 
 def _load_agent_sessions():

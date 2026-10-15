@@ -436,7 +436,10 @@
       card.querySelector(".lv-i-label").addEventListener("input", (e) => { a.label = e.target.value; saveDraft(); });
       
       const _tw = card.querySelector(".lv-th-wave");
-      if (_tw && window.Wave) window.Wave.mountStatic(_tw, a.url);
+      if (_tw && window.Wave) window.Wave.mountStatic(_tw, a.url, {
+        unplayedColor: "rgba(139,92,246,.20)",
+        playedColor: "rgba(124,58,237,.30)",
+      });
       const kindEl = card.querySelector(".lv-i-kind");
       if (kindEl) kindEl.addEventListener("change", (e) => { a.kind = e.target.value; saveDraft(); renderAssets(); });
       const postEl = card.querySelector(".lv-i-posture");

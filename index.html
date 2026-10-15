@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0" data-page-node-id="eHaf3KuCAKCdvpKdQUGKmW" />
 <title>视频生成工作台</title>
 
-<link rel="stylesheet" href="/api/base_style.css?v=20261013a">
+<link rel="stylesheet" href="/api/base_style.css?v=20261013u">
 </head>
 <body data-page-node-id="HsjgyXIv9KRAMASK9LZ2lp">
 
@@ -66,7 +66,8 @@
   </div>
 <div class="prov-tabs" id="provTabs">
       <button class="prov-tab on" id="provTabMedia" data-tab="media" type="button" title="视频生成 / 图片生成 / 猫灵助手 / 长视频分镜引擎">Agnes</button>
-      <button class="prov-tab" id="provTabAudio" data-tab="audio" type="button" title="底部「音频生成」用的语音合成服务">OpenRouter</button>
+      <button class="prov-tab" id="provTabAudio" data-tab="audio" type="button" title="底部「音频生成」的基座语音合成服务（OpenRouter）">OpenRouter</button>
+      <button class="prov-tab" id="provTabMimo" data-tab="mimo" type="button" title="小米 MiMo · 语音合成（音色复刻 / 文字设计音色），可与 OpenRouter 二选一">MiMo</button>
       <button class="prov-tab" id="provTabArk" data-tab="ark" type="button" title="火山方舟 · 豆包 Seedream 生图 + 豆包 Seedance 视频">火山方舟</button>
       <button class="prov-tab" id="provTabMs" data-tab="ms" type="button" title="魔搭社区 ModelScope · 生图与多角度改机位 + 猫灵助手与长视频分镜引擎">魔搭</button>
       <button class="prov-tab" id="provTabCustom" data-tab="custom" type="button" title="自定义 OpenAI 兼容接口 · 猫灵助手与长视频分镜引擎">自定义 OpenAI</button>
@@ -179,13 +180,41 @@
         <a class="prov-key-link" href="https://openrouter.ai/sign-up" target="_blank" rel="noopener noreferrer">获取密钥</a>
       </div>
         <div class="prov-fld">
-          <label for="ttsModel">TTS 模型（单个）</label>
+          <label for="ttsModel">模型（逗号分隔，首个为默认）</label>
         <input id="ttsModel" type="text" spellcheck="false" autocomplete="off" placeholder="fish-audio/s2.1-pro-free:free">
-        <div class="prov-hint">可接入：fish-audio/s2.1-pro-free:free</div>
+        <div class="prov-hint">可接入：fish-audio/s2.1-pro-free:free。填多个即可在底部面板用「模型」菜单切换</div>
         </div>
         <div class="prov-test-row">
           <button class="prov-test" id="ttsTest">测试连接</button>
           <span class="prov-test-out" id="ttsTestOut"></span>
+        </div>
+      </div>
+
+      <div class="prov-pane" id="provPaneMimo" style="display:none">
+        <div class="prov-lead">小米 MiMo 的语音合成服务，可整体替代 OpenRouter 承担底部「音频生成」；两家<b>只能选一家</b>，勾选即切换。</div>
+        <div class="prov-fld">
+          <label for="mimoBase">接口地址（Base URL）</label>
+        <input id="mimoBase" type="text" spellcheck="false" autocomplete="off" placeholder="https://api.xiaomimimo.com/v1">
+      </div>
+        <div class="prov-fld">
+          <label for="mimoKey">访问密钥（MIMO_API_KEY）</label>
+        <input id="mimoKey" type="password" spellcheck="false" autocomplete="off" placeholder="未配置">
+        <a class="prov-key-link" href="https://platform.xiaomimimo.com/?ref=9R2WV5" target="_blank" rel="noopener noreferrer">获取密钥</a>
+      </div>
+        <div class="prov-fld">
+          <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
+            <label class="prov-chk" for="mimoEnabled" title="勾选 = 把底部「音频生成」切到小米 MiMo。音频服务商只能选一家，勾上这家会自动取消另一家。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+              <input type="checkbox" id="mimoEnabled" style="margin:0">
+            </label>
+            <label for="mimoModels" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">模型（逗号分隔，首个为默认，勾选启用为音频服务商）</label>
+            <span class="prov-hint" id="mimoStateHint" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
+          </div>
+        <input id="mimoModels" type="text" spellcheck="false" autocomplete="off" placeholder="mimo-v2.5-tts-voiceclone, mimo-v2.5-tts-voicedesign">
+        <div class="prov-hint">可接入：mimo-v2.5-tts-voiceclone（面板显示「参考配音」）· mimo-v2.5-tts-voicedesign（面板显示「自定义配音」）</div>
+        </div>
+        <div class="prov-test-row">
+          <button class="prov-test" id="mimoTest">测试连接</button>
+          <span class="prov-test-out" id="mimoTestOut"></span>
         </div>
       </div>
 
@@ -479,18 +508,22 @@
         </div>
         <span class="bar-sep" id="atSep" data-page-node-id="trsGHbDZti6GYNuEU8fDz6">|</span>
         
+        
+        <div class="seg" id="audioModelSel" data-seg="audioModel" style="display:none">
+          <button type="button" class="seg-cur"><span class="seg-tx">模型</span><span class="seg-ar ic ic-chevron-down"></span></button>
+          <select id="audioModel" style="display:none"></select>
+          <div class="seg-pop"></div>
+        </div>
+        
+        <div class="seg" id="audioTagSel" data-seg="audioTag" style="display:none" title="点选即把语气 / 风格标签插入输入框光标处，可连续点多个；生效范围随模型能力不同">
+          <button type="button" class="seg-cur" title="点选即把语气 / 风格标签插入输入框光标处，可连续点多个；生效范围随模型能力不同"><span class="seg-tx">语气标签</span><span class="seg-ar ic ic-chevron-down"></span></button>
+        </div>
         <div class="seg" id="audioLibSel" data-seg="audioLib" style="display:none">
           <button type="button" class="seg-cur"><span class="seg-tx">音色库</span><span class="seg-ar ic ic-chevron-down"></span></button>
         </div>
         <div class="seg" id="audioSpeedSel" data-seg="audioSpeed" style="display:none">
           <button type="button" class="seg-cur"><span class="seg-tx">1×</span><span class="seg-ar ic ic-chevron-down"></span></button>
           <select id="audioSpeed" style="display:none"></select>
-          <div class="seg-pop"></div>
-        </div>
-        
-        <div class="seg" id="audioRefSrcSel" data-seg="audioRefSrc" style="display:none" title="生成时发给接口的参考音频取自哪一份：原样本＝你上传的原始录音；转换后＝系统用统一话术生成的样本（二次克隆，音色可能有漂移）">
-          <button type="button" class="seg-cur" title="生成时发给接口的参考音频取自哪一份：原样本＝你上传的原始录音；转换后＝系统用统一话术生成的样本（二次克隆，音色可能有漂移）"><span class="seg-tx">参考：原样本</span><span class="seg-ar ic ic-chevron-down"></span></button>
-          <select id="audioRefSrc" style="display:none"></select>
           <div class="seg-pop"></div>
         </div>
         <div class="seg" id="modeSel" data-seg="mode" data-page-node-id="CqgzoZLpPpNR73G7Rm7avE">
@@ -543,6 +576,13 @@
         </div>
 
         <div class="send-row" data-page-node-id="YJ1zJvAmz9ni7dpYEovtuJ">
+          <button type="button" class="polish-btn" id="audioPolish" title="智能润色" style="display:none">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">
+              <path d="M12 2.5l1.7 4.6 4.6 1.7-4.6 1.7L12 15.1l-1.7-4.6L5.7 8.8l4.6-1.7L12 2.5z"/>
+              <path d="M18.5 14.5l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9.9-2.4z"/>
+              <path d="M6 14.5l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9L3.7 17l1.9-.7.7-1.9z"/>
+            </svg>
+          </button>
           <button class="send" id="send" title="生成" data-page-node-id="aaraEf2BHrY8rbIGNdPtiO"><span class="ic ic-arrow-up" data-page-node-id="E3lpQBLKoHJGdRwYpbj7I1"></span></button>
         </div>
       </div>
@@ -556,7 +596,7 @@
 
 <script src="/api/waveform.js?v=20261010a"></script>
 
-<script src="/api/longvideo_ui.js?v=20261013r"></script>
+<script src="/api/longvideo_ui.js?v=20261013s"></script>
 <div class="at-pop" id="atpop" data-page-node-id="RouEFDOwMOhgyF1Ngo2Ym9">
   <div class="at-hd" id="atHead" data-page-node-id="i0vFw3jzxFqIJpw8v6A4QP">选择素材插入</div>
   <div id="atList" data-page-node-id="l2hwoVK4rSw6pEqG2URnEL"></div>

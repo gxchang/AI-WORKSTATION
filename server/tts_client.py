@@ -33,9 +33,6 @@ _PUBLIC_DIRS = ("voices", "tts_out", "tts_ref")
 _JOBS_KEEP = 300
 
 
-UNIFIED_PREVIEW_TEXT = "您好，今天天气不错，一起去公园玩吧。"
-
-
 SPEED_MIN, SPEED_MAX, SPEED_STEP, SPEED_DEFAULT = 0.25, 4.0, 0.25, 1.0
 
 
@@ -57,6 +54,18 @@ _LOCK = threading.RLock()
 
 
 import media_tools as _mt
+
+
+
+
+try:
+    from . import tts_adapters as _adapters
+except ImportError:
+    import tts_adapters as _adapters
+try:
+    from . import tts_models as _tmodels
+except ImportError:
+    import tts_models as _tmodels
 
 
 class TtsError(Exception):
@@ -96,10 +105,10 @@ def init_audio_db():
                     gender        TEXT DEFAULT '',
                     age           TEXT DEFAULT '',
                     dialect       TEXT DEFAULT '',
-                    audio_path    TEXT DEFAULT '',                -- 参考音频（storage 下相对路径）
-                    preview_path  TEXT DEFAULT '',                -- 统一话术试听样本（相对路径，后台线程补写）
-                    preview_text  TEXT DEFAULT '',                -- 生成试听样本所用话术（常量 UNIFIED_PREVIEW_TEXT）
-                    preview_error TEXT DEFAULT '',                -- 试听样本最近一次生成失败的中文原因
+                    audio_path    TEXT DEFAULT '',                -- 参考音频（storage 下相对路径）；试听即播放它
+                    preview_path  TEXT DEFAULT '',                -- 已废弃：原统一话术试听样本，现已不再生成/写入
+                    preview_text  TEXT DEFAULT '',                -- 已废弃：随 preview_path 一并停用
+                    preview_error TEXT DEFAULT '',                -- 已废弃：随 preview_path 一并停用
                     created_at    REAL
                 )
                 """
@@ -111,6 +120,12 @@ def init_audio_db():
             for _sql in (
                 "ALTER TABLE voices RENAME COLUMN transcript TO preview_text",
                 "ALTER TABLE voices ADD COLUMN preview_error TEXT DEFAULT ''",
+
+
+                "ALTER TABLE jobs ADD COLUMN model_id TEXT DEFAULT ''",
+
+
+                "ALTER TABLE jobs ADD COLUMN voice_desc TEXT DEFAULT ''",
             ):
                 try:
                     conn.execute(_sql)
@@ -126,6 +141,7 @@ def init_audio_db():
                     speed      REAL DEFAULT 1.0,
                     voice_name TEXT DEFAULT '',
                     ref_path   TEXT DEFAULT '',                  -- 参考音频副本（storage/tts_ref/）
+                    model_id   TEXT DEFAULT '',                  -- 本次用的模型（能力表里的 id，或用户自填名）
                     count      INTEGER DEFAULT 2,
                     status     TEXT DEFAULT 'processing',        -- processing | completed | failed
                     candidates TEXT DEFAULT '[]',                 -- JSON 数组
@@ -291,76 +307,104 @@ def audio_duration(path, text="", speed=1.0):
 
 
 
-def _post_speech(cfg, payload):
-    import requests as _rq
-
-    base, key, _model = cfg
-    if not key:
-        raise TtsError("未配置音频接口密钥。请在「服务商设置 → OpenRouter」填入 OpenRouter Key。",
-                       code="no_key")
-    url = f"{base}/audio/speech"
-    try:
-        r = _rq.post(url, headers={"Authorization": f"Bearer {key}",
-                                   "Content-Type": "application/json"},
-                     json=payload, timeout=(10, 120))
-    except Exception as e:
-        raise TtsError(f"无法连接音频接口 {base}：{type(e).__name__}: {e}", code="unreachable")
-
-    if r.status_code == 200 and r.content:
-        return r.content
-
-    body = ""
-    try:
-        body = r.text[:300]
-    except Exception:
-        pass
-    if r.status_code in (401, 403):
-        raise TtsError("音频接口鉴权失败（密钥无效或已过期）。请检查 OpenRouter Key。",
-                       code="auth", status=r.status_code)
-    if r.status_code == 429:
-        raise TtsError("音频接口额度已用尽或请求过于频繁（免费模型每日限量）。请稍后再试。",
-                       code="quota", status=429)
-    if r.status_code == 402:
-        raise TtsError("音频接口需要付费额度（HTTP 402）。", code="quota", status=402)
-    if r.status_code == 400:
-        raise TtsError(f"音频接口拒绝请求（HTTP 400）：{body}", code="bad_request", status=400)
-    raise TtsError(f"音频接口返回 HTTP {r.status_code}：{body}", code="http", status=r.status_code)
-
-
-def cfg_from_provider():
+def cfg_now():
     
     import server.tts_provider as _p
-    return _p.get("base_url"), _p.get("api_key"), _p.get("model")
+    st = _p.provider_state()
+    p = st["winner"]
+    return {
+        "provider": p,
+        "base_url": _p.get("base_url", p),
+        "key": _p.get("api_key", p),
+        "models": _p.models(p),
+        "state": st,
+    }
 
 
-def synthesize(text, speed=SPEED_DEFAULT, reference_data_url=None, cfg=None):
+def resolve_model(cfg, model_id=""):
+    
+    mid = (model_id or "").strip()
+    if mid:
+        return mid
+    lst = cfg.get("models") or []
+    return lst[0] if lst else ""
+
+
+def _call_upstream(intent):
+    
+    try:
+        return _adapters.synthesize(intent)
+    except _adapters.UpstreamError as e:
+        raise TtsError(e.message, code=e.code, status=e.status)
+
+
+def synthesize(text, speed=SPEED_DEFAULT, reference_data_url="", reference_path="",
+               model_id="", cfg=None, optimize_text_preview=None, voice_desc=""):
     
     text = (text or "").strip()
     if not text:
         raise TtsError("请输入要合成的文字。", code="empty_text")
-    base, key, model = cfg if cfg else cfg_from_provider()
-    speed = _norm_speed(speed)
-    payload = {"model": model, "input": text, "response_format": "mp3", "speed": speed}
-    if reference_data_url:
+    cfg = cfg or cfg_now()
+    mid = resolve_model(cfg, model_id)
+    intent = {
+        "provider": cfg["provider"],
+        "base_url": cfg["base_url"],
+        "key": cfg["key"],
+        "model": mid,
 
-        payload["input_references"] = [
-            {"type": "input_audio", "input_audio": {"data": reference_data_url}}
-        ]
-    return _post_speech((base, key, model), payload)
+        "caps": _tmodels.caps_for(mid, cfg["provider"]),
+        "text": text,
+        "speed": _norm_speed(speed),
+        "ref_data_url": reference_data_url or "",
+        "ref_path": reference_path or "",
+
+        "optimize_text_preview": optimize_text_preview,
+
+        "voice_desc": voice_desc or "",
+    }
+    return _call_upstream(intent)
 
 
-def synthesize_candidate(text, speed=SPEED_DEFAULT, reference_data_url=None, cfg=None):
+def optimize_preview(text, model_id="", cfg=None):
     
-    data = synthesize(text, speed, reference_data_url, cfg=cfg)
+    text = (text or "").strip()
+    if not text:
+        return ""
+    cfg = cfg or cfg_now()
+    mid = resolve_model(cfg, model_id)
+    intent = {
+        "provider": cfg["provider"],
+        "base_url": cfg["base_url"],
+        "key": cfg["key"],
+        "model": mid,
+        "caps": _tmodels.caps_for(mid, cfg["provider"]),
+        "text": text,
+        "speed": _norm_speed(SPEED_DEFAULT),
+        "ref_data_url": "",
+        "ref_path": "",
+        "optimize_text_preview": True,
+    }
+    try:
+        res = _call_upstream(intent)
+    except TtsError:
+        return ""
+    if isinstance(res, dict):
+        return (res.get("text") or "").strip()
+    return ""
+
+
+def synthesize_candidate(text, speed=SPEED_DEFAULT, reference_data_url="", reference_path="",
+                         model_id="", cfg=None, optimize_text_preview=None, voice_desc=""):
+    
+    res = synthesize(text, speed, reference_data_url, reference_path, model_id,
+                     cfg=cfg, optimize_text_preview=optimize_text_preview, voice_desc=voice_desc)
+    data = res.get("data") if isinstance(res, dict) else res
+    spoken = (res.get("text") or "").strip() if isinstance(res, dict) else ""
     rel = _write_audio(data, "mp3", "tts_out")
     dur = audio_duration(abs_path(rel), text=text, speed=_norm_speed(speed))
-    return {"path": rel, "url": f"/api/tts/file/{rel}", "duration": dur}
-
-
-def generate_preview(reference_data_url, speed=SPEED_DEFAULT, cfg=None):
-    
-    return synthesize_candidate(UNIFIED_PREVIEW_TEXT, speed=1.0,
-                                reference_data_url=reference_data_url, cfg=cfg)
+    return {"path": rel, "url": f"/api/tts/file/{rel}", "duration": dur,
+            "model_id": resolve_model(cfg or cfg_now(), model_id),
+            "text": spoken}
 
 
 
@@ -382,6 +426,11 @@ def _job_to_dict(row):
         "speed": row["speed"] if row["speed"] is not None else SPEED_DEFAULT,
         "voice_name": row["voice_name"] or "",
         "ref_path": row["ref_path"] or "",
+
+
+        "model_id": (row["model_id"] if "model_id" in row.keys() else "") or "",
+
+        "voice_desc": (row["voice_desc"] if "voice_desc" in row.keys() else "") or "",
         "status": row["status"] or "processing",
         "candidates": cands,
         "errors": _load(row["errors"]),
@@ -413,7 +462,7 @@ def _register_reference_asset(rel):
         return None
 
 
-def create_job(text, speed=SPEED_DEFAULT, voice_name="", ref_path="", count=2):
+def create_job(text, speed=SPEED_DEFAULT, voice_name="", ref_path="", count=2, model_id="", voice_desc=""):
     
     init_audio_db()
     jid = uuid.uuid4().hex[:12]
@@ -422,10 +471,11 @@ def create_job(text, speed=SPEED_DEFAULT, voice_name="", ref_path="", count=2):
         conn = _conn()
         try:
             conn.execute(
-                "INSERT INTO jobs(id,text,speed,voice_name,ref_path,count,status,candidates,errors,created_at,updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                (jid, text, _norm_speed(speed), voice_name or "", ref_path or "", int(count),
-                 "processing", "[]", "[]", now, now),
+                "INSERT INTO jobs(id,text,speed,voice_name,ref_path,model_id,count,status,candidates,errors,created_at,updated_at,voice_desc) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (jid, text, _norm_speed(speed), voice_name or "", ref_path or "",
+                 (model_id or "").strip(), int(count),
+                 "processing", "[]", "[]", now, now, (voice_desc or "").strip()),
             )
 
             conn.execute(
@@ -493,28 +543,40 @@ def list_jobs(ids=None, status=None):
             conn.close()
 
 
-def run_job(jid, count=2):
+def run_job(jid, count=2, optimize_text_preview=None):
     
     job = get_job(jid)
     if not job:
         return
-    cfg = cfg_from_provider()
-    ref_data_url = None
-    if job.get("ref_path"):
+
+
+    model_id = job.get("model_id") or ""
+    cfg = cfg_now()
+    ref_path = job.get("ref_path") or ""
+    ref_data_url = ""
+    if ref_path:
         try:
-            ref_data_url = file_to_data_url(job["ref_path"])
+            ref_data_url = file_to_data_url(ref_path)
         except TtsError as e:
             update_job(jid, status="failed",
                        errors=[{"index": 0, "message": e.message, "code": e.code}])
             return
     cands, errs = [], []
+    vdesc = job.get("voice_desc") or ""
     for i in range(max(1, int(count))):
         fatal = False
         try:
             c = synthesize_candidate(job["text"], speed=job["speed"],
-                                     reference_data_url=ref_data_url, cfg=cfg)
+                                     reference_data_url=ref_data_url,
+                                     reference_path=ref_path,
+                                     model_id=model_id, cfg=cfg,
+                                     optimize_text_preview=optimize_text_preview,
+                                     voice_desc=vdesc)
             c["index"] = i
             c["voice_name"] = job.get("voice_name") or ""
+
+
+            c["finishedAt"] = time.time()
             cands.append(c)
         except TtsError as e:
             errs.append({"index": i, "message": e.message, "code": e.code})
@@ -567,7 +629,7 @@ _TTS_STARTED_JOBS = {}
 _TTS_DEDUP_LOCK = threading.Lock()
 
 
-def start_job(jid, count=2):
+def start_job(jid, count=2, optimize_text_preview=None):
     
     with _TTS_DEDUP_LOCK:
         if jid in _TTS_STARTED_JOBS:
@@ -578,16 +640,14 @@ def start_job(jid, count=2):
         _now = time.time()
         for k in [k for k, v in _TTS_STARTED_JOBS.items() if _now - v > 3600]:
             _TTS_STARTED_JOBS.pop(k, None)
-    t = threading.Thread(target=run_job, args=(jid, count), name=f"tts-job-{jid}", daemon=True)
+    t = threading.Thread(target=run_job, args=(jid, count, optimize_text_preview),
+                         name=f"tts-job-{jid}", daemon=True)
     t.start()
     return t
 
 
 
 def _row_to_voice(row, with_urls=True):
-    keys = row.keys()
-    txt = (row["preview_text"] or "") if "preview_text" in keys else ""
-    err = (row["preview_error"] or "") if "preview_error" in keys else ""
     d = {
         "id": row["id"],
         "name": row["name"],
@@ -595,18 +655,11 @@ def _row_to_voice(row, with_urls=True):
         "gender": row["gender"] or "",
         "age": row["age"] or "",
         "dialect": row["dialect"] or "",
-
-        "preview_text": txt,
-        "preview_error": err,
-
-        "preview_pending": (not row["preview_path"]) and not err,
         "created_at": row["created_at"],
         "has_audio": bool(row["audio_path"]),
-        "has_preview": bool(row["preview_path"]),
     }
     if with_urls:
         d["audio_url"] = f"/api/tts/file/{row['audio_path']}" if row["audio_path"] else ""
-        d["preview_url"] = f"/api/tts/file/{row['preview_path']}" if row["preview_path"] else ""
     return d
 
 
@@ -670,7 +723,7 @@ def _auto_name(owner):
 
 
 def add_voice(reference_raw, name="", gender="", age="", dialect="",
-              owner="mine", make_preview=False):
+              owner="mine"):
     
     init_audio_db()
     data, ext, data_url = parse_audio_payload(reference_raw)
@@ -681,71 +734,19 @@ def add_voice(reference_raw, name="", gender="", age="", dialect="",
     age = _clean_choice(age, _AGE)
     dialect = _clean_choice(dialect, _DIALECT)
 
-    preview_rel, preview_err = "", ""
-    if make_preview:
-        try:
-            pv = synthesize_candidate(UNIFIED_PREVIEW_TEXT, speed=1.0, reference_data_url=data_url)
-            preview_rel = pv["path"]
-        except TtsError as e:
-            preview_err = e.message
-        except Exception as e:
-            preview_err = f"试听样本生成失败：{e}"
-
     now = time.time()
     with _LOCK:
         conn = _conn()
         try:
             conn.execute(
-                "INSERT INTO voices(id,name,owner,gender,age,dialect,audio_path,preview_path,"
-                "preview_text,preview_error,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                (vid, name, owner, gender, age, dialect, rel, preview_rel,
-                 UNIFIED_PREVIEW_TEXT, preview_err, now),
+                "INSERT INTO voices(id,name,owner,gender,age,dialect,audio_path,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (vid, name, owner, gender, age, dialect, rel, now),
             )
             conn.commit()
         finally:
             conn.close()
-    return get_voice(vid), preview_err
-
-
-def _set_voice_preview(vid, rel="", err=""):
-    
-    with _LOCK:
-        conn = _conn()
-        try:
-            conn.execute("UPDATE voices SET preview_path=?, preview_error=? WHERE id=?",
-                         (rel or "", err or "", vid))
-            conn.commit()
-        finally:
-            conn.close()
-
-
-def run_preview_job(vid):
-    
-    row = get_voice_row(vid)
-    if not row or not row.get("audio_path"):
-        return
-    try:
-        data_url = file_to_data_url(row["audio_path"])
-        pv = synthesize_candidate(UNIFIED_PREVIEW_TEXT, speed=1.0, reference_data_url=data_url)
-        if get_voice_row(vid):
-            _set_voice_preview(vid, pv["path"], "")
-        else:
-
-            try:
-                os.remove(abs_path(pv["path"]))
-            except OSError:
-                pass
-    except TtsError as e:
-        _set_voice_preview(vid, "", e.message)
-    except Exception as e:
-        _set_voice_preview(vid, "", f"试听样本生成失败：{type(e).__name__}: {e}")
-
-
-def start_preview_job(vid):
-    
-    t = threading.Thread(target=run_preview_job, args=(vid,), name=f"tts-preview-{vid}", daemon=True)
-    t.start()
-    return t
+    return get_voice(vid)
 
 
 def update_voice(vid, name=None, gender=None, age=None, dialect=None):

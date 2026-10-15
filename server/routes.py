@@ -14,6 +14,7 @@ import server.payload_media as _pm
 import server.core as _core_mod
 import server.provider as _provider
 import server.tts_provider as _ttsprov
+import server.tts_models as _ttsmodels
 import server.ark_provider as _arkprov
 import server.ms_provider as _msprov
 import server.llm as _llm
@@ -243,6 +244,28 @@ def api_config():
             "active": _img_prov == key,
         }
 
+
+
+
+    _tts_st = _tts_provider_state()
+    _tts_prov = _tts_st["winner"]
+    _tts_models = _ttsprov.models(_tts_prov)
+    _tts_caps = _tts_model_caps(_tts_prov)
+
+
+    _tts_labels = {m: _ttsmodels.model_label(m, _tts_prov) for m in _tts_models}
+
+    def _tts_prov_block(key):
+        return {
+            "enabled": bool(_TTS_ENABLED_SRC[key]()),
+            "ready": bool(_tts_st["ready"].get(key)),
+            "selected": _tts_st["selected"] == key,
+            "active": _tts_prov == key,
+
+            "hasKey": bool(_ttsprov.get("api_key", key)),
+            "fallbackReason": _ttsprov.active_state(key)[1],
+        }
+
     return jsonify({
         "model": _vm_out[0],
         "free": True,
@@ -288,6 +311,32 @@ def api_config():
             "ms": dict(_img_prov_block("ms"),
                        hasKey=bool(_msprov.get("api_key")),
                        fallbackReason=_msprov.active_state()[1]),
+
+
+
+            "ttsProvider": _tts_prov,
+            "ttsProviderLabel": _ttsmodels.TTS_PROVIDER_LABELS.get(_tts_prov, ""),
+            "ttsProviderSelected": _tts_st["selected"],
+            "ttsProviderConflict": _tts_st["conflict"],
+            "ttsProviderFallback": _tts_st["fallback"],
+            "ttsProviderNote": _tts_st["note"],
+            "ttsProviderChoices": [
+                {"key": k, "label": _ttsmodels.TTS_PROVIDER_LABELS[k],
+                 "host": k in _ttsmodels.TTS_PROVIDER_HOSTS,
+                 "ready": bool(_tts_st["ready"].get(k)),
+                 "selected": _tts_st["selected"] == k, "active": _tts_prov == k}
+                for k in _ttsmodels.TTS_PROVIDER_ORDER
+            ],
+
+            "ttsModels": _tts_models,
+
+
+            "ttsModelCaps": _tts_caps,
+
+            "ttsModelLabels": _tts_labels,
+
+            "ttsTagGroups": _ttsmodels.all_tag_groups(),
+            "mimo": _tts_prov_block("mimo"),
         },
     })
 
@@ -993,6 +1042,68 @@ def _img_apply_exclusive(chosen):
 def _img_provider_now():
     
     return _img_provider_state()["winner"]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+_TTS_ENABLED_SRC = {"mimo": lambda: bool(_ttsprov.get("enabled", "mimo"))}
+_TTS_READY_SRC = {"mimo": lambda: _ttsprov.ready("mimo")}
+_TTS_SAVE_MODS = (("mimo", _ttsprov),)
+
+_TTS_EXCLUSIVE_DONE = {"done": False}
+
+
+def _tts_enabled_hosts():
+    
+    return [k for k in _ttsmodels.TTS_PROVIDER_HOSTS if _TTS_ENABLED_SRC[k]()]
+
+
+def _tts_provider_state():
+    
+    st = _ttsprov.provider_state()
+    if st["conflict"] and not _TTS_EXCLUSIVE_DONE["done"]:
+        try:
+            _tts_apply_exclusive(st["winner"])
+            st = _ttsprov.provider_state()
+            print("[tts-provider] 检测到多家音频服务商同时开启 → 已按优先级收敛为「%s」"
+                  % _ttsmodels.TTS_PROVIDER_LABELS.get(st["winner"], st["winner"]))
+        except Exception as e:
+            print("[tts-provider] 互斥收敛失败（忽略）：%s" % e)
+        _TTS_EXCLUSIVE_DONE["done"] = True
+    return st
+
+
+def _tts_apply_exclusive(chosen):
+    
+    key = str(chosen or "").strip().lower()
+    if key not in _ttsmodels.TTS_PROVIDER_ORDER:
+        raise ValueError("未知的音频服务商：%r（可选：%s）"
+                         % (chosen, " / ".join(_ttsmodels.TTS_PROVIDER_ORDER)))
+    for k, mod in _TTS_SAVE_MODS:
+        if k in _ttsmodels.TTS_PROVIDER_HOSTS:
+            mod.save({"enabled": key == k}, provider=k)
+    return key
+
+
+def _tts_provider_now():
+    
+    return _tts_provider_state()["winner"]
+
+
+def _tts_model_caps(provider):
+    
+    return {m: _ttsmodels.caps_for(m, provider) for m in _ttsprov.models(provider)}
 
 
 def _img_sizes_for_agent():
@@ -3725,32 +3836,75 @@ def tts_upload_js():
 
 
 
+
+
+
 @app.route("/api/tts/provider", methods=["GET"])
 def api_tts_provider_get():
-    return jsonify(_ttsprov.config_snapshot(masked=True))
+    return jsonify(_ttsprov.config_snapshot(_ttsmodels.TTS_BASE_PROVIDER, masked=True))
 
 
 @app.route("/api/tts/provider", methods=["POST"])
 def api_tts_provider_save():
     
+    return _tts_save_provider(_ttsmodels.TTS_BASE_PROVIDER)
+
+
+@app.route("/api/tts/mimo/provider", methods=["GET"])
+def api_tts_mimo_provider_get():
+    
+    return jsonify(_ttsprov.config_snapshot("mimo", masked=True))
+
+
+@app.route("/api/tts/mimo/provider", methods=["POST"])
+def api_tts_mimo_provider_save():
+    
+    return _tts_save_provider("mimo")
+
+
+def _tts_save_provider(provider):
     data = request.get_json(silent=True) or {}
     try:
-        snap = _ttsprov.save(data)
+        snap = _ttsprov.save(data, provider=provider)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     return jsonify({"ok": True, "config": snap})
+
+
+@app.route("/api/tts/provider/select", methods=["POST"])
+def api_tts_provider_select():
+    
+    data = request.get_json(silent=True) or {}
+    key = str(data.get("provider") or "").strip().lower()
+    if key not in _ttsmodels.TTS_PROVIDER_ORDER:
+        return jsonify({"error": "未知的音频服务商：%r（可选：%s）"
+                                 % (data.get("provider"),
+                                    " / ".join(_ttsmodels.TTS_PROVIDER_ORDER))}), 400
+    try:
+        _tts_apply_exclusive(key)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    st = _tts_provider_state()
+    warn = st["note"] if st["fallback"] else ""
+    return jsonify({"ok": True, "provider": key, "state": st, "warning": warn,
+                    "label": _ttsmodels.TTS_PROVIDER_LABELS.get(key, key),
+                    "activeLabel": _ttsmodels.TTS_PROVIDER_LABELS.get(st["winner"], st["winner"])})
 
 
 @app.route("/api/tts/provider/test", methods=["POST"])
 def api_tts_provider_test():
     
     data = request.get_json(silent=True) or {}
+    prov = str(data.get("provider") or "").strip().lower() or _ttsmodels.TTS_BASE_PROVIDER
+    if prov not in _ttsmodels.TTS_PROVIDER_ORDER:
+        return jsonify({"error": "未知的音频服务商：%r" % data.get("provider")}), 400
     draft_base = (data.get("base_url") or "").strip()
     draft_key = (data.get("api_key") or "").strip()
     draft_model = (data.get("model") or "").strip()
     if draft_key and "…" in draft_key:
         draft_key = ""
     result = _ttsprov.test_connection(
+        provider=prov,
         base_url=draft_base or None,
         api_key=draft_key or None,
         model=draft_model or None,
@@ -3936,28 +4090,34 @@ def api_tts_generate():
     count = max(1, min(4, count))
 
 
+
+    model_id = (data.get("model_id") or "").strip()
+    _st = _tts_provider_state()
+    _prov = _st["winner"]
+    _allowed = _ttsprov.models(_prov)
+    if model_id and _allowed and model_id not in _allowed:
+        return jsonify({"error": "模型「%s」不在当前音频服务商（%s）的模型清单里，"
+                                 "请先在「服务商设置」里把它填进去。"
+                                 % (model_id, _ttsmodels.TTS_PROVIDER_LABELS.get(_prov, _prov))}), 400
+    _mid = model_id or (_allowed[0] if _allowed else "")
+
+    _ref_mode = ((_ttsmodels.caps_for(_mid, _prov).get("ref") or {}).get("mode") if _mid else "optional")
+
+
     voice_id = (data.get("voice_id") or "").strip()
     reference_raw = data.get("reference_audio") or ""
 
 
-
-
-    ref_source = (data.get("ref_source") or "original").strip().lower()
-    if ref_source not in ("original", "preview"):
-        ref_source = "original"
     voice_name = "系统默认音色"
     ref_path = ""
     ref_url = ""
-    used_ref_source = ""
+    used_ref_source = "original"
     try:
         if voice_id:
             vrow = _ttsclient.get_voice_row(voice_id)
             if not vrow:
                 return jsonify({"error": f"音色不存在：{voice_id}"}), 404
-
-
-            used_ref_source = "preview" if (ref_source == "preview" and vrow.get("preview_path")) else "original"
-            ref_path = vrow["preview_path"] if used_ref_source == "preview" else vrow["audio_path"]
+            ref_path = vrow["audio_path"]
             if not ref_path:
                 return jsonify({"error": "该音色缺少参考音频文件。"}), 400
             ref_url = f"/api/tts/file/{ref_path}"
@@ -3974,16 +4134,51 @@ def api_tts_generate():
 
 
 
+        if not ref_path and _ref_mode == "required":
+            return jsonify({
+                "error": "当前音频服务商（%s）下的模型「%s」必须指定音色："
+                         "请从音色库选一个音色，或上传一段参考音频。"
+                         % (_ttsmodels.TTS_PROVIDER_LABELS.get(_prov, _prov), _mid),
+                "code": "bad_reference"}), 400
 
 
+
+
+
+
+
+
+        optimize = data.get("optimize_text")
+        opt_val = None
+        if optimize is True or optimize == "true" or optimize == 1 or optimize == "1":
+            opt_val = True
+        elif optimize is False or optimize == "false" or optimize == 0 or optimize == "0":
+            opt_val = False
         job = _ttsclient.create_job(text, speed=speed, voice_name=voice_name,
-                                    ref_path=ref_path, count=count)
-        _ttsclient.start_job(job["id"], count=count)
+                                    ref_path=ref_path, count=count, model_id=_mid,
+                                    voice_desc=(data.get("voice_desc") or "").strip())
+        _ttsclient.start_job(job["id"], count=count, optimize_text_preview=opt_val)
         return jsonify({"ok": True, "job": job, "ref_url": ref_url,
                         "voice_name": voice_name, "ref_source": used_ref_source,
+                        "model_id": _mid, "provider": _prov,
                         "speed": _ttsclient._norm_speed(speed), "text": text})
     except _ttsclient.TtsError as e:
         return jsonify({"error": e.message, "code": e.code}), 400
+
+
+@app.route("/api/tts/optimize", methods=["POST"])
+def api_tts_optimize():
+    
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify({"ok": True, "text": ""})
+    model_id = (data.get("model_id") or "").strip()
+    try:
+        out = _ttsclient.optimize_preview(text, model_id=model_id)
+    except Exception:
+        out = ""
+    return jsonify({"ok": True, "text": out or ""})
 
 
 @app.route("/api/tts/job/<job_id>", methods=["GET"])
@@ -4018,19 +4213,17 @@ def api_tts_voices_add():
     if not reference_raw:
         return jsonify({"error": "请上传参考音频。"}), 400
     try:
-        voice, _ = _ttsclient.add_voice(
+        voice = _ttsclient.add_voice(
             reference_raw,
             name=(data.get("name") or "").strip(),
             gender=data.get("gender") or "",
             age=data.get("age") or "",
             dialect=data.get("dialect") or "",
             owner="mine",
-            make_preview=False,
         )
     except _ttsclient.TtsError as e:
         return jsonify({"error": e.message, "code": e.code}), 400
-    _ttsclient.start_preview_job(voice["id"])
-    return jsonify({"ok": True, "voice": voice, "preview_pending": True, "preview_error": ""})
+    return jsonify({"ok": True, "voice": voice})
 
 
 @app.route("/api/tts/voices/<vid>", methods=["PATCH"])
