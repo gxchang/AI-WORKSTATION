@@ -84,8 +84,42 @@ def _speed_options(values, with_instruction=False):
 
 
 
+
+
+
+
+
+
 _TAG_GROUPS_ALL = ("emotion", "emotion_plus", "tone", "timbre", "persona",
                    "dialect", "role", "pace", "state", "voice", "cry")
+
+
+
+
+_TAG_GROUPS_SING = _TAG_GROUPS_ALL + ("sing",)
+
+
+
+
+
+
+
+
+
+
+
+MIMO_PRESET_VOICES = (
+    {"id": "mimo_default", "name": "MiMo-默认", "lang": "", "gender": "",
+     "note": "实际音色随部署集群（中国集群为「冰糖」）"},
+    {"id": "冰糖", "name": "冰糖", "lang": "中文", "gender": "女", "note": ""},
+    {"id": "茉莉", "name": "茉莉", "lang": "中文", "gender": "女", "note": ""},
+    {"id": "苏打", "name": "苏打", "lang": "中文", "gender": "男", "note": ""},
+    {"id": "白桦", "name": "白桦", "lang": "中文", "gender": "男", "note": ""},
+    {"id": "Mia", "name": "Mia", "lang": "英文", "gender": "女", "note": ""},
+    {"id": "Chloe", "name": "Chloe", "lang": "英文", "gender": "女", "note": ""},
+    {"id": "Milo", "name": "Milo", "lang": "英文", "gender": "男", "note": ""},
+    {"id": "Dean", "name": "Dean", "lang": "英文", "gender": "男", "note": ""},
+)
 
 TTS_MODELS = {
 
@@ -109,6 +143,33 @@ TTS_MODELS = {
     },
 
 
+
+
+
+
+
+    "mimo-v2.5-tts": {
+        "provider": "mimo",
+        "label": "官方配音",
+        "caps": {
+
+
+            "ref": {"mode": "none", "formats": [], "maxBytes": 0},
+
+
+            "preset": {"mode": "list", "voices": MIMO_PRESET_VOICES, "default": "mimo_default"},
+            "design": None,
+            "speed": None,
+            "tag_groups": _TAG_GROUPS_SING,
+            "prompt_target": "assistant",
+
+
+            "optimize_text_preview": False,
+
+
+            "stream": False,
+        },
+    },
     "mimo-v2.5-tts-voiceclone": {
         "provider": "mimo",
         "label": "参考配音",
@@ -244,6 +305,13 @@ TAG_GROUPS = (
      "tags": ["东北话", "四川话", "河南话", "粤语"]},
     {"key": "role", "label": "角色扮演", "bracket": "()",
      "tags": ["孙悟空", "林黛玉"]},
+
+
+
+
+
+    {"key": "sing", "label": "唱歌", "bracket": "()",
+     "tags": ["唱歌"]},
 
 
 

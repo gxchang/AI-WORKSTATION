@@ -4101,11 +4101,15 @@ def api_tts_generate():
                                  % (model_id, _ttsmodels.TTS_PROVIDER_LABELS.get(_prov, _prov))}), 400
     _mid = model_id or (_allowed[0] if _allowed else "")
 
-    _ref_mode = ((_ttsmodels.caps_for(_mid, _prov).get("ref") or {}).get("mode") if _mid else "optional")
+    _caps_mid = _ttsmodels.caps_for(_mid, _prov) if _mid else {}
+    _ref_mode = ((_caps_mid.get("ref") or {}).get("mode") if _mid else "optional")
+    _preset = (_caps_mid.get("preset") or {}) if _mid else {}
+
 
 
     voice_id = (data.get("voice_id") or "").strip()
     reference_raw = data.get("reference_audio") or ""
+    preset_voice = (data.get("preset_voice") or "").strip()
 
 
     voice_name = "系统默认音色"
@@ -4113,6 +4117,27 @@ def api_tts_generate():
     ref_url = ""
     used_ref_source = "original"
     try:
+        if _preset.get("mode") == "list":
+
+
+            _pvs = _preset.get("voices") or []
+            _pids = [v.get("id") for v in _pvs]
+            if not preset_voice:
+
+
+                preset_voice = _preset.get("default") or (_pids[0] if _pids else "")
+            if preset_voice not in _pids:
+                return jsonify({
+                    "error": "厂商预置音色里没有「%s」。可选：%s。"
+                             % (preset_voice, "、".join(_pids)),
+                    "code": "bad_preset_voice"}), 400
+            voice_name = next((v.get("name") or v.get("id") for v in _pvs
+                               if v.get("id") == preset_voice), preset_voice)
+        elif preset_voice:
+
+            return jsonify({
+                "error": "当前模型「%s」不接受厂商预置音色。" % _mid,
+                "code": "bad_preset_voice"}), 400
         if voice_id:
             vrow = _ttsclient.get_voice_row(voice_id)
             if not vrow:
@@ -4145,6 +4170,17 @@ def api_tts_generate():
 
 
 
+        if _ref_mode == "none" and (voice_id or reference_raw):
+            _hint = ("该模型用的是厂商预置音色（在「官方音色」里选）"
+                     if _preset.get("mode") == "list" else "该模型靠音色描述生成音色")
+            return jsonify({
+                "error": "当前模型「%s」不接受参考音频或音色库音色：%s。" % (_mid, _hint),
+                "code": "bad_reference"}), 400
+
+
+
+
+
 
 
 
@@ -4156,10 +4192,12 @@ def api_tts_generate():
             opt_val = False
         job = _ttsclient.create_job(text, speed=speed, voice_name=voice_name,
                                     ref_path=ref_path, count=count, model_id=_mid,
-                                    voice_desc=(data.get("voice_desc") or "").strip())
+                                    voice_desc=(data.get("voice_desc") or "").strip(),
+                                    preset_voice=preset_voice)
         _ttsclient.start_job(job["id"], count=count, optimize_text_preview=opt_val)
         return jsonify({"ok": True, "job": job, "ref_url": ref_url,
                         "voice_name": voice_name, "ref_source": used_ref_source,
+                        "preset_voice": preset_voice,
                         "model_id": _mid, "provider": _prov,
                         "speed": _ttsclient._norm_speed(speed), "text": text})
     except _ttsclient.TtsError as e:

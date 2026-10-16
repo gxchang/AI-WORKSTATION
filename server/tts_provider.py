@@ -43,7 +43,11 @@ DEFAULTS = {
     "mimo": {
         "base_url": "https://api.xiaomimimo.com/v1",
 
-        "model": "mimo-v2.5-tts-voiceclone, mimo-v2.5-tts-voicedesign",
+
+
+
+
+        "model": "mimo-v2.5-tts, mimo-v2.5-tts-voiceclone, mimo-v2.5-tts-voicedesign",
     },
 }
 

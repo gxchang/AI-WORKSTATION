@@ -164,6 +164,22 @@ def _mimo_request(base, key, model, intent, caps):
 
 
 
+
+
+    preset = (caps or {}).get("preset") or {}
+    if preset.get("mode") == "list":
+        pv = (intent.get("preset_voice") or "").strip()
+        if pv:
+            ids = [v.get("id") for v in (preset.get("voices") or [])]
+            if pv not in ids:
+                raise UpstreamError(
+                    "厂商预置音色里没有「%s」。可选：%s。" % (pv, "、".join(ids)),
+                    code="bad_preset_voice",
+                )
+            audio["voice"] = pv
+
+
+
     opt = intent.get("optimize_text_preview", None)
     optimize_on = opt is True or (opt is None and (caps or {}).get("optimize_text_preview"))
     if optimize_on:

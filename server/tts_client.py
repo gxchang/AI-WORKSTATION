@@ -126,6 +126,11 @@ def init_audio_db():
 
 
                 "ALTER TABLE jobs ADD COLUMN voice_desc TEXT DEFAULT ''",
+
+
+
+
+                "ALTER TABLE jobs ADD COLUMN preset_voice TEXT DEFAULT ''",
             ):
                 try:
                     conn.execute(_sql)
@@ -142,6 +147,8 @@ def init_audio_db():
                     voice_name TEXT DEFAULT '',
                     ref_path   TEXT DEFAULT '',                  -- 参考音频副本（storage/tts_ref/）
                     model_id   TEXT DEFAULT '',                  -- 本次用的模型（能力表里的 id，或用户自填名）
+                    voice_desc TEXT DEFAULT '',                  -- 专业模式「音色描述」（→ user，不出声）
+                    preset_voice TEXT DEFAULT '',                -- 厂商预置音色 id（官方配音；无本地文件）
                     count      INTEGER DEFAULT 2,
                     status     TEXT DEFAULT 'processing',        -- processing | completed | failed
                     candidates TEXT DEFAULT '[]',                 -- JSON 数组
@@ -339,7 +346,7 @@ def _call_upstream(intent):
 
 
 def synthesize(text, speed=SPEED_DEFAULT, reference_data_url="", reference_path="",
-               model_id="", cfg=None, optimize_text_preview=None, voice_desc=""):
+               model_id="", cfg=None, optimize_text_preview=None, voice_desc="", preset_voice=""):
     
     text = (text or "").strip()
     if not text:
@@ -361,6 +368,9 @@ def synthesize(text, speed=SPEED_DEFAULT, reference_data_url="", reference_path=
         "optimize_text_preview": optimize_text_preview,
 
         "voice_desc": voice_desc or "",
+
+
+        "preset_voice": (preset_voice or "").strip(),
     }
     return _call_upstream(intent)
 
@@ -394,10 +404,12 @@ def optimize_preview(text, model_id="", cfg=None):
 
 
 def synthesize_candidate(text, speed=SPEED_DEFAULT, reference_data_url="", reference_path="",
-                         model_id="", cfg=None, optimize_text_preview=None, voice_desc=""):
+                         model_id="", cfg=None, optimize_text_preview=None, voice_desc="",
+                         preset_voice=""):
     
     res = synthesize(text, speed, reference_data_url, reference_path, model_id,
-                     cfg=cfg, optimize_text_preview=optimize_text_preview, voice_desc=voice_desc)
+                     cfg=cfg, optimize_text_preview=optimize_text_preview, voice_desc=voice_desc,
+                     preset_voice=preset_voice)
     data = res.get("data") if isinstance(res, dict) else res
     spoken = (res.get("text") or "").strip() if isinstance(res, dict) else ""
     rel = _write_audio(data, "mp3", "tts_out")
@@ -431,6 +443,8 @@ def _job_to_dict(row):
         "model_id": (row["model_id"] if "model_id" in row.keys() else "") or "",
 
         "voice_desc": (row["voice_desc"] if "voice_desc" in row.keys() else "") or "",
+
+        "preset_voice": (row["preset_voice"] if "preset_voice" in row.keys() else "") or "",
         "status": row["status"] or "processing",
         "candidates": cands,
         "errors": _load(row["errors"]),
@@ -462,7 +476,8 @@ def _register_reference_asset(rel):
         return None
 
 
-def create_job(text, speed=SPEED_DEFAULT, voice_name="", ref_path="", count=2, model_id="", voice_desc=""):
+def create_job(text, speed=SPEED_DEFAULT, voice_name="", ref_path="", count=2, model_id="", voice_desc="",
+               preset_voice=""):
     
     init_audio_db()
     jid = uuid.uuid4().hex[:12]
@@ -471,11 +486,12 @@ def create_job(text, speed=SPEED_DEFAULT, voice_name="", ref_path="", count=2, m
         conn = _conn()
         try:
             conn.execute(
-                "INSERT INTO jobs(id,text,speed,voice_name,ref_path,model_id,count,status,candidates,errors,created_at,updated_at,voice_desc) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO jobs(id,text,speed,voice_name,ref_path,model_id,count,status,candidates,errors,created_at,updated_at,voice_desc,preset_voice) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (jid, text, _norm_speed(speed), voice_name or "", ref_path or "",
                  (model_id or "").strip(), int(count),
-                 "processing", "[]", "[]", now, now, (voice_desc or "").strip()),
+                 "processing", "[]", "[]", now, now, (voice_desc or "").strip(),
+                 (preset_voice or "").strip()),
             )
 
             conn.execute(
@@ -563,6 +579,7 @@ def run_job(jid, count=2, optimize_text_preview=None):
             return
     cands, errs = [], []
     vdesc = job.get("voice_desc") or ""
+    pvoice = job.get("preset_voice") or ""
     for i in range(max(1, int(count))):
         fatal = False
         try:
@@ -571,7 +588,8 @@ def run_job(jid, count=2, optimize_text_preview=None):
                                      reference_path=ref_path,
                                      model_id=model_id, cfg=cfg,
                                      optimize_text_preview=optimize_text_preview,
-                                     voice_desc=vdesc)
+                                     voice_desc=vdesc,
+                                     preset_voice=pvoice)
             c["index"] = i
             c["voice_name"] = job.get("voice_name") or ""
 
