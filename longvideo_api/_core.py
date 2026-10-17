@@ -399,6 +399,37 @@ def _db():
     return con
 
 
+
+
+
+
+
+_ASSET_TASK_FIELDS = ("label", "kind", "owner", "posture")
+
+
+def _pack_assets(assets):
+    
+    out = []
+    for a in assets or []:
+        if isinstance(a, dict):
+            n = a.get("name") or a.get("path")
+        else:
+            n = a
+        n = str(n or "").strip()
+        if not n:
+            continue
+        rec = {"name": n}
+        if isinstance(a, dict):
+            for k in _ASSET_TASK_FIELDS:
+                v = a.get(k)
+                if isinstance(v, str) and v.strip():
+                    rec[k] = v.strip()
+                elif isinstance(v, (int, float)):
+                    rec[k] = v
+        out.append(rec)
+    return out
+
+
 def _attach_appearance(items):
     
     if not items:
@@ -406,10 +437,11 @@ def _attach_appearance(items):
     con = _db()
     try:
         rows = con.execute(
-            "SELECT name, appearance, job_id, type FROM assets").fetchall()
+            "SELECT name, url, appearance, job_id, type FROM assets").fetchall()
         ap_map = {r["name"]: (r["appearance"] or "") for r in rows}
         owner_map = {r["name"]: r["job_id"] for r in rows}
         type_map = {r["name"]: r["type"] for r in rows}
+        url_map = {r["name"]: (r["url"] or "") for r in rows}
     finally:
         con.close()
     for it in items:
@@ -417,11 +449,11 @@ def _attach_appearance(items):
         it["appearance"] = ap_map.get(n) or ""
 
         it["job_id"] = owner_map.get(n)
+        it["url"] = url_map.get(n) or it.get("url") or ""
 
 
 
-        if not it.get("type"):
-            it["type"] = type_map.get(n) or "image"
+        it["type"] = type_map.get(n) or it.get("type") or "image"
     return items
 
 
@@ -2266,17 +2298,132 @@ def _resume_segment(job_id, seg):
     return True, local, tail, None
 
 
+def _prov_meta(job_id, seg_no=None):
+    
+    import json as _json
+    try:
+        model, ratio, payload = "", "", {}
+        con = _db()
+        try:
+            j = con.execute("SELECT script, gen_params_json, session_id FROM lv_jobs WHERE id=?",
+                            (job_id,)).fetchone()
+            script, sess = "", ""
+            gp = {}
+            if j:
+                script = (j["script"] or "") if "script" in j.keys() else ""
+                sess = str(j["session_id"] or "").strip() if "session_id" in j.keys() else ""
+                if sess.lower() in ("none", "null"):
+                    sess = ""
+                try:
+                    gp = _json.loads((j["gen_params_json"] if "gen_params_json" in j.keys() else "") or "{}")
+                except Exception:
+                    gp = {}
+                if not isinstance(gp, dict):
+                    gp = {}
+            model = str(gp.get("model") or "").strip()
+            job_ratio = str(gp.get("aspect_ratio") or "").strip()
+
+            if seg_no is None:
+
+
+
+
+
+
+
+                seg_rows = []
+                try:
+                    for r in con.execute(
+                        "SELECT seg_no, prompt, seconds, real_seconds, images_urls, audio_urls "
+                        "FROM lv_segments WHERE job_id=? AND status='completed' ORDER BY seg_no",
+                        (job_id,),
+                    ):
+                        d = {"seg_no": r["seg_no"]}
+                        if r["prompt"]:
+                            d["prompt"] = r["prompt"]
+                        sv = r["real_seconds"] if r["real_seconds"] is not None else r["seconds"]
+                        if sv not in (None, ""):
+                            d["seconds"] = sv
+                        for src, dst in (("images_urls", "images"), ("audio_urls", "audios")):
+                            try:
+                                v = _json.loads(r[src] or "[]")
+                            except Exception:
+                                v = []
+                            if isinstance(v, list) and v:
+                                d[dst] = [x for x in v if x]
+                        seg_rows.append(d)
+                except Exception:
+                    seg_rows = []
+                if seg_rows:
+                    payload["segments"] = seg_rows
+                total = 0.0
+                try:
+                    for r in con.execute(
+                        "SELECT real_seconds, seconds FROM lv_segments WHERE job_id=? AND local_path IS NOT NULL",
+                        (job_id,),
+                    ):
+                        v = r["real_seconds"] if r["real_seconds"] is not None else r["seconds"]
+                        try:
+                            total += float(v or 0)
+                        except (TypeError, ValueError):
+                            pass
+                except Exception:
+                    total = 0.0
+                if total > 0:
+                    payload["seconds"] = round(total, 2)
+                ratio = job_ratio
+
+
+
+                if job_ratio:
+                    payload["aspect_ratio"] = job_ratio
+                if str(gp.get("resolution") or "").strip():
+                    payload["size"] = str(gp.get("resolution")).strip()
+            else:
+                r = con.execute(
+                    "SELECT prompt, seconds, aspect_ratio, resolution, mode, images_urls, audio_urls "
+                    "FROM lv_segments WHERE job_id=? AND seg_no=?", (job_id, seg_no)).fetchone()
+                if r:
+                    if r["prompt"]:
+                        payload["prompt"] = r["prompt"]
+                    if r["seconds"] not in (None, ""):
+                        payload["seconds"] = r["seconds"]
+                    if r["resolution"]:
+                        payload["size"] = r["resolution"]
+                    if r["mode"]:
+                        payload["mode"] = r["mode"]
+                    ratio = str(r["aspect_ratio"] or "").strip() or job_ratio
+                    for src, dst in (("images_urls", "images"), ("audio_urls", "audios")):
+                        try:
+                            v = _json.loads(r[src] or "[]")
+                        except Exception:
+                            v = []
+                        if isinstance(v, list) and v:
+                            payload[dst] = [x for x in v if x]
+                if ratio:
+                    payload["aspect_ratio"] = ratio
+        finally:
+            con.close()
+        return _assets_store.build_provenance(payload=payload or None, model=model, ratio=ratio), sess
+    except Exception as e:
+        print(f"[warn] 长视频来历组装失败 job={job_id} seg={seg_no}: {e}", flush=True)
+        return None, ""
+
+
 def _register_segment_asset(job_id, seg_no, local_path):
     
     if not local_path:
         return None
     try:
+        meta, session_id = _prov_meta(job_id, seg_no)
         return _assets_store.register(
             name="%s/seg_%02d.mp4" % (job_id, seg_no),
             url="/api/jobs/%s/segment/%d.mp4" % (job_id, seg_no),
             type="video",
             origin=_assets_store.ORIGIN_CREATED,
             job_id=job_id,
+            origin_session=session_id or None,
+            meta=meta,
         )
     except Exception as e:
         print(f"[warn] 视频片段入库失败 job={job_id} seg#{seg_no}: {e}", flush=True)
@@ -2288,16 +2435,55 @@ def _register_final_asset(job_id):
     if not job_id:
         return None
     try:
+        meta, session_id = _prov_meta(job_id)
         return _assets_store.register(
             name="%s/final.mp4" % job_id,
             url="/api/jobs/%s/final.mp4" % job_id,
             type="video",
             origin=_assets_store.ORIGIN_CREATED,
             job_id=job_id,
+            origin_session=session_id or None,
+            meta=meta,
         )
     except Exception as e:
         print(f"[warn] 成片入库失败 job={job_id}: {e}", flush=True)
         return None
+
+
+def _register_lv_outputs(job_id):
+    
+    if not job_id:
+        return 0
+    try:
+        con = _db()
+        try:
+            segs = con.execute(
+                "SELECT seg_no FROM lv_segments WHERE job_id=? AND status='completed'",
+                (job_id,)).fetchall()
+            job = con.execute("SELECT final_url FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
+        finally:
+            con.close()
+    except Exception as e:
+        print(f"[warn] 长视频对账跳过（读任务失败 {type(e).__name__}: {e}）", flush=True)
+        return 0
+    n = 0
+    for s in segs:
+        try:
+            no = int(s["seg_no"])
+        except Exception:
+            continue
+        local = os.path.join(JOBS_DIR, job_id, "seg_%02d.mp4" % no)
+        if not os.path.isfile(local):
+            continue
+        if _register_segment_asset(job_id, no, local):
+            n += 1
+    final_url = (job["final_url"] if job is not None and "final_url" in job.keys() else "") or ""
+    if final_url:
+        if _register_final_asset(job_id):
+            n += 1
+    if n:
+        print(f"[info] 长视频对账入库：job={job_id} 登记 {n} 条", flush=True)
+    return n
 
 
 def _gen_segment(job_id, seg, prev_tail_b64):
@@ -2801,6 +2987,15 @@ def _update_job(job_id, **fields):
         con.close()
 
 
+
+
+    if fields.get("status") == "completed":
+        try:
+            _register_lv_outputs(job_id)
+        except Exception as e:
+            print(f"[warn] 长视频对账登记失败（不影响任务）job={job_id}: {e}", flush=True)
+
+
 @lv_bp.route("/optimizer", methods=["POST"])
 def api_optimizer():
     
@@ -2877,7 +3072,7 @@ def api_create_job():
     if not shots:
         return jsonify(error="未产出分镜"), 400
 
-    assets_json = json.dumps(data.get("assets", []), ensure_ascii=False)
+    assets_json = json.dumps(_pack_assets(data.get("assets", [])), ensure_ascii=False)
     shots_json = json.dumps(shots, ensure_ascii=False)
     gen_params_json = json.dumps(gen_params, ensure_ascii=False)
 
@@ -3017,7 +3212,7 @@ def api_save_draft():
         _new_name = (data.get("name") or "").strip()[:60] or None
     else:
         _new_name = None
-    assets_json = json.dumps(assets, ensure_ascii=False)
+    assets_json = json.dumps(_pack_assets(assets), ensure_ascii=False)
     shots_json = json.dumps(shots, ensure_ascii=False)
     gen_params_json = json.dumps(gen_params, ensure_ascii=False)
     con = _db()

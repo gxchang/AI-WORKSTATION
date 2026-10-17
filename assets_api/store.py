@@ -18,7 +18,10 @@ import thumbs as _thumbs
 
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH = os.path.join(_ROOT, "data", "app.db")
+
+
+
+DB_PATH = os.environ.get("APP_DB_PATH") or os.path.join(_ROOT, "data", "app.db")
 ASSETS_DIR = os.path.join(_ROOT, "storage", "assets")
 
 IMG_EXTS = {"png", "jpg", "jpeg", "webp", "bmp", "gif"}
@@ -114,7 +117,8 @@ def ensure_assets_table(con):
             subject_id INTEGER,
             origin TEXT,
             origin_session TEXT,
-            updated_at REAL
+            updated_at REAL,
+            meta TEXT
         )"""
     )
 
@@ -126,7 +130,8 @@ def ensure_assets_table(con):
             pass
     for col, decl in (("posture", "TEXT"), ("job_id", "TEXT"), ("appearance", "TEXT"),
                       ("subject_id", "INTEGER"), ("origin", "TEXT"),
-                      ("origin_session", "TEXT"), ("updated_at", "REAL")):
+                      ("origin_session", "TEXT"), ("updated_at", "REAL"),
+                      ("meta", "TEXT")):
         try:
             con.execute("ALTER TABLE %s ADD COLUMN %s %s" % (T_ASSETS, col, decl))
         except sqlite3.OperationalError:
@@ -184,8 +189,76 @@ def asset_name_of(url):
 
 
 
+
+
+
+
+
+
+
+
+
+
+PROV_VERSION = 1
+_PROV_MODEL_KEYS = ("model", "model_id")
+_PROV_RATIO_KEYS = ("ratio", "aspect_ratio")
+
+
+def fit_payload(payload, caps, param_cap):
+    
+    try:
+        if not isinstance(payload, dict) or not isinstance(caps, dict) or not isinstance(param_cap, dict):
+            return payload
+        out = dict(payload)
+        for key, cap_key in param_cap.items():
+            if key not in out or cap_key not in caps:
+                continue
+            want = caps.get(cap_key)
+            if isinstance(want, (list, tuple)):
+                if not want or str(out[key]).strip() not in [str(x) for x in want]:
+                    out.pop(key, None)
+            elif isinstance(want, dict):
+
+
+                if str(want.get("mode") or "").strip().lower() == "none":
+                    out.pop(key, None)
+            elif not want:
+                out.pop(key, None)
+        return out
+    except Exception:
+        return payload
+
+
+def build_provenance(payload=None, model=None, ratio=None):
+    
+    try:
+        out = {"v": PROV_VERSION}
+        p = payload if isinstance(payload, dict) else None
+        if p:
+            out["payload"] = p
+        m = model
+        if not m and p:
+            for k in _PROV_MODEL_KEYS:
+                if p.get(k):
+                    m = p.get(k)
+                    break
+        if m:
+            out["model"] = m
+        r = str(ratio or "").strip()
+        if not r and p:
+            for k in _PROV_RATIO_KEYS:
+                if p.get(k):
+                    r = p.get(k)
+                    break
+        if r:
+            out["ratio"] = r
+        return out if len(out) > 1 else None
+    except Exception:
+        return None
+
+
 def register(name, url, type, origin, kind=None, label=None, owner=None, posture=None,
-             subject_id=None, origin_session=None, job_id=None, appearance=None):
+             subject_id=None, origin_session=None, job_id=None, appearance=None, meta=None):
     
     if not name or not url:
         print("[warn] 资产入库被跳过（缺 name/url）：name=%r url=%r" % (name, url))
@@ -213,10 +286,17 @@ def register(name, url, type, origin, kind=None, label=None, owner=None, posture
         if subject_id is None and kind:
             subject_id = sync_subject(con, owner=owner, kind=kind, label=label)
         now = time.time()
+
+        _meta = json.dumps(meta, ensure_ascii=False) if isinstance(meta, dict) and meta else None
         row = con.execute("SELECT id FROM %s WHERE name=?" % T_ASSETS, (name,)).fetchone()
         if row:
             sets = ["url=?", "type=?", "updated_at=?"]
             vals = [url, type, now]
+            if _meta:
+
+
+                sets.append("meta=?")
+                vals.append(_meta)
             if subject_id is not None:
                 sets.append("subject_id=?")
                 vals.append(subject_id)
@@ -229,10 +309,10 @@ def register(name, url, type, origin, kind=None, label=None, owner=None, posture
         else:
             con.execute(
                 "INSERT INTO %s(name,url,type,label,kind,owner,posture,created_at,"
-                "job_id,subject_id,origin,origin_session,appearance,updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)" % T_ASSETS,
+                "job_id,subject_id,origin,origin_session,appearance,updated_at,meta) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)" % T_ASSETS,
                 (name, url, type, label, kind, owner, posture, now,
-                 job_id, subject_id, origin, origin_session, appearance, now),
+                 job_id, subject_id, origin, origin_session, appearance, now, _meta),
             )
         con.commit()
         return name
@@ -309,7 +389,8 @@ _SELECT_ASSET = (
     "       COALESCE(s.name, a.owner) AS owner, "
     "       a.posture, a.appearance, a.created_at, a.job_id, "
     "       a.subject_id, s.name AS subject_name, s.kind AS subject_kind, "
-    "       COALESCE(NULLIF(a.origin,''), 'uploaded') AS origin, a.origin_session, a.updated_at "
+    "       COALESCE(NULLIF(a.origin,''), 'uploaded') AS origin, a.origin_session, a.updated_at, "
+    "       a.meta "
     "FROM %s a LEFT JOIN %s s ON s.id = a.subject_id" % (T_ASSETS, T_SUBJECTS)
 )
 
@@ -523,6 +604,14 @@ def shared():
 
 
 
+
+
+_RE_SEG_NAME = re.compile(r"^([0-9a-zA-Z]+)/seg_(\d+)\.mp4$")
+
+
+
+_LV_JOBS_DIR = os.path.join(_ROOT, "storage", "longvideo_jobs")
+
 _LIST_PAGE_SIZE_DEFAULT = 60
 _LIST_PAGE_SIZE_MAX = 200
 
@@ -575,8 +664,56 @@ def list_assets():
     finally:
         con.close()
     pages = (total + size - 1) // size if size else 0
-    return jsonify(items=[dict(r) for r in rows], total=total, page=page,
+    items = [dict(r) for r in rows]
+
+
+
+
+
+    try:
+        idx = {}
+        for it in items:
+            m = _RE_SEG_NAME.match(it.get("name") or "")
+            if m:
+                idx.setdefault(m.group(1), set()).add(int(m.group(2)))
+        if idx:
+            for job_id, segs in idx.items():
+                job_dir = os.path.join(_LV_JOBS_DIR, job_id)
+                try:
+                    names = os.listdir(job_dir) if os.path.isdir(job_dir) else []
+                except OSError:
+                    names = []
+                for seg_no in segs:
+                    pat = "seg_%02d_v" % seg_no
+                    n_ver = sum(1 for f in names
+                                if f.startswith(pat) and f.endswith(".mp4")
+                                and f[len(pat):-4].isdigit())
+                    total_v = n_ver + 1
+                    for it in items:
+                        if it.get("name") == "%s/seg_%02d.mp4" % (job_id, seg_no):
+                            it["ver_total"] = total_v
+    except Exception as e:
+        print("[assets] 版本数统计跳过：%s" % e, flush=True)
+    return jsonify(items=items, total=total, page=page,
                    size=size, pages=pages)
+
+
+@assets_bp.route("/info", methods=["GET"])
+def asset_info():
+    
+    raw = (request.args.get("url") or request.args.get("name") or "").strip()
+    if not raw:
+        return jsonify(found=False)
+
+    name = (asset_name_of(raw) or raw).split("?")[0].split("#")[0]
+    con = _db()
+    try:
+        row = con.execute(_SELECT_ASSET + " WHERE a.name=? OR a.url=?", (name, raw)).fetchone()
+        if not row:
+            return jsonify(found=False)
+        return jsonify(found=True, asset=dict(row))
+    finally:
+        con.close()
 
 
 @assets_bp.route("/subjects", methods=["GET"])

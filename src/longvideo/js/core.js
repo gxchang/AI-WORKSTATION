@@ -404,9 +404,8 @@
   
   (async function syncOptsFromConfig() {
     try {
-      const r = await fetch("/api/config");
-      if (!r.ok) return;
-      const d = await r.json();
+      const d = window.fetchConfig ? await window.fetchConfig()
+                                   : await (await fetch("/api/config")).json();
       
       window.__lvProvider = d.provider || {};
       document.dispatchEvent(new CustomEvent("provider:changed", { detail: d.provider || {} }));

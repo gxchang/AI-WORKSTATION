@@ -116,6 +116,24 @@ for _m in CAPS:
     MODEL_PROVIDER[_m] = "ms" if _m.startswith("Qwen/") else "ark"
 
 
+
+
+PARAM_CAP = {
+    "size": "tiers",
+    "aspect_ratio": "ratios",
+    "ratio": "ratios",
+    "seed": "seed",
+}
+
+NON_PARAM_CAPS = frozenset({"min_px", "max_px", "max_ref_images", "sequential",
+                            "png", "can_t2i", "can_edit", "edge_max", "edge_min"})
+
+
+def param_cap_map():
+    
+    return dict(PARAM_CAP)
+
+
 def caps_for(model, provider=None):
     
     m = str(model or "").strip()

@@ -7,8 +7,10 @@ import threading
 import time
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
-_APP_DB = os.path.join(_ROOT, "data", "app.db")
 
+
+
+_APP_DB = os.environ.get("APP_DB_PATH") or os.path.join(_ROOT, "data", "app.db")
 
 ROOTS = {
     "assets": os.path.join(_ROOT, "storage", "assets"),

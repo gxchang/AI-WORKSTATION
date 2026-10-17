@@ -331,6 +331,11 @@ def api_config():
             "ttsModels": _tts_models,
 
 
+
+
+
+
+
             "ttsModelCaps": _tts_caps,
 
             "ttsModelLabels": _tts_labels,
@@ -487,12 +492,12 @@ def _submit_video_to_ark(data):
         "model": model,
         "mode": data.get("mode", "text"),
         "prompt": str(data.get("prompt") or ""),
-        "params": {
+        "params": dict({
             "seconds": payload.get("duration"),
             "aspect_ratio": payload.get("ratio"),
             "size": payload.get("resolution"),
             "seed": payload.get("seed"),
-        },
+        }, **_video_ref_media(data)),
         "assets": data.get("assets") or [],
         "created_at": time.time(),
         "video_url": None,
@@ -657,12 +662,12 @@ def _submit_video_to_agnes(data):
         "model": model,
         "mode": mode,
         "prompt": payload["prompt"],
-        "params": {
+        "params": dict({
             "seconds": payload.get("seconds"),
             "aspect_ratio": payload.get("aspect_ratio"),
             "size": payload.get("size"),
             "seed": payload.get("seed"),
-        },
+        }, **_video_ref_media(data)),
         "assets": data.get("assets") or [],
         "created_at": time.time(),
         "video_url": None,
@@ -908,7 +913,8 @@ def _submit_image_task(data):
                     "message": "已复用本次提交的生成任务"}, 200
 
         tid, _ = _create_task("image", model, payload, media_hint="image",
-                              session_id=data.get("sessionId"), upstream=upstream)
+                              session_id=data.get("sessionId"), upstream=upstream,
+                              ratio=ratio)
         _IMG_SUBMIT_DEDUP[_fp] = (tid, _now)
 
         if len(_IMG_SUBMIT_DEDUP) > 256:
@@ -2661,6 +2667,33 @@ def _find_history_by_video_id(video_id):
     return None
 
 
+def _video_ref_media(data):
+    
+    out = {}
+    for key in ("images", "audios", "videos"):
+        v = (data or {}).get(key)
+        if isinstance(v, (list, tuple)):
+            lst = [str(x) for x in v if x]
+        elif isinstance(v, str) and v.strip():
+            lst = [v.strip()]
+        else:
+            lst = []
+        if lst:
+            out[key] = lst
+    return out
+
+
+def _video_provenance(row, model_name=None):
+    
+    row = row or {}
+    prov = dict(row.get("params") or {})
+    prov["prompt"] = row.get("prompt") or ""
+    prov["model"] = row.get("model") or (model_name or "")
+    if row.get("mode"):
+        prov["mode"] = row["mode"]
+    return prov
+
+
 def _finalize_video_result(video_id, video_url, model_name, prefix="vid"):
     
     matched = _find_history_by_video_id(video_id)
@@ -2671,7 +2704,11 @@ def _finalize_video_result(video_id, video_url, model_name, prefix="vid"):
         local = _persist_generated_video(video_url, prefix=prefix)
 
 
-    _register_generated_video(local, session_id=(matched or {}).get("sessionId"))
+
+
+    _register_generated_video(local,
+                              payload=_video_provenance(matched, model_name),
+                              session_id=(matched or {}).get("sessionId"))
     _backfill_video_history(video_id, local, model_name)
     return local
 
@@ -3027,6 +3064,10 @@ def api_media_purge():
     })
 
 
+
+_LV_JOBS_DIR = os.path.join(_ROOT, "storage", "longvideo_jobs")
+
+
 @app.route("/api/download")
 def api_download():
     url = request.args.get("url", "").strip()
@@ -3047,6 +3088,33 @@ def api_download():
             return jsonify({"error": "本地素材不存在"}), 404
         _ext, _mime = _infer_ext_and_mime(url, None)
         return send_file(_full, mimetype=_mime, as_attachment=True, download_name=_name)
+
+
+
+
+
+
+    if not p.scheme and url.startswith("/api/jobs/"):
+        parts = [x for x in url[len("/api/jobs/"):].split("?")[0].split("/") if x]
+        job = parts[0] if parts else ""
+        target = None
+        if not re.fullmatch(r"[0-9A-Za-z_]+", job or ""):
+            return jsonify({"error": "非法的任务标识"}), 400
+        if len(parts) == 3 and parts[1] == "segment" and re.fullmatch(r"\d{1,3}\.mp4", parts[2]):
+            target = os.path.join(_LV_JOBS_DIR, job, "seg_%02d.mp4" % int(parts[2][:-4]))
+
+        elif (len(parts) == 5 and parts[1] == "segment" and parts[3] == "v"
+              and re.fullmatch(r"\d{1,3}", parts[2]) and re.fullmatch(r"\d{1,3}\.mp4", parts[4])):
+            target = os.path.join(_LV_JOBS_DIR, job,
+                                  "seg_%02d_v%d.mp4" % (int(parts[2]), int(parts[4][:-4])))
+        elif len(parts) == 2 and parts[1] == "final.mp4":
+            target = os.path.join(_LV_JOBS_DIR, job, "final.mp4")
+        if target is None:
+            return jsonify({"error": "不支持的任务产物路径"}), 400
+        if not os.path.isfile(target):
+            return jsonify({"error": "该版本文件不存在"}), 404
+        return send_file(target, mimetype="video/mp4", as_attachment=True,
+                         download_name=os.path.basename(target))
     host = (p.hostname or "").lower()
     if p.scheme not in ("http", "https") or not any(host == d or host.endswith("." + d) for d in DOWNLOAD_ALLOW_HOSTS):
         return jsonify({"error": "仅允许下载 Agnes 平台（agnes-ai.space）的文件；站内素材请直接使用 /assets/ 路径"}), 403
@@ -4194,7 +4262,9 @@ def api_tts_generate():
                                     ref_path=ref_path, count=count, model_id=_mid,
                                     voice_desc=(data.get("voice_desc") or "").strip(),
                                     preset_voice=preset_voice)
-        _ttsclient.start_job(job["id"], count=count, optimize_text_preview=opt_val)
+
+        _ttsclient.start_job(job["id"], count=count, optimize_text_preview=opt_val,
+                             caps={"caps": _caps_mid, "param_cap": _ttsmodels.param_cap_map()})
         return jsonify({"ok": True, "job": job, "ref_url": ref_url,
                         "voice_name": voice_name, "ref_source": used_ref_source,
                         "preset_voice": preset_voice,

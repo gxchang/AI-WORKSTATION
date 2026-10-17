@@ -495,7 +495,8 @@ def _save_tasks(data):
             conn.close()
 
 
-def _create_task(kind, model, payload, video_id=None, media_hint=None, session_id=None, upstream=None):
+def _create_task(kind, model, payload, video_id=None, media_hint=None, session_id=None, upstream=None,
+                 ratio=None):
     
 
 
@@ -514,6 +515,10 @@ def _create_task(kind, model, payload, video_id=None, media_hint=None, session_i
         "image_urls": None,
         "error": None,
         "payload": payload,
+
+
+
+        **({"ratio": str(ratio).strip()} if ratio and str(ratio).strip() else {}),
         "created_at": time.time(),
         "updated_at": time.time(),
         "finished_at": None,
@@ -888,8 +893,31 @@ def _persist_generated_video(url, prefix="vid"):
     return local
 
 
-def _register_generated_video(url, session_id=None):
+
+VIDEO_PARAM_CAP = {"size": "sizes"}
+
+VIDEO_NON_PARAM_CAPS = frozenset({"label", "note", "min_seconds", "max_seconds",
+                                  "max_images", "max_audios", "allow_video"})
+
+
+def _video_param_cap():
     
+    return dict(VIDEO_PARAM_CAP)
+
+
+def _video_caps_for(model):
+    
+    m = str(model or "").strip()
+    if not m:
+        return {}
+    return MODEL_LIMITS.get(m) or getattr(_arkprov, "VIDEO_MODEL_LIMITS", {}).get(m) or {}
+
+
+def _register_generated_video(url, payload, session_id=None):
+    
+    if not payload:
+        print("[warn] 视频入库**没有来历**（payload 为空）—— 预览窗将永远没有生成信息；"
+              "调用点必须把提交时的实参传下来（ADR-0020：参数跟着产物走）", flush=True)
     try:
         n = _assets_store.asset_name_of(url)
         if not n:
@@ -899,6 +927,11 @@ def _register_generated_video(url, session_id=None):
             name=n, url=url, type="video",
             origin=_assets_store.ORIGIN_CREATED,
             origin_session=session_id,
+            meta=_assets_store.build_provenance(
+                              payload=_assets_store.fit_payload(
+                                  payload, _video_caps_for((payload or {}).get("model")),
+                                  _video_param_cap()),
+                              model=(payload or {}).get("model")),
         )
     except Exception as e:
         print("[warn] 视频结果入库失败（不影响任务）:", e, flush=True)
@@ -923,15 +956,21 @@ def _register_generated_video(url, session_id=None):
 
 
 
-def _register_generated_images(urls, session_id=None):
+def _register_generated_images(urls, session_id=None, payload=None, ratio=None, upstream=None):
     
     items = []
+
+    _caps = _imgen.caps_for((payload or {}).get("model") or "", "ark" if upstream == "ark" else None) \
+        if isinstance(payload, dict) else {}
+    prov = _assets_store.build_provenance(
+        payload=_assets_store.fit_payload(payload, _caps, _imgen.param_cap_map()), ratio=ratio)
     for u in (urls or []):
         n = _assets_store.asset_name_of(u)
         if n:
             items.append({"name": n, "url": u, "type": "image",
                           "origin": _assets_store.ORIGIN_CREATED,
-                          "origin_session": session_id})
+                          "origin_session": session_id,
+                          "meta": prov})
     return _assets_store.register_many(items) if items else []
 
 
@@ -1014,7 +1053,9 @@ def _progress_one(tid, rec):
                 _vurl = _persist_generated_video(vurl)
                 _update_task(tid, status="completed", video_url=_vurl, error=None)
 
-                _register_generated_video(_vurl, session_id=rec.get("session_id"))
+
+                _register_generated_video(_vurl, session_id=rec.get("session_id"),
+                                          payload=rec.get("payload"))
             elif st in ("failed", "error", "cancelled"):
                 err_msg = eobj if isinstance(eobj, str) else (eobj.get("message") if isinstance(eobj, dict) else None) or f"视频任务失败（{st}）"
                 _update_task(tid, status="failed", error=err_msg)
@@ -1078,7 +1119,10 @@ def _progress_one(tid, rec):
                 )
 
 
-                _register_generated_images(image_urls, session_id=rec.get("session_id"))
+                _register_generated_images(image_urls, session_id=rec.get("session_id"),
+                                           payload=rec.get("payload"),
+                                           ratio=rec.get("ratio"),
+                                           upstream=rec.get("upstream"))
             else:
                 suffix = f"（已重试 {attempts} 次）" if attempts > 1 else ""
                 _update_task(tid, status="failed", error=(err_msg or "生图失败") + suffix)

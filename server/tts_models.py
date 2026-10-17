@@ -252,6 +252,24 @@ def model_entry(model_id, provider):
     return {"provider": d["provider"], "label": mid, "caps": d["caps"], "registered": False}
 
 
+
+
+
+PARAM_CAP = {
+    "speed": "speed",
+    "voice_desc": "design",
+    "preset_voice": "preset",
+    "audio_url": "ref",
+}
+
+NON_PARAM_CAPS = frozenset({"tag_groups", "prompt_target", "optimize_text_preview", "stream"})
+
+
+def param_cap_map():
+    
+    return dict(PARAM_CAP)
+
+
 def caps_for(model_id, provider):
     
     return model_entry(model_id, provider)["caps"]

@@ -2,7 +2,8 @@
   let LV_SEC = { min: 4, max: 12 };
   (async () => {
     try {
-      const d = await (await fetch("/api/config")).json();
+      const d = window.fetchConfig ? await window.fetchConfig()
+                                   : await (await fetch("/api/config")).json();
       if (Array.isArray(d.lvSecBounds)) { LV_SEC.min = d.lvSecBounds[0]; LV_SEC.max = d.lvSecBounds[1]; }
     } catch (_e) {}
   })();

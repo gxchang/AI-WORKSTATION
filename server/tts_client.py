@@ -436,6 +436,10 @@ def _job_to_dict(row):
         "id": row["id"],
         "text": row["text"],
         "speed": row["speed"] if row["speed"] is not None else SPEED_DEFAULT,
+
+
+
+        "count": row["count"] if "count" in row.keys() else None,
         "voice_name": row["voice_name"] or "",
         "ref_path": row["ref_path"] or "",
 
@@ -559,7 +563,7 @@ def list_jobs(ids=None, status=None):
             conn.close()
 
 
-def run_job(jid, count=2, optimize_text_preview=None):
+def run_job(jid, count=2, optimize_text_preview=None, caps=None):
     
     job = get_job(jid)
     if not job:
@@ -608,24 +612,51 @@ def run_job(jid, count=2, optimize_text_preview=None):
                status=("completed" if cands else "failed"))
 
 
-    _register_candidates_assets(cands)
+
+    _register_candidates_assets(cands, job, caps)
 
 
-def _register_candidates_assets(cands):
+def _register_candidates_assets(cands, job=None, caps=None):
     
     if not cands:
         return []
     out = []
     try:
         import assets_api.store as _store
+        job = job or {}
         items = []
         for c in cands:
-            rel = (c or {}).get("path") or ""
+            c = c or {}
+            rel = c.get("path") or ""
             if not rel:
                 continue
-            url = (c or {}).get("url") or ("/api/tts/file/" + rel)
+            url = c.get("url") or ("/api/tts/file/" + rel)
+
+
+            raw = {
+                "text": job.get("text") or c.get("text") or "",
+                "voice": job.get("voice_name") or c.get("voice_name") or "",
+                "speed": job.get("speed"),
+                "voice_desc": job.get("voice_desc") or "",
+                "preset_voice": job.get("preset_voice") or "",
+                "count": job.get("count"),
+                "duration": c.get("duration"),
+
+
+
+
+
+                "audio_url": ("/api/tts/file/" + str(job.get("ref_path"))) if job.get("ref_path") else "",
+            }
+
+
+
+            raw = _store.fit_payload(raw, (caps or {}).get("caps"), (caps or {}).get("param_cap"))
+            raw = {k: v for k, v in raw.items() if v not in (None, "")}
             items.append({"name": rel, "url": url, "type": "audio",
-                          "origin": _store.ORIGIN_CREATED, "kind": "voice"})
+                          "origin": _store.ORIGIN_CREATED, "kind": "voice",
+                          "meta": _store.build_provenance(
+                              payload=raw, model=job.get("model_id") or c.get("model_id"))})
         if items:
             out = _store.register_many(items)
     except Exception as e:
@@ -647,7 +678,7 @@ _TTS_STARTED_JOBS = {}
 _TTS_DEDUP_LOCK = threading.Lock()
 
 
-def start_job(jid, count=2, optimize_text_preview=None):
+def start_job(jid, count=2, optimize_text_preview=None, caps=None):
     
     with _TTS_DEDUP_LOCK:
         if jid in _TTS_STARTED_JOBS:
@@ -658,7 +689,7 @@ def start_job(jid, count=2, optimize_text_preview=None):
         _now = time.time()
         for k in [k for k, v in _TTS_STARTED_JOBS.items() if _now - v > 3600]:
             _TTS_STARTED_JOBS.pop(k, None)
-    t = threading.Thread(target=run_job, args=(jid, count, optimize_text_preview),
+    t = threading.Thread(target=run_job, args=(jid, count, optimize_text_preview, caps),
                          name=f"tts-job-{jid}", daemon=True)
     t.start()
     return t
