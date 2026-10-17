@@ -3094,6 +3094,20 @@ def api_download():
 
 
 
+
+
+
+    if not p.scheme and url.startswith("/api/tts/file/"):
+        rel = url[len("/api/tts/file/"):].split("?")[0]
+        full = _ttsclient.abs_path(rel)
+        if not full or not os.path.isfile(full) or not os.path.realpath(full).startswith(
+                os.path.realpath(_ttsclient._STORAGE)):
+            return jsonify({"error": "音频不存在"}), 404
+        _ext = os.path.splitext(full)[1].lower()
+        _mime = {".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
+                 ".ogg": "audio/ogg", ".flac": "audio/flac"}.get(_ext, "audio/mpeg")
+        return send_file(full, mimetype=_mime, as_attachment=True,
+                         download_name=os.path.basename(full))
     if not p.scheme and url.startswith("/api/jobs/"):
         parts = [x for x in url[len("/api/jobs/"):].split("?")[0].split("/") if x]
         job = parts[0] if parts else ""
