@@ -201,6 +201,7 @@ if exist "bin\ffmpeg.exe" (
 if exist "%FFTMP%" rmdir /s /q "%FFTMP%" >nul 2>nul
 
 :start_server
+if not exist "data" mkdir "data"
 echo [5/5] Starting service on port %PORT% ...
 start "AI WORKSTATION server" /D "%ROOT%" "%PYBIN%" server.py
 

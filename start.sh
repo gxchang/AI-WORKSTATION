@@ -135,6 +135,7 @@ else
   fi
 fi
 
+mkdir -p data
 echo "[5/5] Starting service on port ${PORT} ..."
 "$PYBIN" server.py &
 SRV=$!
