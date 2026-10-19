@@ -304,6 +304,10 @@ def api_config():
             "imageModelLimits": _img_limits,
 
 
+            "imageSizeOptions": {m: _imgen.size_options_for(m)
+                                 for m in (_img_models or [])},
+
+
 
             "ark": dict(_img_prov_block("ark"),
                         hasKey=bool(_arkprov.get("api_key")),
@@ -927,6 +931,17 @@ def _submit_image_task(data):
             "size": str((payload or {}).get("size") or ""),
             "model": model}, 200
 
+
+@app.route("/api/image/size-preview", methods=["GET"])
+def api_image_size_preview():
+    from flask import request as _rq
+    return jsonify({"size": _imgen.preview_size(
+        _rq.args.get("model") or "",
+        _rq.args.get("ratio") or "1:1",
+        _rq.args.get("src_size") or "",
+    )}), 200
+
+
 @app.route("/api/image/generate", methods=["POST"])
 def api_image_generate():
     data = request.get_json(silent=True) or {}
@@ -954,20 +969,27 @@ AGENT_SYSTEM_PROMPT = (
     "6. 用户只是闲聊、询问或做与接口无关的事，直接回文字，不要强行调用工具。\n"
     "7. 排版：正文按语义分段，段与段之间空一行；作文/文案/脚本等多段内容严禁挤成一大段。\n"
     "\n"
-    "【长视频草稿任务：必须分三步，每步都要等用户确认，严禁一步完成】\n"
-    "8. 用户要「做长视频 / 生成漫剧 / 开长视频任务」时，按下面三步走，且每步之间必须停下来等用户确认，"
+    "【长视频草稿任务：分四步，每一步都要等用户确认，严禁一步完成】\n"
+    "8. 用户要「做长视频 / 生成漫剧 / 开长视频任务」时，按下面四步走，且每步之间必须停下来等用户确认，"
     "不得在未确认的情况下把脚本+素材一次性塞进某个工具：\n"
-    "   · 第1步（不调工具）：先分析脚本，抽取其中的角色 / 场景 / 道具，列出每项的【名称 + 类型 + 生成提示词】，"
+    "   · 第1步（不调工具）：先分析脚本，抽取其中的角色 / 场景 / 道具 / 角色声线，列出每项的【名称 + 类型 + 生成提示词】，"
     "用文字呈现给用户确认。这一步不要调用任何工具，等用户说「可以 / 没问题 / 确认」再继续。\n"
+    "     - 角色声线项：需标注归属角色（owner）、该角色的台词或旁白文本、期望音色（预置音色 / 参考音色 / 自定义音色描述）。\n"
     "   · 第2步（generate_longvideo_assets）：用户确认提示词后，调用 generate_longvideo_assets 逐张生成素材图，"
     "把图片展示给用户。**这一步只生图、不建任务**。\n"
     "     若用户后续要求修改某张素材（如'第一张重画'、'角色变形了'）：必须继续调用 generate_longvideo_assets，"
     "传入完整的最新素材清单——已满意的素材保留其 url，需要重绘的素材保留 label/kind/prompt 但不带 url；"
     "工具会自动跳过带 url 的项、只重绘缺 url 的项，并返回完整清单。严禁用 generate_image 处理长视频素材修改，"
     "因为那样生成的图不会进入长视频素材清单。\n"
-    "   · 第3步（submit_longvideo_job）：用户看完图、确认素材无误后，调用 submit_longvideo_job，"
-    "把脚本 + 已生成素材（每项带 url）提交建草稿。\n"
-    "   严禁在未获用户明确确认前调用 generate_longvideo_assets 或 submit_longvideo_job。"
+    "   · 第3步（generate_longvideo_audio）：若第1步清单含角色声线，用户确认图后，调用 generate_longvideo_audio"
+    "为每个需要配音的角色生成声线音频，把音频展示给用户。**这一步只生音频、不建任务**。\n"
+    "     声线通过 owner 绑定角色，分镜会自动把音频对到对应角色，无需在提示词里手写字面音；"
+    "修改某条声线时继续调用本工具、只传需重生的项（已满意的保留 url）。\n"
+    "     若用户明确不需要音频（纯画面 / 默声），可跳过本步。\n"
+    "     严禁用 generate_audio 处理长视频声线素材——那样生成的音频不会进入长视频素材清单、分镜也无法绑定角色。\n"
+    "   · 第4步（submit_longvideo_job）：用户看完图、确认素材与声线无误后，调用 submit_longvideo_job，"
+    "把脚本 + 已生成素材（每项带 url）+ 已生成声线（每项带 url，按 owner 绑定角色）+ 用户提供的素材（每项带 url）提交建草稿。\n"
+    "   严禁在未获用户明确确认前调用 generate_longvideo_assets / generate_longvideo_audio / submit_longvideo_job。"
 )
 
 
@@ -1213,6 +1235,34 @@ def _agent_tools():
             for _k, _cap in (("images", _vcap_img), ("audios", _vcap_aud), ("videos", _vcap_vid)):
                 if isinstance(vprops.get(_k), dict) and isinstance(vprops[_k].get("items"), dict):
                     vprops[_k]["maxItems"] = _cap
+        if fn.get("name") in ("generate_audio", "generate_longvideo_audio"):
+
+
+            _tprov = _tts_provider_now()
+            _tmodels = list(_ttsprov.models(_tprov) or [])
+            _t0 = _tmodels[0] if _tmodels else ""
+            _tcaps = (_ttsmodels.caps_for(_t0, _tprov) if _t0 else {}) or {}
+            aprops = ((fn.get("parameters") or {}).get("properties")) or {}
+            if isinstance(aprops.get("model"), dict):
+                aprops["model"]["enum"] = _tmodels
+                if _t0:
+                    aprops["model"]["description"] = "音频模型，缺省 %s" % _t0
+            _preset = (_tcaps.get("preset") or {})
+            if _preset.get("mode") == "list" and isinstance(aprops.get("preset_voice"), dict):
+                _pvs = [v.get("id") for v in (_preset.get("voices") or []) if v.get("id")]
+                if _pvs:
+                    aprops["preset_voice"]["enum"] = _pvs
+                else:
+                    aprops.pop("preset_voice", None)
+            else:
+                aprops.pop("preset_voice", None)
+            _sp = _tcaps.get("speed")
+            if _sp and isinstance(aprops.get("speed"), dict):
+                _opts = _sp.get("options") or []
+                aprops["speed"]["enum"] = list(_opts) if _opts else []
+                aprops["speed"]["description"] = "语速（可选值随模型）"
+            else:
+                aprops.pop("speed", None)
 
 
 
@@ -1391,6 +1441,42 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "generate_audio",
+            "description": "根据文本生成一段语音。用于「配音 / 让角色说话 / 朗读旁白 / 生成一段音频」这类需求。"
+                           "**三种模型分工不同，按用户诉求选，别一律用默认**："
+                           "① 官方配音（缺省）：从 preset_voice 里挑预置音色；"
+                           "② 参考配音（voiceclone）：给 voice_id（音色库里的音色）**或 reference_audio（用户上传/提供的参考音频 url）**，二者必须有一个；"
+                           "③ 自定义配音（voicedesign）：把音色描述写进 voice_desc（如「低沉的老年男声，语速偏慢」），此时不要传 preset_voice。"
+                           "用户点名要某个角色的声音 → 先查音色库有没有该音色，有就 voiceclone+voice_id；"
+                           "用户描述的是一种声音特征（年龄/性别/质感）→ voicedesign+voice_desc。"
+                           "**语气/情绪/唱歌走 tags 参数**（官方标签语法：`()`、`（）`、`[]` 三种写法**任选**，"
+                           "对任何标签都通用），"
+                           "如 tags=[\"悲伤\",\"东北话\"]；**标签不必照抄词表，可按角色气质自由写**（如「疲惫但强撑」）。"
+                           "例外：唱歌传 tags=[\"唱歌\"]，**只有官方配音(mimo-v2.5-tts)支持**，另两个模型会报错。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "要朗读的文字（只给正文，不要带角色名和动作描述）"},
+                    "model": {"type": "string", "enum": [], "description": "音频模型，缺省用当前生效模型"},
+                    "voice_id": {"type": "string", "description": "音色库里的音色 id。**仅 voiceclone（参考配音）用**；与 reference_audio 二选一，不要同时传 preset_voice / voice_desc"},
+                    "reference_audio": {"type": "string", "description": "参考音频的站内 URL（用户上传或提供的音频素材，形如 /assets/… 或 /api/tts/file/…）。**仅 voiceclone（参考配音）用**，与 voice_id 二选一"},
+                    "preset_voice": {"type": "string", "enum": [], "description": "厂商预置音色 id。**仅官方配音（mimo-v2.5-tts）用**"},
+                    "voice_desc": {"type": "string", "description": "音色描述（文字）。**仅 voicedesign（自定义配音）用**，如「低沉的老年男声，语速偏慢」；用它时不要传 preset_voice / voice_id"},
+                    "tags": {"type": "array", "items": {"type": "string"},
+                             "description": "语气/风格标签（可多个，可自由描述，不必照抄词表）：常用词如 开心/悲伤/愤怒/温柔/高冷/磁性/清亮/御姐音/大叔音/东北话/四川话/粤语/语速加快/紧张/疲惫/撒娇/气声/颤抖；也可以写自己的（如「疲惫但强撑」「压着火气」）。"
+                                            "**官方只认带括号的标签，裸词不生效**：`()`、`（）`、`[]` 三种写法任选其一（对任何标签通用），"
+                                            "例如 `(压着火气)`、`（东北话）`、`[叹气]` 都合法；裸写「压着火气」不生效。"
+                                            "可以直接把带括号的完整标签传进来（工具原样使用、不改形态）；只给裸词时工具会按规则补括号。"
+                                            "例外：「唱歌」是硬能力，只有官方配音(mimo-v2.5-tts)支持，其它模型传了会报错。"},
+                    "speed": {"type": "number", "enum": [], "description": "语速（仅部分模型支持）"}
+                },
+                "required": ["text"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "generate_longvideo_assets",
             "description": "（长视频流程第2步：须先与用户确认提示词清单）根据素材清单逐张生成素材图，并返回每张图的 URL 预览。**本工具只生图、不建任务**。生成后把图片展示给用户，等用户确认无误，再用 submit_longvideo_job 提交建草稿。支持局部修改：清单中已带 url 的项会被保留、不会重复生成；需要重绘的项保留 label/kind/prompt 但不带 url。用户要求修改某张素材时，必须继续调用本工具，严禁用 generate_image 处理长视频素材。",
             "parameters": {
@@ -1422,6 +1508,46 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "generate_longvideo_audio",
+            "description": (
+                "（长视频流程第3步：须用户先看素材图确认）为长视频草稿中的角色生成声线音频（配音），"
+                "并返回每段音频的 URL 预览。本工具只生音频、不建任务。生成后把音频展示给用户，"
+                "等用户确认无误，再用 submit_longvideo_job 一并提交。"
+                "支持按角色绑定（owner）：声线会自动对到分镜中对应角色，无需在提示词里手写字面音。"
+                "支持局部重生成：清单中已带 url 的项会保留、不重复生成；需重做的项保留 owner/text/voice 但不带 url。"
+                "用户要求修改某条声线时，必须继续调用本工具，严禁用 generate_audio 处理长视频声线素材"
+                "（那样音频不会进入长视频素材清单、分镜也无法绑定角色）。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "audios": {
+                        "type": "array",
+                        "description": "声线清单，每项生成一段音频，可绑定角色。",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "owner": {"type": "string", "description": "归属角色 label（须与素材清单里的角色 label 一致，用于分镜自动绑定声线）"},
+                                "label": {"type": "string", "description": "声线名（可选，如「三花猫声音」；不填默认用 owner）"},
+                                "text": {"type": "string", "description": "该角色的台词 / 旁白文本（只给正文，不要带角色名和动作描述）"},
+                                "preset_voice": {"type": "string", "enum": [], "description": "厂商预置音色 id（官方配音用）"},
+                                "voice_id": {"type": "string", "description": "音色库里的音色 id（参考配音 voiceclone 用）"},
+                                "reference_audio": {"type": "string", "description": "参考音频站内 URL（参考配音 voiceclone 用，与 voice_id 二选一）"},
+                                "voice_desc": {"type": "string", "description": "自定义音色描述（voicedesign 用），如「低沉的老年男声，语速偏慢」"},
+                                "tags": {"type": "array", "items": {"type": "string"}, "description": "语气/风格标签，如 (悲伤)/(东北话)；裸词不生效，需带括号"},
+                                "speed": {"type": "number", "enum": [], "description": "语速（仅部分模型支持）"}
+                            },
+                            "required": ["owner", "text"]
+                        }
+                    }
+                },
+                "required": ["audios"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "submit_longvideo_job",
             "description": "（长视频流程第3步：须用户先看素材图确认）把一份脚本 + 已生成的素材图（每项带 url）落成一个长视频草稿任务。用于用户确认素材无误后提交。返回任务 job_id，用户可在长视频工作台继续（点智能分镜接生成）。",
             "parameters": {
@@ -1443,6 +1569,19 @@ AGENT_TOOLS = [
                                 "posture": {"type": "string", "description": "可选：姿态 / 外观描述"}
                             },
                             "required": ["label", "kind", "url"]
+                        }
+                    },
+                    "audios": {
+                        "type": "array",
+                        "description": "已生成的声线音频（每项须带 url，来自 generate_longvideo_audio 的结果），按 owner 绑定角色。不需要音频时可省略。",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "owner": {"type": "string", "description": "归属角色 label（须与素材清单里的角色 label 一致）"},
+                                "label": {"type": "string", "description": "声线名"},
+                                "url": {"type": "string", "description": "音频 URL（来自 generate_longvideo_audio 的结果）"}
+                            },
+                            "required": ["owner", "url"]
                         }
                     }
                 },
@@ -1517,7 +1656,7 @@ def _lv_upsert_assets(con, job_id, assets):
     return written
 
 
-def _lv_generate_assets(assets, on_progress=None, on_item=None):
+def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None):
     
     norm, failed = [], []
     _assets = list(assets or [])
@@ -1534,8 +1673,12 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None):
     _cands = [m for m in _psrc["models"]() if (_caps(m) if _caps else {}).get("can_t2i")] if _caps \
         else list(_psrc["models"]())
     _img_model = (_cands or _psrc["models"]() or [""])[0]
+    print(f"[lv-assets] 开始：共 {_total} 项，生效家={_prov}，模型={_img_model}", flush=True)
     for _i, a in enumerate(_assets):
         label = a.get("label") or ""
+        _t0 = time.time()
+        print(f"[lv-assets] #{_i} 「{label}」进入循环 has_url={bool(a.get('url'))} "
+              f"prompt_len={len(str(a.get('prompt') or ''))}", flush=True)
 
         if a.get("url"):
             norm.append({
@@ -1560,6 +1703,7 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None):
                     on_item(_i, norm[-1])
                 except Exception:
                     pass
+            print(f"[lv-assets] #{_i} 复用已有 url，跳过生成", flush=True)
             continue
         prompt = a.get("prompt") or label or ""
         if not prompt:
@@ -1573,6 +1717,7 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None):
 
 
 
+        print(f"[lv-assets] #{_i} 构造 payload …", flush=True)
         _payload = {"prompt": prompt, "model": _img_model}
         if a.get("images"):
             _payload["images"] = a.get("images")
@@ -1583,14 +1728,46 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None):
         _upstream = None
 
 
+        print(f"[lv-assets] #{_i} 译码（{_prov}）… payload keys={sorted(_payload.keys())}", flush=True)
         if _prov == "ark":
             _payload = _arkprov.to_ark_payload(_payload)
             _upstream = "ark"
         elif _prov == "ms":
             _payload = _msprov.to_ms_payload(_payload)
             _upstream = "ms"
+        print(f"[lv-assets] #{_i} 译码完成 upstream={_upstream} model={(_payload or {}).get('model')} "
+              f"size={(_payload or {}).get('size')} keys={sorted((_payload or {}).keys())}", flush=True)
         try:
-            ok, urls, err = _core_mod._submit_image(_payload, _upstream)
+
+
+
+
+
+
+
+
+            _attempt = 0
+            while True:
+                print(f"[lv-assets] #{_i} 提交（第 {_attempt + 1} 次尝试）→ {_upstream or 'agnes'}", flush=True)
+                ok, urls, err, _ms_tid = _core_mod._submit_image(_payload, _upstream)
+                print(f"[lv-assets] #{_i} 返回 ok={ok} urls={[str(u)[-24:] for u in (urls or [])][:2]} "
+                      f"err={str(err)[:120] if err else ''} ms_tid={str(_ms_tid)[:12]}", flush=True)
+
+
+                _tries = 0
+                while (not ok) and _ms_tid and _tries < 60:
+                    time.sleep(3)
+                    _tries += 1
+                    ok, urls, err, _ms_tid = _core_mod._submit_image(_payload, _upstream, _ms_tid)
+                if ok:
+                    break
+                _transient = bool(err) and any(
+                    k in str(err) for k in ("503", "502", "504", "429", "无可用渠道",
+                                            "网络异常", "Timeout", "Connection"))
+                if not _transient or _attempt >= 2:
+                    break
+                _attempt += 1
+                time.sleep(3 * _attempt)
         except Exception as e:
             failed.append({"label": a.get("label"), "error": f"生成失败：{type(e).__name__}: {e}"})
             if on_progress:
@@ -1626,15 +1803,31 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None):
 
 
         try:
+
+
+
+            _prov_caps = _imgen.caps_for((_payload or {}).get("model") or "",
+                                        "ark" if _upstream == "ark" else None)
+
+
+
+
+            _prov_meta = _assets_store.build_provenance(
+                payload=_assets_store.fit_payload(_payload, _prov_caps, _imgen.param_cap_map()),
+                model=(_payload or {}).get("model"),
+                ratio=a.get("ratio"))
             _assets_store.register(
                 name=nm, url=urls[0], type="image",
                 origin=_assets_store.ORIGIN_CREATED,
                 label=a.get("label") or nm,
                 kind=a.get("kind") or "prop",
                 owner=a.get("owner"), posture=a.get("posture"),
+                origin_session=session_id,
+                meta=_prov_meta,
             )
         except Exception as _reg_e:
             print(f"[warn] 素材图登记失败（不影响生成）: {_reg_e}", flush=True)
+        print(f"[lv-assets] #{_i} 「{label}」成功 落库={nm} 耗时 {time.time() - _t0:.1f}s", flush=True)
         if on_item:
             try:
                 on_item(_i, norm[-1])
@@ -1654,6 +1847,27 @@ def _lv_submit_job(script, assets_with_url, job_id=None, session_id=None):
     
     con = _lv_db()
     try:
+
+
+
+
+        for _a in (assets_with_url or []):
+            if _a.get("url"):
+                continue
+            for _k in (_a.get("name"), _a.get("label")):
+                if not _k:
+                    continue
+                _row = con.execute(
+                    "SELECT name,url,type FROM assets WHERE (name=? OR label=?) "
+                    "ORDER BY (type='image') DESC, (name=?) DESC, id DESC LIMIT 1",
+                    (_k, _k, _k)).fetchone()
+                if _row and _row["url"]:
+                    _a["url"] = _row["url"]
+                    if not _a.get("name"):
+                        _a["name"] = _row["name"]
+                    if not _a.get("type"):
+                        _a["type"] = _row["type"] or "image"
+                    break
         norm = [a for a in (assets_with_url or []) if a.get("url")]
         failed = [{"label": a.get("label"), "error": "素材缺少 url（未生成成功）"}
                   for a in (assets_with_url or []) if not a.get("url")]
@@ -1718,9 +1932,130 @@ def _lv_submit_job(script, assets_with_url, job_id=None, session_id=None):
     return job_id, default_name, len(norm), failed
 
 
+def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None):
+    
+    norm, failed = [], []
+    _audios = list(audios or [])
+    _total = len(_audios)
+    if _total == 0:
+        return norm, failed
+    _prov = _tts_provider_now()
+    _models = list(_ttsprov.models(_prov) or [])
+    print(f"[lv-audio] 开始：共 {_total} 项，生效家={_prov}", flush=True)
+    for _i, a in enumerate(_audios):
+        _owner = a.get("owner") or ""
+        _label = a.get("label") or _owner or ""
+
+        if a.get("url"):
+            norm.append({
+                "name": a.get("name") or f"tts_out/{uuid.uuid4().hex[:10]}.mp3",
+                "url": a.get("url"),
+                "type": "audio",
+                "label": _label,
+                "kind": "audio",
+                "owner": _owner,
+                "created_at": a.get("created_at") or time.time(),
+            })
+            if on_progress:
+                try:
+                    on_progress(_i + 1, _total, _label or "已有声线")
+                except Exception:
+                    pass
+            if on_item:
+                try:
+                    on_item(_i, norm[-1])
+                except Exception:
+                    pass
+            continue
+        _txt = str(a.get("text") or "").strip()
+        if not _txt:
+            failed.append({"label": _label, "error": "声线缺少 text（要朗读的文字）"})
+            if on_progress:
+                try:
+                    on_progress(_i + 1, _total, (_label or "?") + "（缺台词，已跳过）")
+                except Exception:
+                    pass
+            continue
+        _mid = str(a.get("model") or "").strip()
+        _vdesc = str(a.get("voice_desc") or "").strip()
+        _pvoice = str(a.get("preset_voice") or "").strip()
+        _vid = str(a.get("voice_id") or "").strip()
+        try:
+            _tmid = _mid or (_models[0] if _models else "")
+            _tcaps = (_ttsmodels.caps_for(_tmid, _prov) if _tmid else {}) or {}
+        except Exception:
+            _tcaps = {}
+        _ref_mode = ((_tcaps.get("ref") or {}).get("mode") if _tcaps else None)
+        if _ref_mode == "required" and not _vid:
+            failed.append({"label": _label,
+                           "error": "该音频模型是「参考配音」，必须给 voice_id（音色库里的音色）"})
+            continue
+        if _tmid.endswith("voicedesign") and not _vdesc:
+            failed.append({"label": _label, "error": "自定义配音（voicedesign）必须给 voice_desc"})
+            continue
+        _ref_path = ""
+        if _vid:
+            try:
+                _vrow = _ttsclient.get_voice_row(_vid)
+            except Exception:
+                _vrow = None
+            if not _vrow:
+                failed.append({"label": _label, "error": f"音色不存在：{_vid}"})
+                continue
+            _ref_path = _vrow.get("audio_path") or ""
+        _tags = [str(t).strip() for t in (a.get("tags") or []) if str(t).strip()]
+        _txt_spoken = _txt
+        if _tags:
+            _txt_spoken, _bad, _allowed = _apply_tts_tags(_txt, _tags, _tcaps)
+            if _bad:
+                failed.append({"label": _label,
+                               "error": f"当前模型不支持这些标签：{', '.join(_bad)}"})
+                continue
+        try:
+            _c = _ttsclient.synthesize_candidate(
+                _txt_spoken, speed=a.get("speed") or 1,
+                reference_path=_ref_path, model_id=_mid,
+                voice_desc=_vdesc, preset_voice=_pvoice)
+        except Exception as _e:
+            failed.append({"label": _label, "error": f"音频生成失败：{type(_e).__name__}: {_e}"})
+            continue
+        try:
+            _ttsclient._register_candidates_assets(
+                [_c], job={"text": _txt_spoken, "voice_name": _owner,
+                           "speed": a.get("speed") or 1, "preset_voice": _pvoice,
+                           "voice_desc": _vdesc, "model_id": _mid, "tags": _tags, "count": 1})
+        except Exception as _e:
+            print(f"[warn] 长视频音频登记失败（不影响生成）: {_e}", flush=True)
+        norm.append({
+            "name": _c.get("path") or f"tts_out/{uuid.uuid4().hex[:10]}.mp3",
+            "url": _c.get("url"),
+            "type": "audio",
+            "label": _label,
+            "kind": "audio",
+            "owner": _owner,
+            "created_at": time.time(),
+        })
+        if on_progress:
+            try:
+                on_progress(_i + 1, _total, _label or "声线")
+            except Exception:
+                pass
+        if on_item:
+            try:
+                on_item(_i, norm[-1])
+            except Exception:
+                pass
+    return norm, failed
+
+
 def _agent_tool_events(name, args, session_id, holder, on_item=None):
     
     q = _queue.Queue()
+    _idle_hint = {
+        "generate_longvideo_assets": "仍在执行中…（长视频素材逐张生成，请稍候）",
+        "generate_audio": "仍在执行中…（正在生成音频，请稍候）",
+        "submit_longvideo_job": "仍在执行中…（正在创建长视频任务，请稍候）",
+    }.get(name, "仍在执行中…（工具执行中，请稍候）")
 
     def _work():
         try:
@@ -1742,7 +2077,9 @@ def _agent_tool_events(name, args, session_id, holder, on_item=None):
         try:
             kind, payload = q.get(timeout=2.0)
         except _queue.Empty:
-            yield {"type": "tool_progress", "text": "仍在执行中…（长视频素材逐张生成，请稍候）"}
+
+
+            yield {"type": "tool_progress", "text": _idle_hint}
             continue
         if kind == "p":
             done, total, label = payload
@@ -1807,6 +2144,81 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None):
             }, True
         return {"kind": "image", "error": body.get("error"), "code": code}, False
 
+    if name == "generate_audio":
+
+
+        _txt = str(args.get("text") or "").strip()
+        if not _txt:
+            return {"kind": "error", "error": "generate_audio 需要 text（要朗读的文字）"}, False
+        _mid = str(args.get("model") or "").strip()
+        _vdesc = str(args.get("voice_desc") or "").strip()
+        _pvoice = str(args.get("preset_voice") or "").strip()
+        _vid = str(args.get("voice_id") or "").strip()
+
+
+        try:
+            _tp = _tts_provider_now()
+            _tmid = _mid or ((_ttsprov.models(_tp) or [""])[0])
+            _tcaps = (_ttsmodels.caps_for(_tmid, _tp) if _tmid else {}) or {}
+        except Exception:
+            _tcaps = {}
+        _ref_mode = ((_tcaps.get("ref") or {}).get("mode") if _tcaps else None)
+        if _ref_mode == "required" and not _vid:
+            return {"kind": "error",
+                    "error": "该音频模型是「参考配音」，必须给 voice_id（音色库里的音色）；"
+                             "若用户只是描述声音特征，请改用 voicedesign 模型并传 voice_desc。"}, False
+        if _mid.endswith("voicedesign") and not _vdesc:
+            return {"kind": "error",
+                    "error": "自定义配音（voicedesign）必须给 voice_desc（如「低沉的老年男声，语速偏慢」）。"}, False
+        _ref_path, _voice_name = "", "系统默认音色"
+        if _vid:
+            try:
+                _vrow = _ttsclient.get_voice_row(_vid)
+            except Exception as _e:
+                _vrow = None
+            if not _vrow:
+                return {"kind": "error", "error": f"音色不存在：{_vid}"}, False
+            _ref_path = _vrow.get("audio_path") or ""
+            _voice_name = _vrow.get("name") or _voice_name
+
+        _tags = [str(t).strip() for t in (args.get("tags") or []) if str(t).strip()]
+        _txt_spoken = _txt
+        if _tags:
+            _txt_spoken, _bad_tags, _allowed = _apply_tts_tags(_txt, _tags, _tcaps)
+            if _bad_tags:
+                return {"kind": "error",
+                        "error": "当前模型不支持这些标签：%s（当前模型可用样例：%s）。"
+                                 "注意「唱歌」只有官方配音（mimo-v2.5-tts）支持。"
+                                 % ("、".join(_bad_tags), "、".join(_allowed))}, False
+        try:
+            _c = _ttsclient.synthesize_candidate(
+                _txt_spoken,
+                speed=args.get("speed") or 1,
+                reference_path=_ref_path,
+                model_id=_mid,
+                voice_desc=_vdesc,
+                preset_voice=_pvoice,
+            )
+        except Exception as _e:
+            return {"kind": "error", "error": f"音频生成失败：{type(_e).__name__}: {_e}"}, False
+
+        try:
+            _ttsclient._register_candidates_assets(
+                [_c], job={"text": _txt_spoken, "voice_name": _voice_name,
+                           "speed": args.get("speed") or 1,
+                           "preset_voice": _pvoice,
+                           "voice_desc": _vdesc,
+                           "model_id": _mid,
+                           "tags": _tags,
+                           "count": 1})
+        except Exception as _e:
+            print(f"[warn] 音频登记失败（不影响生成）: {_e}", flush=True)
+        return {"kind": "audio", "url": _c.get("url"), "name": _c.get("path"),
+                "duration": _c.get("duration"), "model_id": _c.get("model_id"),
+                "voice_name": _voice_name, "text": _txt,
+                "spoken": (_txt_spoken if _txt_spoken != _txt else ""),
+                "tags": _tags, "voice_desc": _vdesc}, True
+
     if name == "generate_multi_angle":
 
 
@@ -1821,7 +2233,8 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None):
             return {"kind": "error",
                     "error": "generate_longvideo_assets 需要非空的 assets 素材清单（每项含 label/kind/prompt）。"
                              "请先规划角色/场景/道具的生成提示词，待用户确认后再调用本工具，不要发空参数。"}, False
-        norm, failed = _lv_generate_assets(assets, on_progress=on_progress, on_item=on_item)
+        norm, failed = _lv_generate_assets(assets, on_progress=on_progress, on_item=on_item,
+                                           session_id=session_id)
         if not norm:
             first = next((f.get("error") for f in failed if f.get("error")), "未知原因")
             return {"kind": "error",
@@ -1835,9 +2248,38 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None):
         }
         return item, True
 
+    if name == "generate_longvideo_audio":
+        audios = args.get("audios") or []
+
+        if not audios:
+            return {"kind": "error",
+                    "error": "generate_longvideo_audio 需要非空的 audios 声线清单（每项含 owner/text）。"
+                             "请先规划角色声线（归属角色 + 台词），待用户确认图后再调用本工具，不要发空参数。"}, False
+        norm, failed = _lv_generate_audio(audios, on_progress=on_progress, on_item=on_item,
+                                           session_id=session_id)
+        if not norm:
+            first = next((f.get("error") for f in failed if f.get("error")), "未知原因")
+            return {"kind": "error",
+                    "error": f"{len(failed)} 条声线全部生成失败，未生成任何音频。首个原因：{first}"}, False
+
+        item = {
+            "kind": "longvideo_assets",
+            "assets": [{"url": a.get("url"), "label": a.get("label"),
+                        "name": a.get("name"), "kind": a.get("kind"),
+                        "type": a.get("type"), "owner": a.get("owner")} for a in norm],
+            "failed": failed,
+        }
+        return item, True
+
     if name == "submit_longvideo_job":
         script = args.get("script") or ""
-        assets = args.get("assets") or []
+
+        assets = list(args.get("assets") or [])
+        for _ad in (args.get("audios") or []):
+            _ad = dict(_ad)
+            _ad["type"] = "audio"
+            _ad["kind"] = _ad.get("kind") or "character"
+            assets.append(_ad)
         if not assets:
             return {"kind": "error",
                     "error": "submit_longvideo_job 需要非空的 assets（每项须带 url，来自 generate_longvideo_assets 的结果）。"
@@ -1846,7 +2288,7 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None):
         missing = [a.get("label") or "?" for a in assets if not a.get("url")]
         if missing:
             return {"kind": "error",
-                    "error": f"以下素材缺少 url，无法提交：{', '.join(missing)}。请先调用 generate_longvideo_assets 生成它们。"}, False
+                    "error": f"以下素材缺少 url，无法提交：{', '.join(missing)}。请先调用 generate_longvideo_assets / generate_longvideo_audio 生成它们。"}, False
         jid, jname, cnt, failed = _lv_submit_job(script, assets, args.get("job_id"),
                                                  session_id=session_id)
         if not jid:
@@ -1936,14 +2378,51 @@ def _agent_pick_history(hist):
     return kept, len(valid) - len(kept)
 
 
+
+
+AGENT_HISTORY_ASSET_LINES = 3
+AGENT_HISTORY_ASSET_MAX = 10
+
+
+def _agent_history_asset_manifest(h):
+    
+    items = h.get("assets") or []
+    if not isinstance(items, list) or not items:
+        return ""
+    lines = []
+    for i, a in enumerate(items[:AGENT_HISTORY_ASSET_MAX], 1):
+        if not isinstance(a, dict):
+            continue
+        nm = str(a.get("name") or "").strip()
+        if not nm:
+            continue
+        lb = str(a.get("label") or "").strip()
+        lines.append("%d. %s → %s" % (i, lb or nm, nm))
+    if not lines:
+        return ""
+    out = "\n\n[本条消息附带的素材（提交长视频时可直接用这些 name）]\n" + "\n".join(lines)
+    more = len(items) - len(lines)
+    if more > 0:
+        out += "\n…（共 %d 个，其余未列出）" % len(items)
+    return out
+
+
 def _agent_history_messages(messages, hist):
     
     picked, dropped = _agent_pick_history(hist)
     if dropped:
         messages.append({"role": "system",
                          "content": "[已省略较早的 %d 条对话]" % dropped})
-    for h in picked:
-        messages.append({"role": h["role"], "content": h["content"]})
+
+
+    _with = [i for i, h in enumerate(picked)
+             if h.get("role") == "user" and isinstance(h.get("assets"), list) and h.get("assets")]
+    _keep = set(_with[-AGENT_HISTORY_ASSET_LINES:])
+    for i, h in enumerate(picked):
+        _c = h["content"]
+        if i in _keep:
+            _c = _c + _agent_history_asset_manifest(h)
+        messages.append({"role": h["role"], "content": _c})
     return dropped
 
 
@@ -1987,6 +2466,82 @@ def _agent_asset_manifest(assets):
         "并把 mode 设为 reference（首帧/尾帧诉求则填 first_frame / last_frame，mode=keyframe）。"
         "只准使用上面列出的 URL，不要编造素材地址。"
     )
+
+
+def _apply_tts_tags(text, tags, caps):
+    
+    _groups = set((caps or {}).get("tag_groups") or ())
+    if not tags:
+        return text, [], []
+    tag_bracket, allowed = {}, []
+    try:
+        for g in _ttsmodels.TAG_GROUPS:
+            if g.get("key") in _groups:
+                for t in (g.get("tags") or []):
+                    tag_bracket[t] = g.get("bracket") or "()"
+                    allowed.append(t)
+    except Exception:
+        return text, [], []
+
+    def _is_paren(v):
+        return len(v) >= 2 and ((v[0] == "(" and v[-1] == ")") or (v[0] == "（" and v[-1] == "）"))
+
+    def _is_bracket(v):
+        return len(v) >= 2 and v[0] == "[" and v[-1] == "]"
+
+    def _bare(v):
+        return v[1:-1].strip() if (_is_paren(v) or _is_bracket(v)) else v
+
+
+    if any(_bare(str(t).strip()) == "唱歌" for t in tags) and "sing" not in _groups:
+        return text, ["唱歌"], allowed[:12]
+
+    front, mid = [], []
+    for raw in tags:
+        v = str(raw or "").strip()
+        if not v:
+            continue
+
+        if _bare(v) == "唱歌":
+
+            front.append(v if (_is_paren(v) or _is_bracket(v)) else "(唱歌)")
+            continue
+        if _is_paren(v) or _is_bracket(v):
+
+            (mid if _is_bracket(v) else front).append(v)
+            continue
+
+        b = tag_bracket.get(v, "()")
+        (mid if b != "()" else front).append(("[%s]" % v) if b != "()" else ("(%s)" % v))
+
+    front.sort(key=lambda _t: 0 if _bare(_t) == "唱歌" else 1)
+    out = "".join(front) + text
+    if mid:
+        _ins = "".join(mid)
+        _p = out.find("。")
+        _pos = (_p + 1) if _p > 0 else len(out)
+        out = out[:_pos] + _ins + out[_pos:]
+    return out, [], allowed
+
+
+def _media_url_to_bytes(url):
+    
+    u = str(url or "").strip()
+    rel = ""
+    if u.startswith("/assets/"):
+        rel = os.path.join("storage", "assets", u[len("/assets/"):])
+    elif u.startswith("/api/tts/file/"):
+        rel = os.path.join("storage", u[len("/api/tts/file/"):].replace("/", os.sep))
+    elif u.startswith("/api/media/"):
+        rel = os.path.join("storage", u[len("/api/media/"):].replace("/", os.sep))
+    if not rel or not os.path.isfile(rel):
+        return None, ""
+    _ext = os.path.splitext(rel)[1].lstrip(".").lower() or "mp3"
+    try:
+        with open(rel, "rb") as _f:
+            return _f.read(), _ext
+    except OSError:
+        return None, ""
 
 
 def _agent_user_message(text, assets):
@@ -2085,7 +2640,7 @@ def _run_snapshot_events(row):
 
 def _agent_done_payload(items, body, think):
     
-    ok_items = [i for i in items if i.get("kind") in ("video", "image", "longvideo_job", "longvideo_assets")]
+    ok_items = [i for i in items if i.get("kind") in ("video", "image", "audio", "longvideo_job", "longvideo_assets")]
     if len(ok_items) == 1 and len(items) == 1:
         kind = ok_items[0]["kind"]
     elif ok_items:
@@ -2103,6 +2658,10 @@ def _agent_done_payload(items, body, think):
     elif kind == "longvideo_job":
         it = ok_items[0]
         summary = f"已创建长视频任务《{it.get('name')}》，点击前往长视频工作台继续。"
+    elif kind == "audio":
+        it = ok_items[0]
+        _d = it.get("duration")
+        summary = "已生成音频" + (f"（{_d:.1f} 秒）" if isinstance(_d, (int, float)) else "") + "。"
     elif kind == "longvideo_assets":
         summary = f"已登记 {len(ok_items)} 批素材到长视频任务。"
     elif kind == "multi":
@@ -2133,6 +2692,20 @@ def _run_tool_phase(run_id, name, args, session_id):
                 "index": i,
                 "label": str(a.get("label") or a.get("name") or f"素材{i+1}")[:32],
                 "kind": a.get("kind") or "prop",
+                "url": a.get("url") or "",
+            })
+        _runst.merge_state(run_id, manifest_items=_manifest_items, manifest_labels=[m["label"] for m in _manifest_items])
+        _run_pub(run_id, {"type": "tool_manifest", "items": _manifest_items})
+    elif name == "generate_longvideo_audio" and isinstance(args.get("audios"), list):
+        _auds = args["audios"]
+        _asset_total = len(_auds)
+        _manifest_items = []
+        for i, a in enumerate(_auds):
+            a = a or {}
+            _manifest_items.append({
+                "index": i,
+                "label": str(a.get("label") or a.get("owner") or f"声线{i+1}")[:32],
+                "kind": "audio",
                 "url": a.get("url") or "",
             })
         _runst.merge_state(run_id, manifest_items=_manifest_items, manifest_labels=[m["label"] for m in _manifest_items])
@@ -2289,7 +2862,12 @@ def _agent_run_pipeline(run_id, messages, session_id):
                 continue
             parsed.append((_name, _args, None))
         _tool_names = sorted({n for n, _a, _e in parsed if n})
-        _tool_msg = "正在生成长视频素材图…" if "generate_longvideo_assets" in _tool_names else "正在调用工具执行任务…"
+        if "generate_longvideo_assets" in _tool_names:
+            _tool_msg = "正在生成长视频素材图…"
+        elif "generate_audio" in _tool_names:
+            _tool_msg = "正在生成音频…"
+        else:
+            _tool_msg = "正在调用工具执行任务…"
         _resumable = next(((n, a) for n, a, _e in parsed if n == "generate_longvideo_assets"), None)
         _runst.mark(run_id, status="tooling", tool_name=",".join(_tool_names),
                     args=(_resumable[1] if _resumable else None),

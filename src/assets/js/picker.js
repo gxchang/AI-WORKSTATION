@@ -1,6 +1,6 @@
 (function(){"use strict";const API=location.origin;const _esc=(s)=>String(s==null?"":s).replace(/[&<>"]/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));const _thumb=(u,w)=>(typeof thumbUrl==="function"?thumbUrl(u,w):u);const TABS=[["created","创作资产"],["uploaded","主体资产"]];const AXIS={created:{param:"type",list:[["","全部类型"],["image","图片"],["audio","音频"],["video","视频"],["doc","文档"]]},uploaded:{param:"kind",list:[["","全部"],["character","角色"],["scene","场景"],["prop","道具"],["voice","声线"]]}};const PICKER_CSS=`
 
-.ap-root{position:fixed;inset:0;z-index:2500;display:none;align-items:center;justify-content:center}
+.ap-root{position:fixed;inset:0;z-index:10050;display:none;align-items:center;justify-content:center}
 .ap-root.open{display:flex}
 .ap-mask{position:absolute;inset:0;background:rgba(0,0,0,.45);backdrop-filter:blur(1px)}
 .ap-modal{position:relative;display:flex;flex-direction:column;width:min(880px,92vw);max-height:84vh;background:var(--card,#fff);border:1px solid var(--line,#e3e3e8);border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,.28);overflow:hidden}

@@ -902,6 +902,36 @@ def _clear_tail_frames(job_id):
         con.close()
 
 
+
+def _rel_to_root(p):
+    
+    if not p:
+        return ""
+    try:
+        rel = os.path.relpath(os.path.abspath(str(p)), _ROOT)
+    except (ValueError, OSError):
+        return str(p)
+    return rel.replace(os.sep, "/")
+
+
+def _seg_path(p):
+    
+    if not p:
+        return ""
+    s = str(p)
+    return s if os.path.isabs(s) else os.path.join(_ROOT, s.replace("/", os.sep))
+
+
+def _norm_asset_url(u):
+    
+    s = str(u or "").strip()
+    if not s:
+        return s
+    if s.startswith("/") or s.startswith("data:") or s.startswith("http://") or s.startswith("https://"):
+        return s
+    return "/assets/" + s
+
+
 def _extract_tail_frame(mp4_path: str) -> str:
     
     ff = _ffmpeg()
@@ -2780,7 +2810,7 @@ def _run_job(job_id):
 
 
     for seg in seg_list:
-        lp = seg.get("local_path")
+        lp = _seg_path(seg.get("local_path"))
         if lp and os.path.exists(lp):
             try:
                 _finished_from_file = os.path.getmtime(lp)
@@ -2815,7 +2845,7 @@ def _run_job(job_id):
 
 
             if (seg.get("video_id") and seg.get("status") == "processing"
-                    and not (seg.get("local_path") and os.path.exists(seg.get("local_path")))):
+                    and not (seg.get("local_path") and os.path.exists(_seg_path(seg.get("local_path"))))):
                 ok, local, tail, err = _resume_segment(job_id, seg)
             else:
                 ok, local, tail, err = _gen_segment(job_id, seg, prev_tail)
@@ -2826,7 +2856,7 @@ def _run_job(job_id):
             tails[seg["seg_no"]] = tail
             seg_paths[seg["seg_no"]] = local
             _update_seg(job_id, seg["seg_no"], status="completed",
-                        local_path=local, tail_frame=tail, finished_at=time.time())
+                        local_path=_rel_to_root(local), tail_frame=tail, finished_at=time.time())
         else:
 
             if _cancelled():
@@ -3283,7 +3313,8 @@ def api_get_job(job_id):
         s["audio"] = _jsonl(s, "audio")
         s["audio_urls"] = _jsonl(s, "audio_urls")
         s["images_keys"] = _jsonl(s, "images_keys")
-        s["images_urls"] = _jsonl(s, "images_urls")
+        s["images_urls"] = [_norm_asset_url(u) for u in _jsonl(s, "images_urls")]
+        s["audio_urls"] = [_norm_asset_url(u) for u in s.get("audio_urls") or []]
         s["prompt_history"] = _jsonl(s, "prompt_history")
         seg_norm.append(s)
 
@@ -3926,7 +3957,7 @@ def _regen_segment_worker(job_id, seg_no, seg, prev_tail, archive_ver=0, prev_st
             _update_job(job_id, status="failed")
             print(f"[INFO] 单段重提失败 job={job_id} seg#{seg_no}: {err}", flush=True)
             return
-        _update_seg(job_id, seg_no, status="completed", local_path=local, tail_frame=tail, finished_at=time.time())
+        _update_seg(job_id, seg_no, status="completed", local_path=_rel_to_root(local), tail_frame=tail, finished_at=time.time())
 
 
 
@@ -3970,7 +4001,8 @@ def _regen_segment_worker(job_id, seg_no, seg, prev_tail, archive_ver=0, prev_st
         finally:
             con.close()
         out_dir = os.path.join(JOBS_DIR, job_id)
-        seg_paths = {s["seg_no"]: s["local_path"] for s in all_segs if s["local_path"] and os.path.exists(s["local_path"])}
+        seg_paths = {s["seg_no"]: _seg_path(s["local_path"]) for s in all_segs
+                     if s["local_path"] and os.path.exists(_seg_path(s["local_path"]))}
         ordered = [seg_paths[k] for k in sorted(seg_paths)]
         final_url = _concat_and_register(job_id, out_dir, ordered)
 
@@ -4070,7 +4102,7 @@ def api_regen_segment(job_id, seg_no):
             con.close()
         if prev:
             prev = dict(prev)
-            prev_tail = prev.get("tail_frame") or (prev.get("local_path") and _extract_tail_frame(prev["local_path"]))
+            prev_tail = prev.get("tail_frame") or (prev.get("local_path") and _extract_tail_frame(_seg_path(prev["local_path"])))
 
 
     _update_seg(job_id, seg_no, status="processing", error=None, started_at=time.time())
@@ -4234,7 +4266,7 @@ def _api_segment_tail_impl(job_id, seg_no):
         return jsonify(error="no tail"), 404
     tail_raw = seg["tail_frame"]
     if not tail_raw:
-        lp = seg["local_path"]
+        lp = _seg_path(seg["local_path"])
         if lp and os.path.isfile(lp):
             try:
                 tail_raw = _extract_tail_frame(lp)
@@ -4280,14 +4312,15 @@ def _api_segment_thumb_impl(job_id, seg_no):
         return jsonify(error="not ready"), 404
     png = None
     ff = _ffmpeg()
-    if ff and seg["local_path"] and os.path.exists(seg["local_path"]):
+    _lp = _seg_path(seg["local_path"])
+    if ff and _lp and os.path.exists(_lp):
 
 
 
 
         try:
             _p = subprocess.run(
-                [ff, "-y", "-ss", "0.4", "-i", seg["local_path"],
+                [ff, "-y", "-ss", "0.4", "-i", _lp,
                  "-frames:v", "1", "-vf", "scale=320:-1",
                  "-f", "image2pipe", "-vcodec", "png",
                  "-loglevel", "error", "-"],

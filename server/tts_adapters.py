@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 
 import media_tools as _mt
 
@@ -34,6 +35,44 @@ class UpstreamError(Exception):
 
 
 
+
+
+
+
+
+
+_RETRY_ATTEMPTS = 2
+_RETRY_BACKOFF = 1.0
+
+
+def _post_with_retry(spec, base):
+    
+    import requests as _rq
+    attempts = max(1, int(_RETRY_ATTEMPTS))
+    last_code, last_msg = "unreachable", ""
+    for i in range(attempts):
+        try:
+            return _rq.post(spec["url"], headers=spec["headers"], json=spec["payload"],
+                            timeout=spec["timeout"])
+        except _rq.exceptions.ChunkedEncodingError as e:
+            t = spec["timeout"]
+            last_code = "upstream_interrupted"
+            last_msg = ("上游响应中途断开（连接已建立、数据未传完）" +
+                        ("" if attempts == 1 else "，第 %d/%d 次" % (i + 1, attempts)))
+            _ = t
+        except _rq.exceptions.ReadTimeout:
+
+            t = spec["timeout"]
+            secs = t[1] if isinstance(t, (tuple, list)) and len(t) > 1 else t
+            raise UpstreamError("上游生成超时（超过 %s 秒未返回）" % secs, code="timeout")
+        except _rq.exceptions.ConnectionError as e:
+
+            raise UpstreamError("无法连接音频接口 %s：%s" % (base, e), code="unreachable")
+        except Exception as e:
+            raise UpstreamError("请求异常 %s：%s" % (type(e).__name__, e), code="unreachable")
+        if i < attempts - 1:
+            time.sleep(_RETRY_BACKOFF * (i + 1))
+    raise UpstreamError(last_msg or "上游请求失败", code=last_code)
 
 
 def _ext_of(path):
@@ -325,14 +364,7 @@ def synthesize(intent):
         extract = _extract_binary
         raise_err = _raise_openrouter
 
-    try:
-        resp = _rq.post(spec["url"], headers=spec["headers"], json=spec["payload"],
-                        timeout=spec["timeout"])
-    except UpstreamError:
-        raise
-    except Exception as e:
-        raise UpstreamError("无法连接音频接口 %s：%s: %s" % (base, type(e).__name__, e),
-                            code="unreachable")
+    resp = _post_with_retry(spec, base)
 
     res = extract(resp, spec["payload"])
     data = res.get("data") if isinstance(res, dict) else res

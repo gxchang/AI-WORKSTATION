@@ -86,15 +86,17 @@ CAPS = {
 
 
 
+
+
     "Qwen/Qwen-Image-2.1": {
-        "edge_min": 64, "edge_max": 1664,
+        "edge_min": 64, "edge_max": 1664, "size_policy": "fill_max",
         "can_t2i": True, "can_edit": True, "seed": True,
         "ratios": ["1:1", "4:3", "3:4", "3:2", "2:3", "16:9", "9:16"],
     },
 
 
     "Qwen/Qwen-Image-Edit-2511": {
-        "edge_min": 64, "edge_max": 1664,
+        "edge_min": 64, "edge_max": 1664, "size_policy": "fill_max",
         "can_t2i": False, "can_edit": True, "seed": True,
         "ratios": ["1:1", "4:3", "3:4", "3:2", "2:3", "16:9", "9:16"],
     },
@@ -125,8 +127,10 @@ PARAM_CAP = {
     "seed": "seed",
 }
 
+
 NON_PARAM_CAPS = frozenset({"min_px", "max_px", "max_ref_images", "sequential",
-                            "png", "can_t2i", "can_edit", "edge_max", "edge_min"})
+                            "png", "can_t2i", "can_edit", "edge_max", "edge_min",
+                            "size_policy"})
 
 
 def param_cap_map():
@@ -377,6 +381,12 @@ def _size_by_edge_range(tier, a, b, caps, src_px=None):
     hi = float(caps.get("edge_max") or FALLBACK_CAPS["ms"]["edge_max"])
     if src_px:
         target = float(src_px)
+    elif caps.get("size_policy") == "fill_max":
+
+
+
+
+        target = hi * hi
     else:
         target = float(PIXEL_TIERS.get(str(tier or "").upper().strip())
                        or PIXEL_TIERS["1K"])
@@ -535,3 +545,51 @@ def model_limits_map(provider):
         if MODEL_PROVIDER.get(m) == provider:
             out[m] = dict(c)
     return out
+
+
+
+
+IMAGE_RATIOS = ("1:1", "4:3", "3:4", "3:2", "2:3", "16:9", "9:16", "21:9")
+
+
+def size_options_for(model, provider=None):
+    
+    c = caps_for(model, provider)
+    prov = MODEL_PROVIDER.get(model, provider)
+    rule = PROVIDERS.get(prov, {}).get("size_rule", "tier_string")
+    out = {}
+    for ratio in IMAGE_RATIOS:
+        items = []
+        if rule == "tier_string":
+            for t in AGNES_TIERS:
+                items.append({"v": t, "s": t})
+        elif rule == "edge_range":
+            if c.get("size_policy") == "fill_max":
+
+
+
+                sz = solve_size(None, ratio, rule, c)
+                items.append({"v": "1K", "s": sz})
+            else:
+                for t in AGNES_TIERS:
+                    sz = solve_size(t, ratio, rule, c)
+                    items.append({"v": t, "s": sz})
+        else:
+            for t in (c.get("tiers") or list(AGNES_TIERS)):
+                items.append({"v": t, "s": solve_size(t, ratio, rule, c)})
+        out[ratio] = items
+    return out
+
+
+def preview_size(model, ratio, src_size=None, provider=None):
+    
+    c = caps_for(model, provider)
+    prov = MODEL_PROVIDER.get(model, provider)
+    rule = PROVIDERS.get(prov, {}).get("size_rule", "tier_string")
+    tier = None
+    if rule == "edge_range" and c.get("size_policy") != "fill_max":
+        tier = "1K"
+    if rule == "tier_string":
+        tier = None
+    return solve_size(tier, ratio, rule, c, src_px=parse_src_size(src_size) if src_size else None,
+                      allowed_tiers=AGNES_TIERS)
