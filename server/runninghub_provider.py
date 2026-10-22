@@ -1619,14 +1619,14 @@ def poll_status(task_id, timeout=30):
     return body, None
 
 
-def fetch_account(key=None, timeout=20):
+def fetch_account(key=None, base_url=None, timeout=20):
     
     import requests
 
     key = str(key or api_key() or "").strip()
     if not key:
         return None, "RunningHub 未配置 API Key。"
-    base = str(get("base_url") or BASE_URL).rstrip("/")
+    base = str(base_url or get("base_url") or BASE_URL).rstrip("/")
     try:
         r = requests.post(f"{base}/uc/openapi/accountStatus",
                           json={"apikey": key},

@@ -870,30 +870,32 @@ def runninghub_provider_cfg():
 @app.route("/api/runninghub/provider/test", methods=["POST"])
 def runninghub_provider_test():
     
-    import requests as _rq
-    draft_key = (request.get_json(silent=True) or {}).get("api_key") or ""
-    key = str(draft_key or _rhprov.api_key() or "").strip()
-    if not key:
-        return jsonify(ok=False, error="尚未填写 API Key。"), 400
-    base = str(_rhprov.get("base_url") or _rhprov.BASE_URL).rstrip("/")
-    try:
+    draft = request.get_json(silent=True) or {}
+    key = str(draft.get("api_key") or "").strip()
+    if "…" in key:
+        key = ""
 
-        resp = _rq.post(f"{base}/task/openapi/create",
-                        json={"apiKey": key, "workflowId": _rhprov.WORKFLOW_ID,
-                              "apiType": _rhprov.API_TYPE, "nodeInfoList": []},
-                        headers={"Content-Type": "application/json"}, timeout=(10, 30))
-    except _rq.RequestException as e:
-        return jsonify(ok=False, error=f"连接失败：{e}"), 502
-    body = {}
-    try:
-        body = resp.json()
-    except Exception:
-        pass
-    txt = str(body)[:200]
-    if resp.status_code in (401, 403) or "apiKey" in txt and "error" in txt.lower():
-        return jsonify(ok=False, error=f"密钥或地址不被接受（{resp.status_code}）：{txt}"), 200
+    draft_base = str(draft.get("base_url") or "").strip()
+    if "…" in draft_base:
+        draft_base = ""
+    acct, err = _rhprov.fetch_account(key or None, draft_base or None)
+    if err:
 
-    return jsonify(ok=True, msg=f"密钥有效（上游返回 {resp.status_code}，属预期内的参数校验）"), 200
+        low = str(err)
+        bad_key = any(s in low for s in ("401", "403", "apiKey", "apikey", "Unauthorized", "unauthorized",
+                                        "ACCOUNT", "APIKEY_", "USER_NOT_FOUND"))
+        return jsonify(ok=False, error=("密钥或地址不被接受：" if bad_key else "测试失败：") + low), 200
+    bits = []
+    api_type = str((acct or {}).get("api_type") or "").strip()
+    if api_type:
+        bits.append("密钥类型 " + api_type)
+    if (acct or {}).get("coins") not in (None, ""):
+        bits.append("余额 " + str(acct.get("coins")))
+    if (acct or {}).get("running") not in (None, ""):
+        bits.append("在跑 " + str(acct.get("running")))
+    return jsonify(ok=True,
+                   msg="连接成功（只读探测，未创建任何任务）" + (("：" + " · ".join(bits)) if bits else ""),
+                   account=acct or {}), 200
 
 
 @app.route("/api/runninghub/cancel", methods=["POST"])
