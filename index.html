@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0" data-page-node-id="eHaf3KuCAKCdvpKdQUGKmW" />
 <title>视频生成工作台</title>
 
-<link rel="stylesheet" href="/api/base_style.css?v=20261018a">
+<link rel="stylesheet" href="/api/base_style.css?v=20261021d">
 </head>
 <body data-page-node-id="HsjgyXIv9KRAMASK9LZ2lp">
 
@@ -69,6 +69,7 @@
       <button class="prov-tab" id="provTabAudio" data-tab="audio" type="button" title="底部「音频生成」的基座语音合成服务（OpenRouter）">OpenRouter</button>
       <button class="prov-tab" id="provTabMimo" data-tab="mimo" type="button" title="小米 MiMo · 语音合成（音色复刻 / 文字设计音色），可与 OpenRouter 二选一">MiMo</button>
       <button class="prov-tab" id="provTabArk" data-tab="ark" type="button" title="火山方舟 · 豆包 Seedream 生图 + 豆包 Seedance 视频">火山方舟</button>
+      <button class="prov-tab" id="provTabRh" data-tab="rh" type="button" title="RunningHub · MiniMax H3（视频：多段 + 原生音频 + 生成采样）">RunningHub</button>
       <button class="prov-tab" id="provTabMs" data-tab="ms" type="button" title="魔搭社区 ModelScope · 生图与多角度改机位 + 猫灵助手与长视频分镜引擎">魔搭</button>
       <button class="prov-tab" id="provTabCustom" data-tab="custom" type="button" title="自定义 OpenAI 兼容接口 · 猫灵助手与长视频分镜引擎">自定义 OpenAI</button>
     </div>
@@ -254,6 +255,48 @@
         <div class="prov-test-row">
           <button class="prov-test" id="arkTest">测试连接</button>
           <span class="prov-test-out" id="arkTestOut"></span>
+        </div>
+      </div>
+
+      <div class="prov-pane" id="provPaneRh" style="display:none">
+        <div class="prov-lead">RunningHub · MiniMax H3（视频上游：多段一气呵成 + 原生音画同步 + 生成采样）。视频服务商三选一：Agnes / 火山方舟 / RunningHub，勾选本页 = 视频走 MiniMax H3，取消落回Agnes。</div>
+        <div class="prov-fld">
+          <label for="rhBase">接口地址（Base URL）</label>
+          <input id="rhBase" type="text" spellcheck="false" autocomplete="off" placeholder="https://www.runninghub.cn">
+        </div>
+        <div class="prov-fld">
+          <label for="rhKey">访问密钥（API Key）</label>
+          <input id="rhKey" type="password" spellcheck="false" autocomplete="off" placeholder="未配置">
+          
+          <div class="prov-key-foot" style="display:flex;align-items:center;gap:10px;margin-top:4px">
+            <div class="prov-hint" id="rhAcctLine" style="display:none;margin:0">
+              密钥类型：<b id="rhAcctType" style="color:var(--vio)">—</b>
+              <span style="margin:0 6px;color:var(--line)">|</span>
+              剩余RH币：<b id="rhAcctCoins" style="color:var(--vio)">—</b>
+              <span style="margin:0 6px;color:var(--line)">|</span>
+              钱包余额：<b id="rhAcctMoney" style="color:var(--vio)">—</b>
+              <span style="margin:0 6px;color:var(--line)">|</span>
+              当前运行：<b id="rhAcctRun" style="color:var(--vio)">—</b>
+            </div>
+            <a class="prov-key-link" href="https://www.runninghub.cn?inviteCode=zbnyr3sw"
+               target="_blank" rel="noopener noreferrer" title="你我各得500RH币"
+               style="margin-left:auto;white-space:nowrap">获取密钥</a>
+          </div>
+        </div>
+        <div class="prov-fld">
+          <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
+            <label class="prov-chk" for="rhVideoEnabled" title="勾选 = 把视频切到 MiniMax H3（方舟视频自动取消，互斥）；取消 = 回 Agnes 视频。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+              <input type="checkbox" id="rhVideoEnabled" style="margin:0">
+            </label>
+            <label for="rhWorkflow" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">工作流 ID（MiniMax H3导演台）</label>
+            <span class="prov-hint" id="rhVideoStateHint" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
+          </div>
+          <input id="rhWorkflow" type="text" spellcheck="false" autocomplete="off" placeholder="2084788947984666625">
+          <div class="prov-hint">接入：MiniMax H3 / Lora加速 / 二次采样 / 脸部修复</div>
+        </div>
+        <div class="prov-test-row">
+          <button class="prov-test" id="rhTest">测试连接</button>
+          <span class="prov-test-out" id="rhTestOut"></span>
         </div>
       </div>
 
@@ -569,6 +612,22 @@
           </select>
         </div>
 
+        
+
+        
+        <div class="seg" id="rhTierSel" style="display:none">
+          <button type="button" class="seg-cur"><span class="seg-tx">质量档：官方（20步）</span><span class="seg-ar ic ic-chevron-down"></span></button>
+        </div>
+        <div class="seg" id="rhRefineSel" style="display:none">
+          <button type="button" class="seg-cur"><span class="seg-tx">二次采样：关</span><span class="seg-ar ic ic-chevron-down"></span></button>
+        </div>
+        <div class="seg" id="rhFaceSel" style="display:none">
+          <button type="button" class="seg-cur"><span class="seg-tx">脸部修复：关</span><span class="seg-ar ic ic-chevron-down"></span></button>
+        </div>
+        <div class="seg" id="rhInstSel" style="display:none">
+          <button type="button" class="seg-cur"><span class="seg-tx" id="rhInstTx">Plus</span><span class="seg-ar ic ic-chevron-down"></span></button>
+        </div>
+
         <div class="seg" id="styleSel" data-seg="style" style="display:none" data-page-node-id="QCNeLOO9CRLN7elpkBWxMj">
           <button type="button" class="seg-cur" data-page-node-id="dVE38A9uM9Cfo3Zd0V4Z7V"><span class="seg-tx" data-page-node-id="507rjzemEXsUuBaLYtTzJ6">无风格</span><span class="seg-ar ic ic-chevron-down" data-page-node-id="iFr0rZjFIB2hg6NHACoDvE"></span></button>
           <select id="style" style="display:none" data-page-node-id="RiV1lVLsXmbbJgtJyd8oqU"></select>
@@ -596,7 +655,7 @@
 
 <script src="/api/waveform.js?v=20261010a"></script>
 
-<script src="/api/longvideo_ui.js?v=20261013s"></script>
+<script src="/api/longvideo_ui.js?v=20261021a"></script>
 <div class="at-pop" id="atpop" data-page-node-id="RouEFDOwMOhgyF1Ngo2Ym9">
   <div class="at-hd" id="atHead" data-page-node-id="i0vFw3jzxFqIJpw8v6A4QP">选择素材插入</div>
   <div id="atList" data-page-node-id="l2hwoVK4rSw6pEqG2URnEL"></div>
@@ -693,17 +752,19 @@
   <div class="at-empty" id="agentAtEmpty"><span id="agentAtEmptyText"></span></div>
 </div>
 
-<script src="/api/base_ui.js?v=20261003u"></script>
+<script src="/api/base_ui.js?v=20261022r"></script>
 
   <script src="/api/assets_ui.js?v=20260930g"></script>
   <script src="/api/assets_picker.js?v=20260922b"></script>
   <script src="/api/imageedit_ui.js?v=20260923o"></script>
+  
+  <script src="/api/videosampler_ui.js?v=20261019a"></script>
   <link rel="stylesheet" href="/api/canvas_style.css?v=20261007o2">
   <script src="/api/canvas_dagre.js?v=20260930i"></script>
   <script src="/api/canvas_manager.js?v=20260930i"></script>
   
   <script src="/api/canvas_timeline.js?v=20261007o2"></script>
-  <script src="/api/canvas_stage.js?v=20261007o2"></script>
+  <script src="/api/canvas_stage.js?v=20261022r"></script>
 <script src="/api/tts_upload.js?v=20260918d"></script>
 <script src="/api/audio_ui.js?v=20261003a"></script>
 

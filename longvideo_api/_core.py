@@ -61,7 +61,14 @@ def _cfg_video_model() -> str:
 
 def _cfg_video_models() -> tuple:
     
-    return tuple(_prov().get("video_models") or ["agnes-video-2.5-flash", "agnes-video-2.5"])
+    try:
+        import server.video_caps as _vc
+        ms, _lim = _vc.video_provider_models()
+        if ms:
+            return tuple(ms)
+    except Exception:
+        pass
+    return ("agnes-video-2.5-flash", "agnes-video-2.5")
 
 def _cfg_llm_model() -> str:
     return (_prov().get("llm_models") or [LLM_MODEL])[0]
@@ -105,28 +112,26 @@ _MODEL_SEC_BOUNDS = {"agnes-video-2.5-flash": (4, 12), "agnes-video-2.5": (4, 12
 def _seg_bounds(model=None):
     
     m = model or _cfg_video_model()
-    if _is_ark_model(m):
-        try:
-            import server.ark_provider as _ark
-            lim = _ark.video_limits(m)
-            if lim.get("min_seconds") and lim.get("max_seconds"):
-                return int(lim["min_seconds"]), int(lim["max_seconds"])
-        except Exception:
-            pass
+    try:
+        from server.video_caps import model_limits as _ml
+        lim = _ml(m) or {}
+        if lim.get("min_seconds") and lim.get("max_seconds"):
+            return int(lim["min_seconds"]), int(lim["max_seconds"])
+    except Exception:
+        pass
     return _MODEL_SEC_BOUNDS.get(m, (MIN_SEG_SEC, MAX_SEG_SEC))
 
 
 def _submit_gap_base(model=None):
     
     m = model or _cfg_video_model()
-    if _is_ark_model(m):
-        try:
-            import server.ark_provider as _ark
-            lim = _ark.video_limits(m)
-            if lim.get("submit_gap_base"):
-                return int(lim["submit_gap_base"])
-        except Exception:
-            pass
+    try:
+        from server.video_caps import model_limits as _ml
+        lim = _ml(m) or {}
+        if lim.get("submit_gap_base"):
+            return int(lim["submit_gap_base"])
+    except Exception:
+        pass
     return _MODEL_GAP_BASE.get(m, SEG_GAP_SEC)
 
 
@@ -157,17 +162,8 @@ def _cancelable_sleep(job_id, seconds, step=2.0):
 
 def _ref_caps(model=None):
     
-    m = model or _cfg_video_model()
-    if _is_ark_model(m):
-        try:
-            import server.ark_provider as _ark
-            lim = _ark.video_limits(m)
-            return int(lim.get("max_images") or 5), int(lim.get("max_audios") or 0)
-        except Exception:
-            pass
-    if m == "agnes-video-2.5":
-        return 8, MAX_REF_AUDIOS
-    return MAX_REF_IMAGES, MAX_REF_AUDIOS
+    from server.video_caps import ref_caps as _rc
+    return _rc(model or _cfg_video_model())
 
 
 
@@ -396,6 +392,25 @@ def _db():
         con.execute("ALTER TABLE lv_jobs ADD COLUMN sb_mode TEXT DEFAULT 'smart'")
     except sqlite3.OperationalError:
         pass
+
+
+    for sql in (
+        "ALTER TABLE lv_jobs ADD COLUMN instance_tier TEXT",
+        "ALTER TABLE lv_jobs ADD COLUMN accel TEXT",
+        "ALTER TABLE lv_jobs ADD COLUMN quality_tier TEXT",
+        "ALTER TABLE lv_segments ADD COLUMN post_refine TEXT",
+        "ALTER TABLE lv_segments ADD COLUMN post_face TEXT",
+        "ALTER TABLE lv_segments ADD COLUMN group_id TEXT",
+
+
+
+
+        "ALTER TABLE lv_segments ADD COLUMN model TEXT",
+    ):
+        try:
+            con.execute(sql)
+        except sqlite3.OperationalError:
+            pass
     return con
 
 
@@ -1050,23 +1065,111 @@ _ALLOWED_RESOLUTIONS_FLASH = ("720P",)
 
 def _allowed_resolutions(model):
     
+    try:
+        from server.video_caps import model_limits as _ml
+        lim = _ml(model) or {}
+        if isinstance(lim.get("sizes"), list) and lim["sizes"]:
+            return list(lim["sizes"])
+    except Exception:
+        pass
     if "flash" in (model or ""):
         return _ALLOWED_RESOLUTIONS_FLASH
     return _ALLOWED_RESOLUTIONS_ALL
+
+
+def _allowed_aspects(model):
+    
+    try:
+        from server.video_caps import model_limits as _ml
+        lim = _ml(model) or {}
+        for _k in ("ratios", "aspect_ratios"):
+            v = lim.get(_k)
+            if isinstance(v, list) and v:
+                return list(v)
+    except Exception:
+        pass
+    return list(_ALLOWED_ASPECTS)
+
+
+def _model_known(model):
+    
+    m = str(model or "").strip()
+    if not m:
+        return False
+    try:
+        from server.video_caps import model_limits as _ml
+        return bool(_ml(m))
+    except Exception:
+        return False
 
 
 def _norm_gen_params(raw):
     
     if not isinstance(raw, dict):
         raw = {}
-    model = raw.get("model") if raw.get("model") in _allowed_models() else "agnes-video-2.5-flash"
+
+
+    _pool = _allowed_models()
+
+
+
+
+
+    _stored_model = str(raw.get("model") or "").strip()
+    if _stored_model and (_stored_model in _pool or _model_known(_stored_model)):
+        model = _stored_model
+    else:
+        model = _pool[0] if _pool else "agnes-video-2.5-flash"
+    _ars = _allowed_aspects(model)
+    _res = _allowed_resolutions(model)
     out = {
         "model": model,
-        "aspect_ratio": raw.get("aspect_ratio") if raw.get("aspect_ratio") in _ALLOWED_ASPECTS else "16:9",
-        "resolution": raw.get("resolution") if raw.get("resolution") in _allowed_resolutions(model) else "720P",
+        "aspect_ratio": raw.get("aspect_ratio") if raw.get("aspect_ratio") in _ars else "16:9",
+        "resolution": raw.get("resolution") if raw.get("resolution") in _res else (_res[0] if _res else "720P"),
     }
     if isinstance(raw.get("style"), str) and raw.get("style").strip():
         out["style"] = raw["style"].strip()[:40]
+
+
+    _seed = raw.get("seed")
+    if _seed is not None and _seed != "":
+        try:
+            out["seed"] = max(0, int(_seed))
+        except (TypeError, ValueError):
+            pass
+
+
+
+
+
+
+
+    try:
+        import server.runninghub_provider as _rhp
+        _lim = _rhp.limits(_rhp.RH_ID) or {}
+    except Exception:
+        _lim = {}
+    _insts = [str(x.get("v") or x.get("value")) for x in (_lim.get("instance_tiers") or []) if isinstance(x, dict)]
+    _tiers = list((_lim.get("steps_by_tier") or {}).keys())
+    _iv = str(raw.get("instance_tier") or "").strip()
+    if _iv and (not _insts or _iv in _insts):
+        out["instance_tier"] = _iv
+    _tv = str(raw.get("quality_tier") or "").strip()
+    if _tv and (not _tiers or _tv in _tiers):
+        out["quality_tier"] = _tv
+    if raw.get("accel") is not None:
+        out["accel"] = "" if raw.get("accel") in ("", 0, False, "0", "false", "off") else "1"
+
+
+
+    if isinstance(raw.get("selflift"), dict):
+        _sl = raw["selflift"]
+        out["selflift"] = {
+            "enabled": bool(_sl.get("enabled")),
+            "scale": _sl.get("scale"),
+            "highres": _sl.get("highres"),
+            "latent_upsample": _sl.get("latent_upsample"),
+        }
     return out
 
 
@@ -2213,12 +2316,14 @@ def _agnes_create_video(images_urls, audio_urls, prompt, seconds, attempt=0, mod
     return resp
 
 
-def _agnes_poll(video_id, timeout=600, model=None):
+def _agnes_poll(video_id, timeout=600, model=None, should_stop=None):
     
     if _is_ark_model(model):
         return _ark_poll_video(video_id, timeout)
     t0 = time.time()
     while time.time() - t0 < timeout:
+        if should_stop and should_stop():
+            return "cancelled", ""
         try:
             resp = requests.get(
                 _cfg_poll(),
@@ -2310,7 +2415,12 @@ def _resume_segment(job_id, seg):
     video_id = seg["video_id"]
     seg_no = seg["seg_no"]
     print(f"[PIPE] seg#{seg_no} 断点恢复：按 video_id={video_id[:18]}… 继续追踪（不重复提交）", flush=True)
-    status, video_url = _agnes_poll(video_id, timeout=900, model=_job_video_model(job_id))
+    from . import providers as _lvprov
+    _sub = _lvprov.get_submitter(_job_video_model(job_id))
+    status, video_url = _sub.poll(video_id, timeout=900, should_stop=lambda: _job_cancelled(job_id),
+        on_state=lambda st: _set_job_qstate(job_id, st))
+    if status == "cancelled":
+        return False, None, None, "任务已停止（cancel），中止轮询"
     if status != "completed" or not video_url:
         return False, None, None, f"恢复追踪未完成: {status}"
     out_dir = os.path.join(JOBS_DIR, job_id)
@@ -2321,11 +2431,52 @@ def _resume_segment(job_id, seg):
         _download(video_url, local)
     except Exception as e:
         return False, None, None, f"恢复下载失败 {type(e).__name__}: {e}"
-    tail = _extract_tail_frame(local)
+
+    tail = None if getattr(_sub, "supports_native_multi_segment", False) else _extract_tail_frame(local)
 
 
-    _register_segment_asset(job_id, seg_no, local)
+    _register_segment_asset(job_id, seg_no, local,
+                            extra_meta={"cost": getattr(_sub, "last_cost", None)})
     return True, local, tail, None
+
+
+def _resume_group(job_id, group_segs):
+    
+    anchor = group_segs[0]
+    seg_model = _job_video_model(job_id)
+    is_paid = "flash" not in (seg_model or "")
+    poll_timeout = 1200 if is_paid else 600
+    video_id = anchor["video_id"]
+    print(f"[PIPE] 续接组锚点 seg#{anchor['seg_no']} 断点恢复：按 video_id={str(video_id)[:18]}… "
+          f"继续追踪（不重复提交）", flush=True)
+    from . import providers as _lvprov
+
+
+
+    _sub = _lvprov.get_submitter(seg_model)
+    status, video_url = _sub.poll(
+        video_id, timeout=poll_timeout, should_stop=lambda: _job_cancelled(job_id),
+        on_state=lambda st: _set_job_qstate(job_id, st))
+    if status == "cancelled":
+        return False, None, None, "任务已停止（cancel），中止轮询"
+    if status != "completed" or not video_url:
+        return False, None, None, f"续接组恢复追踪未完成: {status}"
+    out_dir = os.path.join(JOBS_DIR, job_id)
+    os.makedirs(out_dir, exist_ok=True)
+    local = os.path.join(out_dir, f"seg_{anchor['seg_no']:02d}.mp4")
+    try:
+        _download(video_url, local)
+    except Exception as e:
+        return False, None, None, f"恢复下载失败 {type(e).__name__}: {e}"
+
+    _register_segment_asset(job_id, anchor["seg_no"], local,
+                            extra_meta={"cost": getattr(_sub, "last_cost", None)})
+    _update_seg(job_id, anchor["seg_no"], status="completed", local_path=_rel_to_root(local),
+                video_id=video_id, tail_frame=None, finished_at=time.time())
+    for s in group_segs[1:]:
+        _update_seg(job_id, s["seg_no"], status="completed", local_path=_rel_to_root(local),
+                    video_id=video_id, tail_frame=None, finished_at=time.time())
+    return True, local, None, None
 
 
 def _prov_meta(job_id, seg_no=None):
@@ -2352,6 +2503,24 @@ def _prov_meta(job_id, seg_no=None):
                     gp = {}
             model = str(gp.get("model") or "").strip()
             job_ratio = str(gp.get("aspect_ratio") or "").strip()
+
+
+
+
+
+
+            if str(gp.get("quality_tier") or "").strip():
+                payload["quality_tier"] = gp["quality_tier"]
+            _inst = str(gp.get("instance_tier") or "").strip().lower()
+            if _inst:
+                payload["instance"] = _inst
+            if "accel" in gp:
+                _ac = gp.get("accel")
+                payload["accel"] = (_ac is True or str(_ac).strip().lower() in ("1", "true"))
+            if gp.get("selflift"):
+                payload["selflift"] = gp["selflift"]
+            if gp.get("seed") not in (None, ""):
+                payload["seed"] = gp["seed"]
 
             if seg_no is None:
 
@@ -2411,7 +2580,8 @@ def _prov_meta(job_id, seg_no=None):
                     payload["size"] = str(gp.get("resolution")).strip()
             else:
                 r = con.execute(
-                    "SELECT prompt, seconds, aspect_ratio, resolution, mode, images_urls, audio_urls "
+                    "SELECT prompt, seconds, aspect_ratio, resolution, mode, images_urls, audio_urls, "
+                    "post_refine, post_face "
                     "FROM lv_segments WHERE job_id=? AND seg_no=?", (job_id, seg_no)).fetchone()
                 if r:
                     if r["prompt"]:
@@ -2422,6 +2592,14 @@ def _prov_meta(job_id, seg_no=None):
                         payload["size"] = r["resolution"]
                     if r["mode"]:
                         payload["mode"] = r["mode"]
+
+                    for _src, _dst in (("post_refine", "refine"), ("post_face", "face")):
+                        _v = r[_src]
+                        if _v not in (None, "", "{}"):
+                            try:
+                                payload[_dst] = _json.loads(_v) if isinstance(_v, str) else _v
+                            except Exception:
+                                pass
                     ratio = str(r["aspect_ratio"] or "").strip() or job_ratio
                     for src, dst in (("images_urls", "images"), ("audio_urls", "audios")):
                         try:
@@ -2440,12 +2618,19 @@ def _prov_meta(job_id, seg_no=None):
         return None, ""
 
 
-def _register_segment_asset(job_id, seg_no, local_path):
+def _register_segment_asset(job_id, seg_no, local_path, extra_meta=None):
     
     if not local_path:
         return None
     try:
         meta, session_id = _prov_meta(job_id, seg_no)
+
+
+
+        if isinstance(extra_meta, dict):
+            for _k, _v in extra_meta.items():
+                if _v not in (None, "", {}):
+                    meta[_k] = _v
         return _assets_store.register(
             name="%s/seg_%02d.mp4" % (job_id, seg_no),
             url="/api/jobs/%s/segment/%d.mp4" % (job_id, seg_no),
@@ -2516,6 +2701,74 @@ def _register_lv_outputs(job_id):
     return n
 
 
+def _h3_post_opts(seg):
+    
+    def _obj(v):
+        if isinstance(v, dict):
+            return v
+        if isinstance(v, str) and v.strip():
+            try:
+                x = json.loads(v)
+                return x if isinstance(x, dict) else {}
+            except Exception:
+                return {}
+        return {}
+
+    pr = _obj(seg.get("post_refine"))
+    pf = _obj(seg.get("post_face"))
+
+    refine = {}
+    for k in ("mode", "upscale_method", "mp", "passes", "steps", "denoise"):
+        if pr.get(k) not in (None, ""):
+            refine[k] = pr[k]
+    if "on" in pr:
+        if not pr.get("on"):
+            refine["mode"] = "off"
+        else:
+            refine.setdefault("mode", "upscale")
+    refine.setdefault("mode", "off")
+
+    face = {"enabled": bool(pf.get("enabled") if "enabled" in pf else pf.get("on"))}
+    for k in ("denoise", "steps", "confidence", "mask_dilation", "feather", "select", "paste_region"):
+        if pf.get(k) not in (None, ""):
+            face[k] = pf[k]
+    return refine, face
+
+
+def _h3_job_opts(job_id):
+    
+    con = _db()
+    try:
+        row = con.execute(
+            "SELECT instance_tier, accel, quality_tier, gen_params_json FROM lv_jobs WHERE id=?",
+            (job_id,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    finally:
+        con.close()
+    if not row:
+        return {"instance": None, "accel": None, "quality_tier": None}
+
+
+    try:
+        gp = json.loads(row["gen_params_json"]) if row["gen_params_json"] else {}
+    except Exception:
+        gp = {}
+    inst = (row["instance_tier"] or "").strip() or str(gp.get("instance_tier") or "").strip() or None
+    tier = (row["quality_tier"] or "").strip() or str(gp.get("quality_tier") or "").strip() or None
+    _a = row["accel"] if row["accel"] is not None else gp.get("accel")
+    if _a is None:
+        accel = None
+    else:
+        accel = str(_a).strip().lower() not in ("", "0", "false", "off")
+
+    sl = gp.get("selflift") if isinstance(gp.get("selflift"), dict) else {}
+
+    return {"instance": inst, "accel": accel, "quality_tier": tier, "selflift": sl,
+            "seed": gp.get("seed")}
+
+
 def _gen_segment(job_id, seg, prev_tail_b64):
     
 
@@ -2533,6 +2786,9 @@ def _gen_segment(job_id, seg, prev_tail_b64):
         _c0.close()
     if not (_cur and _cur["started_at"]):
         _update_seg(job_id, seg["seg_no"], started_at=time.time())
+
+
+    _update_seg(job_id, seg["seg_no"], model=_job_video_model(job_id))
 
 
 
@@ -2672,7 +2928,8 @@ def _gen_segment(job_id, seg, prev_tail_b64):
     _lo, _hi = _seg_bounds(seg_model)
     seconds = max(_lo, min(_hi, int(seg["seconds"] or 5)))
 
-    size = (seg.get("resolution") or "").strip() or "720P"
+    _res_list = _allowed_resolutions(seg_model)
+    size = (seg.get("resolution") or "").strip() or (_res_list[0] if _res_list else "720P")
     aspect = (seg.get("aspect_ratio") or "").strip() or "16:9"
 
 
@@ -2683,12 +2940,22 @@ def _gen_segment(job_id, seg, prev_tail_b64):
 
     video_id = None
     _last_err = ""
+
+
+    from . import providers as _lvprov
+    _sub = _lvprov.get_submitter(seg_model)
+
+
+    _rf, _fc = _h3_post_opts(seg)
+    _req = {"images": images_urls, "audios": audio_urls, "prompt": prompt,
+            "seconds": seconds, "size": size, "aspect_ratio": aspect, "mode": mode,
+            "refine": _rf, "face": _fc}
+    _req.update(_h3_job_opts(job_id))
     for attempt in range(max_attempts):
         if _job_cancelled(job_id):
             return False, None, None, "任务已停止（cancel），中止提交"
         try:
-            resp = _agnes_create_video(images_urls, audio_urls, prompt, seconds, attempt, mode,
-                                       size=size, aspect_ratio=aspect, model=seg_model)
+            resp = _sub.submit(_req, attempt)
         except requests.RequestException as e:
             _last_err = f"网络异常 {type(e).__name__}: {e}"
             if _cancelable_sleep(job_id, SEG_GAP_SEC):
@@ -2698,6 +2965,8 @@ def _gen_segment(job_id, seg, prev_tail_b64):
             _last_err = "429 限流"
             gap = min(_JOB_GAP.get(job_id, SEG_GAP_SEC) * 2, _GAP_MAX_SEC)
             _JOB_GAP[job_id] = gap
+
+            _set_job_qstate(job_id, "retry")
             wait = gap
             print(f"[WARN] 提交限流(429) job={job_id} seg#{seg['seg_no']} 第{attempt + 1}/{max_attempts}次，"
                   f"{wait}s 后重试（发射间隔自适应→{gap}s）", flush=True)
@@ -2711,9 +2980,11 @@ def _gen_segment(job_id, seg, prev_tail_b64):
                 detail = resp.json()
             except Exception:
                 detail = resp.text
-            _last_err = f"Agnes {resp.status_code}: {str(detail)[:200]}"
+            _last_err = f"{_sub.label} {resp.status_code}: {str(detail)[:200]}"
             gap = min(_JOB_GAP.get(job_id, SEG_GAP_SEC) * 2, _GAP_MAX_SEC)
             _JOB_GAP[job_id] = gap
+
+            _set_job_qstate(job_id, "retry")
             wait = gap
             print(f"[WARN] 平台瞬态({resp.status_code}) job={job_id} seg#{seg['seg_no']} "
                   f"第{attempt + 1}/{max_attempts}次，{wait}s 后重试（发射间隔自适应→{gap}s）: {str(detail)[:160]}", flush=True)
@@ -2726,12 +2997,14 @@ def _gen_segment(job_id, seg, prev_tail_b64):
                 detail = resp.json()
             except Exception:
                 detail = resp.text
-            return False, None, None, f"Agnes 拒绝({resp.status_code}): {detail}"
+            return False, None, None, f"{_sub.label} 拒绝({resp.status_code}): {detail}"
         body = resp.json()
         video_id = body.get("video_id") or body.get("id") or body.get("task_id")
         break
     if not video_id:
         return False, None, None, f"创建视频任务失败（已自动重试{max_attempts}次）：{_last_err or '限流/网络'}"
+
+    _set_job_qstate(job_id, "running")
 
 
     _JOB_LAST_SUBMIT[job_id] = time.time()
@@ -2746,7 +3019,11 @@ def _gen_segment(job_id, seg, prev_tail_b64):
     finally:
         con.close()
 
-    status, video_url = _agnes_poll(video_id, timeout=poll_timeout, model=seg_model)
+    status, video_url = _sub.poll(video_id, timeout=poll_timeout,
+                                  should_stop=lambda: _job_cancelled(job_id),
+        on_state=lambda st: _set_job_qstate(job_id, st))
+    if status == "cancelled":
+        return False, None, None, "任务已停止（cancel），中止轮询"
     if status != "completed" or not video_url:
         return False, None, None, f"轮询未完成: {status}"
 
@@ -2759,13 +3036,272 @@ def _gen_segment(job_id, seg, prev_tail_b64):
         _download(video_url, local)
     except Exception as e:
         return False, None, None, f"下载失败: {e}"
-    tail_b64 = _extract_tail_frame(local)
-    _register_segment_asset(job_id, seg["seg_no"], local)
+
+
+
+    tail_b64 = None if getattr(_sub, "supports_native_multi_segment", False) else _extract_tail_frame(local)
+
+    _register_segment_asset(job_id, seg["seg_no"], local,
+                            extra_meta={"cost": getattr(_sub, "last_cost", None)})
     return True, local, tail_b64, None
+
+
+def _real_refs(v):
+    
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except Exception:
+            v = []
+    return [x for x in (v or []) if x not in ("tail", None)]
+
+
+
+
+
+
+_NEUTRAL_CONT_LEAD = "接着上一段视频最后一帧继续往下拍："
+
+
+def _neutralize_tail_lead(prompt):
+    
+    p = re.sub(r"[\u200b\u200c\u200d\u2060\ufeff]", "", prompt or "").lstrip()
+    if not p:
+        return p
+
+    pat = re.compile(
+        r"^图\s*1\s*(?:是|就是)?\s*(?:上一段|上一镜|前一段|上段)?(?:视频)?的?\s*(?:最后|末)\s*一?\s*帧"
+        r"\s*[。，,、；;：:]?\s*"
+        r"(?:请[^：:\n]{0,30}?(?:接着|继续)[^：:\n]{0,30}?[：:])?"
+    )
+    if pat.match(p):
+        return _NEUTRAL_CONT_LEAD + pat.sub("", p, count=1).lstrip()
+
+    m2 = re.match(r"^[^：:\n]{0,60}?(?:最后|末)\s*一?\s*帧[^：:\n]{0,60}?[：:]", p)
+    if m2:
+        return _NEUTRAL_CONT_LEAD + p[m2.end():].lstrip()
+
+    m3 = re.match(r"^图\s*1\s*[的，,、。；;]?\s*", p)
+    if m3:
+        return _NEUTRAL_CONT_LEAD + p[m3.end():].lstrip()
+
+    return p
+
+
+def _shift_img_refs_down(prompt):
+    
+    def _renum(m):
+        n = int(m.group(1))
+        return "图%d" % (n - 1) if n > 1 else ""
+    out = re.sub(r"图\s*(\d+)", _renum, prompt)
+    out = re.sub(r"[（(]\s*[）)]", "", out)
+    return out
+
+
+def _slot0_is_tail(seg):
+    
+    keys = seg.get("images_keys") or seg.get("images") or "[]"
+    if isinstance(keys, str):
+        try:
+            keys = json.loads(keys)
+        except Exception:
+            keys = []
+    if keys and keys[0] == "tail":
+        return True
+    urls = seg.get("images_urls") or "[]"
+    if isinstance(urls, str):
+        try:
+            urls = json.loads(urls)
+        except Exception:
+            urls = []
+    return bool(urls) and urls[0] in ("tail", None)
+
+
+def _translate_group_prompt(prompt, local_imgs, local_auds, global_imgs, global_auds,
+                            slot0_is_tail=False):
+    
+    prompt = re.sub(r"[\u200b\u200c\u200d\u2060\ufeff]", "", prompt or "")
+    if slot0_is_tail:
+        prompt = _neutralize_tail_lead(prompt)
+        prompt = _shift_img_refs_down(prompt)
+
+    if local_imgs:
+        prompt = re.sub(r"参考图\s*(\d+)", lambda m: "<Picture %s>" % m.group(1), prompt)
+        prompt = re.sub(r"图\s*(\d+)", lambda m: "<Picture %s>" % m.group(1), prompt)
+
+        def _rp(m):
+            k = int(m.group(1))
+            if 1 <= k <= len(local_imgs):
+                g = global_imgs.index(local_imgs[k - 1]) + 1
+                return "<Picture %d>" % g
+            return ""
+        prompt = re.sub(r"<Picture\s*(\d+)\s*>", _rp, prompt)
+
+    _labels = json.loads("[]")
+    if local_auds:
+        prompt = re.sub(r"[（(]\s*音频\s*(\d+)\s*[)）]", r"<Audio \1>", prompt)
+        prompt = re.sub(r"音频\s*(\d+)", r"<Audio \1>", prompt)
+        def _ra(m):
+            k = int(m.group(1))
+            if 1 <= k <= len(local_auds):
+                g = global_auds.index(local_auds[k - 1]) + 1
+                return "<Audio %d>" % g
+            return ""
+        prompt = re.sub(r"<Audio\s*(\d+)\s*>", _ra, prompt)
+    return prompt
+
+
+def _gen_group(job_id, group_segs, common, sub):
+    
+    anchor = group_segs[0]
+    anchor_no = anchor["seg_no"]
+    seg_model = _job_video_model(job_id)
+
+    _c0 = _db()
+    try:
+        _cur = _c0.execute(
+            "SELECT started_at FROM lv_segments WHERE job_id=? AND seg_no=?", (job_id, anchor_no)
+        ).fetchone()
+    finally:
+        _c0.close()
+    if not (_cur and _cur["started_at"]):
+        for s in group_segs:
+            _update_seg(job_id, s["seg_no"], started_at=time.time())
+
+    for s in group_segs:
+        _update_seg(job_id, s["seg_no"], model=seg_model)
+
+    _res_list = _allowed_resolutions(seg_model)
+    anchor_size = (anchor.get("resolution") or "").strip() or (_res_list[0] if _res_list else "720P")
+    anchor_aspect = (anchor.get("aspect_ratio") or "").strip() or "16:9"
+
+
+    global_imgs, global_auds = [], []
+    seg_payloads = []
+    _lo, _hi = _seg_bounds(seg_model)
+    for idx, s in enumerate(group_segs):
+        _imgs = _real_refs(s.get("images_urls"))
+        _auds = _real_refs(s.get("audio_urls"))
+        for x in _imgs:
+            if x not in global_imgs: global_imgs.append(x)
+        for x in _auds:
+            if x not in global_auds: global_auds.append(x)
+        seconds = max(_lo, min(_hi, int(s["seconds"] or 5)))
+        prompt = _translate_group_prompt(s["prompt"], _imgs, _auds, global_imgs, global_auds,
+                                         slot0_is_tail=_slot0_is_tail(s))
+        seg_payloads.append({
+            "prompt": prompt, "seconds": seconds,
+            "negative_prompt": s.get("negative_prompt") or "",
+            "images": _imgs, "audios": _auds,
+            "start_image": s.get("start_image"), "end_image": s.get("end_image"),
+            "continuity": idx > 0,
+        })
+    mode = "reference" if (global_imgs or global_auds) else "text"
+    _common = dict(common or {})
+    _common.update({"mode": mode, "aspect_ratio": anchor_aspect, "size": anchor_size})
+
+    is_paid = "flash" not in (seg_model or "")
+    max_attempts = 3 if is_paid else 6
+    poll_timeout = 1200 if is_paid else 600
+
+    video_id = None
+    _last_err = ""
+    for attempt in range(max_attempts):
+        if _job_cancelled(job_id):
+            return False, None, None, "任务已停止（cancel），中止提交"
+        try:
+            resp = sub.submit_group(seg_payloads, _common)
+        except Exception as e:
+            _last_err = f"提交异常 {type(e).__name__}: {e}"
+            if _cancelable_sleep(job_id, SEG_GAP_SEC):
+                return False, None, None, "任务已停止（cancel），中止重试提交"
+            continue
+        if resp.status_code == 429:
+            _last_err = "429 限流"
+            gap = min(_JOB_GAP.get(job_id, SEG_GAP_SEC) * 2, _GAP_MAX_SEC)
+            _JOB_GAP[job_id] = gap
+            _set_job_qstate(job_id, "retry")
+            if _cancelable_sleep(job_id, gap):
+                return False, None, None, "任务已停止（cancel），中止重试提交"
+            continue
+        if resp.status_code >= 500:
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = resp.text
+            _last_err = f"{sub.label} {resp.status_code}: {str(detail)[:200]}"
+            gap = min(_JOB_GAP.get(job_id, SEG_GAP_SEC) * 2, _GAP_MAX_SEC)
+            _JOB_GAP[job_id] = gap
+            _set_job_qstate(job_id, "retry")
+            if _cancelable_sleep(job_id, gap):
+                return False, None, None, "任务已停止（cancel），中止重试提交"
+            continue
+        if resp.status_code != 200:
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = resp.text
+            return False, None, None, f"{sub.label} 拒绝({resp.status_code}): {detail}"
+        body = resp.json()
+        video_id = body.get("video_id") or body.get("id") or body.get("task_id")
+        break
+    if not video_id:
+        return False, None, None, f"创建续接组任务失败（已自动重试{max_attempts}次）：{_last_err or '限流/网络'}"
+
+    _set_job_qstate(job_id, "running")
+
+
+    _JOB_LAST_SUBMIT[job_id] = time.time()
+    _JOB_GAP[job_id] = _submit_gap_base(seg_model)
+    for s in group_segs:
+        _update_seg(job_id, s["seg_no"], video_id=video_id, status="processing", updated_at=time.time())
+
+    status, video_url = sub.poll(video_id, timeout=poll_timeout,
+                                 should_stop=lambda: _job_cancelled(job_id),
+        on_state=lambda st: _set_job_qstate(job_id, st))
+    if status == "cancelled":
+        return False, None, None, "任务已停止（cancel），中止轮询"
+    if status != "completed" or not video_url:
+        return False, None, None, f"续接组轮询未完成: {status}"
+
+    out_dir = os.path.join(JOBS_DIR, job_id)
+    os.makedirs(out_dir, exist_ok=True)
+    local = os.path.join(out_dir, f"seg_{anchor_no:02d}.mp4")
+    try:
+        _download(video_url, local)
+    except Exception as e:
+        return False, None, None, f"下载失败: {e}"
+
+
+
+
+
+    _register_segment_asset(job_id, anchor_no, local,
+                            extra_meta={"cost": getattr(sub, "last_cost", None)})
+    _update_seg(job_id, anchor_no, status="completed", local_path=_rel_to_root(local),
+                video_id=video_id, tail_frame=None, finished_at=time.time())
+
+    for s in group_segs[1:]:
+        _update_seg(job_id, s["seg_no"], status="completed", local_path=_rel_to_root(local),
+                    video_id=video_id, tail_frame=None, finished_at=time.time())
+    return True, local, None, None
 
 
 
 _JOB_THREADS = {}
+
+
+
+
+
+
+_JOB_QSTATE = {}
+
+
+def _set_job_qstate(job_id, state):
+    
+    if state in ("queued", "retry", "running"):
+        _JOB_QSTATE[job_id] = state
 
 
 
@@ -2791,7 +3327,11 @@ def _run_job(job_id):
     _JOB_THREADS[job_id] = threading.current_thread()
     con = _db()
     try:
-        job = con.execute("SELECT * FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
+
+
+
+        _job_row = con.execute("SELECT * FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
+        job = dict(_job_row) if _job_row else None
         seg_list = [dict(r) for r in con.execute(
             "SELECT * FROM lv_segments WHERE job_id=? ORDER BY seg_no", (job_id,)
         ).fetchall()]
@@ -2809,6 +3349,14 @@ def _run_job(job_id):
     _JOB_GAP[job_id] = _submit_gap_base(_job_video_model(job_id))
 
 
+
+
+
+    from . import providers as _lvprov
+    _sub = _lvprov.get_submitter(_job_video_model(job_id))
+    _supports_group = bool(getattr(_sub, "supports_native_multi_segment", False))
+
+
     for seg in seg_list:
         lp = _seg_path(seg.get("local_path"))
         if lp and os.path.exists(lp):
@@ -2816,11 +3364,51 @@ def _run_job(job_id):
                 _finished_from_file = os.path.getmtime(lp)
             except OSError:
                 _finished_from_file = time.time()
-            tails[seg["seg_no"]] = seg.get("tail_frame") or _extract_tail_frame(lp)
+
+
+
+            if _supports_group:
+                tails[seg["seg_no"]] = None
+            else:
+                tails[seg["seg_no"]] = seg.get("tail_frame") or _extract_tail_frame(lp)
             seg_paths[seg["seg_no"]] = lp
             _update_seg(job_id, seg["seg_no"], status="completed", finished_at=_finished_from_file)
 
             _JOB_LAST_SUBMIT[job_id] = time.time() - SEG_GAP_SEC
+
+
+
+
+    _common_base = dict(_h3_job_opts(job_id))
+    _common_base["sessionId"] = (job.get("session_id") or "").strip() or None
+
+    _seg_index = {s["seg_no"]: i for i, s in enumerate(seg_list)}
+    units = []
+    if _supports_group:
+        i = 0
+        n = len(seg_list)
+        while i < n:
+
+            if i + 1 < n and seg_list[i + 1]["is_continuation"]:
+                j = i + 1
+                while j < n and seg_list[j]["is_continuation"]:
+                    j += 1
+                grp_segs = seg_list[i:j]
+                anchor = grp_segs[0]
+                _gc = dict(_common_base)
+
+
+                _gc["refine"], _gc["face"] = _h3_post_opts(anchor)
+                units.append({"type": "group", "segs": grp_segs,
+                              "nos": [s["seg_no"] for s in grp_segs], "common": _gc})
+                i = j
+            else:
+                s = seg_list[i]
+                units.append({"type": "seg", "segs": [s], "nos": [s["seg_no"]]})
+                i += 1
+    else:
+        for s in seg_list:
+            units.append({"type": "seg", "segs": [s], "nos": [s["seg_no"]]})
 
     def _cancelled():
         return _job_cancelled(job_id)
@@ -2839,43 +3427,62 @@ def _run_job(job_id):
                 return
             time.sleep(min(wait, 2.0))
 
-    def _worker(seg, prev_tail):
+    def _worker(unit, prev_tail=None):
         
         try:
+            if unit["type"] == "group":
+                anchor = unit["segs"][0]
 
-
-            if (seg.get("video_id") and seg.get("status") == "processing"
-                    and not (seg.get("local_path") and os.path.exists(_seg_path(seg.get("local_path"))))):
-                ok, local, tail, err = _resume_segment(job_id, seg)
+                if (anchor.get("video_id") and anchor.get("status") == "processing"
+                        and not (anchor.get("local_path")
+                                 and os.path.exists(_seg_path(anchor.get("local_path"))))):
+                    ok, local, tail, err = _resume_group(job_id, unit["segs"])
+                else:
+                    ok, local, tail, err = _gen_group(job_id, unit["segs"], unit["common"], _sub)
             else:
-                ok, local, tail, err = _gen_segment(job_id, seg, prev_tail)
+                seg = unit["segs"][0]
+
+                if (seg.get("video_id") and seg.get("status") == "processing"
+                        and not (seg.get("local_path") and os.path.exists(_seg_path(seg.get("local_path"))))):
+                    ok, local, tail, err = _resume_segment(job_id, seg)
+                else:
+                    ok, local, tail, err = _gen_segment(job_id, seg, prev_tail)
         except Exception as e:
             ok, local, tail, err = False, None, None, f"生成线程异常 {type(e).__name__}: {e}"
-        results[seg["seg_no"]] = {"ok": ok, "local": local, "tail": tail, "err": err}
         if ok:
-            tails[seg["seg_no"]] = tail
-            seg_paths[seg["seg_no"]] = local
-            _update_seg(job_id, seg["seg_no"], status="completed",
-                        local_path=_rel_to_root(local), tail_frame=tail, finished_at=time.time())
-        else:
+            for s in unit["segs"]:
+                tails[s["seg_no"]] = tail
+                seg_paths[s["seg_no"]] = local
+                results[s["seg_no"]] = {"ok": True, "local": local, "tail": tail, "err": None}
 
-            if _cancelled():
-                _update_seg(job_id, seg["seg_no"], status="cancelled", error=err)
-            else:
-                _update_seg(job_id, seg["seg_no"], status="failed", error=err)
-                state["stop_emit"] = True
+
+            if unit["type"] == "seg":
+                seg = unit["segs"][0]
+                _update_seg(job_id, seg["seg_no"], status="completed",
+                            local_path=_rel_to_root(local), tail_frame=tail, finished_at=time.time())
+        else:
+            for s in unit["segs"]:
+                results[s["seg_no"]] = {"ok": False, "local": None, "tail": None, "err": err}
+
+                if _cancelled():
+                    _update_seg(job_id, s["seg_no"], status="cancelled", error=err)
+                else:
+                    _update_seg(job_id, s["seg_no"], status="failed", error=err)
+                    state["stop_emit"] = True
 
     threads = []
     emitted = set()
 
-    def _emit(seg, prev_tail):
-        t = threading.Thread(target=_worker, args=(seg, prev_tail), daemon=True)
+    def _emit(unit, prev_tail=None):
+        t = threading.Thread(target=_worker, args=(unit, prev_tail), daemon=True)
         threads.append(t)
         t.start()
-        emitted.add(seg["seg_no"])
+        for n in unit["nos"]:
+            emitted.add(n)
+        _kind = "续接组" if unit["type"] == "group" else "单段"
         alive = sum(1 for x in threads if x.is_alive())
-        print(f"[PIPE] 发射 seg#{seg['seg_no']}（{'续接' if seg['is_continuation'] else '非续接'}，"
-              f"已发射 {len(emitted) + len(seg_paths)}/{len(seg_list)}，在飞 {alive}）", flush=True)
+        print(f"[PIPE] 发射 {_kind}（seg#{'/'.join(str(n) for n in unit['nos'])}，"
+              f"已处理 {len(emitted | set(seg_paths))}/{len(seg_list)}，在飞 {alive}）", flush=True)
 
 
 
@@ -2887,33 +3494,41 @@ def _run_job(job_id):
                 print(f"[PIPE] 心跳：已发射={sorted(emitted)} 完成={sorted(seg_paths)} "
                       f"stop_emit={state['stop_emit']}", flush=True)
                 _last_hb = time.time()
-            if len(emitted) + len(seg_paths) >= len(seg_list):
+
+            if len(emitted | set(seg_paths)) >= len(seg_list):
                 break
             if _cancelled():
                 state["cancelled"] = True
                 print(f"[INFO] 任务 {job_id} 已 cancelled，中止后续段发射", flush=True)
                 break
             picked = None
-            for idx, seg in enumerate(seg_list):
-                n = seg["seg_no"]
-                if n in emitted or n in seg_paths:
+            for idx, unit in enumerate(units):
+
+                if set(unit["nos"]) <= (emitted | set(seg_paths)):
                     continue
-                if seg["is_continuation"] and idx > 0:
-                    dep_no = seg_list[idx - 1]["seg_no"]
-                    if dep_no not in tails:
-                        continue
-                    picked = (seg, tails[dep_no])
+                if unit["type"] == "group":
+
+
+                    picked = (unit, None)
                 else:
-                    picked = (seg, None)
+                    seg = unit["segs"][0]
+                    sidx = _seg_index[seg["seg_no"]]
+                    if seg["is_continuation"] and sidx > 0:
+                        dep_no = seg_list[sidx - 1]["seg_no"]
+                        if dep_no not in tails:
+                            continue
+                        picked = (unit, tails[dep_no])
+                    else:
+                        picked = (unit, None)
                 break
             if picked is None:
                 time.sleep(2)
                 continue
-            seg, prev_tail = picked
+            unit, prev_tail = picked
             _gate()
             if state["stop_emit"] or state["cancelled"]:
                 break
-            _emit(seg, prev_tail)
+            _emit(unit, prev_tail)
         except Exception:
 
 
@@ -2953,7 +3568,9 @@ def _run_job(job_id):
     if ok:
 
 
-        ordered = [seg_paths[k] for k in sorted(seg_paths)]
+
+
+        ordered = list(dict.fromkeys(seg_paths[k] for k in sorted(seg_paths)))
         final_url = _concat_and_register(job_id, out_dir, ordered)
         _update_job(job_id, status="completed", final_url=final_url, error=None)
 
@@ -2963,8 +3580,25 @@ def _run_job(job_id):
 
 
 
+
+
+
+
+
+
+        _share = {}
+        for p in seg_paths.values():
+            _share[p] = _share.get(p, 0) + 1
+        _probed = {}
         for k in sorted(seg_paths):
-            d = _probe_duration(seg_paths[k])
+            p = seg_paths[k]
+            if _share.get(p, 1) > 1:
+                continue
+            if p in _probed:
+                d = _probed[p]
+            else:
+                d = _probe_duration(p)
+                _probed[p] = d
             if d:
                 con = _db()
                 try:
@@ -3088,7 +3722,23 @@ def api_create_job():
     job_id = (data.get("job_id") or "").strip() or None
 
 
-    gen_params = _norm_gen_params(data.get("gen_params"))
+
+
+
+
+    _raw_gp = data.get("gen_params")
+    if _raw_gp is None and job_id:
+        _gc = _db()
+        try:
+            _gr = _gc.execute("SELECT gen_params_json FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
+        finally:
+            _gc.close()
+        if _gr and _gr["gen_params_json"]:
+            try:
+                _raw_gp = json.loads(_gr["gen_params_json"])
+            except Exception:
+                _raw_gp = None
+    gen_params = _norm_gen_params(_raw_gp)
 
     if not shots:
         if not script:
@@ -3169,6 +3819,13 @@ def api_create_job():
                 (job_id, script, "processing", "生成中", len(shots), assets_json, shots_json, gen_params_json, _ins_name, time.time(), time.time()),
             )
 
+
+
+        con.execute(
+            "UPDATE lv_jobs SET instance_tier=?, accel=?, quality_tier=? WHERE id=?",
+            (gen_params.get("instance_tier"), gen_params.get("accel"), gen_params.get("quality_tier"), job_id),
+        )
+
         seg_aspect = gen_params.get("aspect_ratio") or ""
         seg_resolution = gen_params.get("resolution") or ""
 
@@ -3185,8 +3842,9 @@ def api_create_job():
             _sec = max(_sb_lo, min(_sb_hi, _sec))
             con.execute(
                 """INSERT INTO lv_segments(job_id,seg_no,shot_no,is_continuation,prompt,seconds,
-                   images_keys,images_urls,audio_urls,audio,mode,aspect_ratio,resolution,status,started_at,created_at,updated_at,prompt_history)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   images_keys,images_urls,audio_urls,audio,mode,aspect_ratio,resolution,status,started_at,created_at,updated_at,prompt_history,
+                   post_refine,post_face)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     job_id, idx, s.get("shot_no", idx),
                     1 if s.get("is_continuation") else 0,
@@ -3199,6 +3857,11 @@ def api_create_job():
                     aspect, resolution,
                     "pending", 0.0, time.time(), time.time(),
                     _old_hist.get(idx),
+
+
+
+                    json.dumps(s.get("post_refine") or {}, ensure_ascii=False) if s.get("post_refine") else None,
+                    json.dumps(s.get("post_face") or {}, ensure_ascii=False) if s.get("post_face") else None,
                 ),
             )
 
@@ -3291,7 +3954,8 @@ def api_get_job(job_id):
             return jsonify(error="not found"), 404
         segs = con.execute(
             "SELECT seg_no,shot_no,is_continuation,prompt,seconds,status,local_path,video_id,error,mode,"
-            "audio,audio_urls,images_keys,images_urls,started_at,finished_at,real_seconds,created_at,updated_at,prompt_history "
+            "audio,audio_urls,images_keys,images_urls,started_at,finished_at,real_seconds,created_at,updated_at,prompt_history,"
+            "post_refine,post_face "
             "FROM lv_segments WHERE job_id=? ORDER BY seg_no", (job_id,)
         ).fetchall()
     finally:
@@ -3318,6 +3982,47 @@ def api_get_job(job_id):
         s["prompt_history"] = _jsonl(s, "prompt_history")
         seg_norm.append(s)
 
+
+
+
+    _amap = {}
+    try:
+        _acon = _db()
+        try:
+            for _r in _acon.execute("SELECT name, meta FROM assets WHERE job_id=?", (job_id,)):
+                _fn = (_r["name"] or "").rsplit("/", 1)[-1]
+                if not (_fn.startswith("seg_") and _fn.endswith(".mp4")):
+                    continue
+                try:
+                    _m = json.loads(_r["meta"] or "{}")
+                except Exception:
+                    continue
+                _pl = _m.get("payload") or {}
+                _amap[_fn] = {"model": _m.get("model"),
+                              "aspect_ratio": _m.get("ratio") or _pl.get("aspect_ratio"),
+                              "resolution": _pl.get("size"),
+
+                              "cost": _m.get("cost")}
+        finally:
+            _acon.close()
+    except sqlite3.OperationalError:
+        _amap = {}
+    for _s in seg_norm:
+
+
+
+        _lf = (_s.get("local_path") or "").replace("\\", "/").rsplit("/", 1)[-1]
+        _info = (_amap.get(_lf) if _lf else None) or _amap.get("seg_%02d.mp4" % int(_s.get("seg_no") or 0))
+        if _info:
+            _s["model"] = _info["model"]
+            _s["aspect_ratio"] = _info["aspect_ratio"]
+            _s["resolution"] = _info["resolution"]
+
+            _s["cost"] = _info["cost"]
+
+
+    _qstate = _JOB_QSTATE.get(job_id)
+
     try:
         _sh = json.loads(job.get("shots_history") or "[]")
         if not isinstance(_sh, list):
@@ -3340,6 +4045,8 @@ def api_get_job(job_id):
         gen_params=_norm_gen_params(json.loads(job.get("gen_params_json") or "{}")),
         shots_history=shots_hist_meta,
         current_shot_ver=job.get("current_shot_ver"),
+
+        queue_state=_qstate,
     )
 
 
@@ -3449,10 +4156,47 @@ def api_cancel_job(job_id):
 
         con.execute("UPDATE lv_segments SET status='cancelled', updated_at=? WHERE job_id=? AND status='pending'",
                     (time.time(), job_id))
+
+        inflight = con.execute(
+            "SELECT COUNT(*) c FROM lv_segments WHERE job_id=? AND status='processing'", (job_id,)
+        ).fetchone()["c"]
+
+        _vids = [r["video_id"] for r in con.execute(
+            "SELECT DISTINCT video_id FROM lv_segments "
+            "WHERE job_id=? AND status='processing' AND COALESCE(video_id,'')<>''", (job_id,))]
         con.commit()
     finally:
         con.close()
-    return jsonify(ok=True, job_id=job_id, status="cancelled")
+
+
+
+
+    remote_ok, remote_fail = 0, []
+    remote_unsupported = 0
+    _can_cancel = False
+    if _vids:
+        try:
+            from . import providers as _lvprov
+            _sub = _lvprov.get_submitter(_job_video_model(job_id))
+            _can_cancel = bool(getattr(_sub, "supports_remote_cancel", False))
+            for _v in _vids:
+                if not _can_cancel:
+                    remote_unsupported += 1
+                    continue
+                try:
+                    _okc, _msg = _sub.cancel(_v)
+                except Exception as _e:
+                    _okc, _msg = False, f"{type(_e).__name__}: {_e}"
+                if _okc:
+                    remote_ok += 1
+                else:
+                    remote_fail.append({"video_id": _v, "error": _msg or "取消失败"})
+        except Exception as _e:
+            remote_fail.append({"video_id": "", "error": f"取消调用异常 {type(_e).__name__}: {_e}"})
+    return jsonify(ok=True, job_id=job_id, status="cancelled", inflight=inflight,
+                   remote_cancelled=remote_ok, remote_failed=remote_fail,
+                   remote_unsupported=remote_unsupported,
+                   cancel_supported=_can_cancel)
 
 
 @lv_bp.route("/jobs/<job_id>/retry", methods=["POST"])
@@ -3465,6 +4209,12 @@ def api_retry_job(job_id):
             return jsonify(error="not found"), 404
         if job["status"] == "completed":
             return jsonify(ok=True, skipped=True, status="completed")
+
+
+        _n_retry = con.execute(
+            "SELECT COUNT(*) c FROM lv_segments WHERE job_id=? AND status IN ('failed','pending','cancelled')",
+            (job_id,)
+        ).fetchone()["c"]
         con.execute(
             "UPDATE lv_segments SET status='pending', error=NULL, started_at=0, video_id=NULL "
             "WHERE job_id=? AND status IN ('failed','pending','cancelled')", (job_id,)
@@ -3474,7 +4224,7 @@ def api_retry_job(job_id):
     finally:
         con.close()
     _ensure_running(job_id)
-    return jsonify(ok=True, job_id=job_id, status="processing")
+    return jsonify(ok=True, job_id=job_id, status="processing", retry_segments=_n_retry)
 
 
 @lv_bp.route("/jobs/<job_id>/reedit", methods=["POST"])

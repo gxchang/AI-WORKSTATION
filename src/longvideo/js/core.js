@@ -122,6 +122,8 @@
         <span class="ps-k">已用</span><span class="ps-v" id="lvPsElapsed">—</span>
         <span class="ps-k">预计还需</span><span class="ps-v" id="lvPsEta">—</span>
         <span class="ps-k">状态</span><span class="ps-v amber" id="lvPsSt">—</span>
+        
+        <span class="ps-k" id="lvPsCostK" hidden>累计资费</span><span class="ps-v" id="lvPsCost" hidden>—</span>
         <div class="ps-bar"><i id="lvPsBar"></i></div>
         <div class="ps-acts">
           <button class="mini" id="lvTo4" type="button" hidden>查看成片</button>
@@ -179,6 +181,14 @@
               <div class="arsec-sec">
                 <div class="arsec-h">视频分辨率</div>
                 <div class="arsec-sizes"></div>
+              </div>
+              
+              <div class="arsec-sec">
+                <div class="arsec-h">种子（可选）</div>
+                <div class="arsec-seed">
+                  <input type="number" id="lvSeedInput" class="seed-input" min="0" step="1" placeholder="不了解用法可不填">
+                  <button type="button" id="lvSeedRand" class="seed-rand">随机</button>
+                </div>
               </div>
               <div class="arsec-foot"><button type="button" class="arsec-done">完成</button></div>
             </div>
@@ -252,6 +262,14 @@
   
   document.addEventListener("provider:changed", (e) => {
     const prov = (e.detail) || {};
+    
+    
+    
+    
+    
+    if (prov.videoProvider && prov.videoProvider.winner) {
+      window.__lvVideoProvider = prov.videoProvider.winner;
+    }
     const vidSel = document.getElementById("lvOptModel");
     try {
       
@@ -408,7 +426,11 @@
                                    : await (await fetch("/api/config")).json();
       
       window.__lvProvider = d.provider || {};
-      document.dispatchEvent(new CustomEvent("provider:changed", { detail: d.provider || {} }));
+      
+      window.__lvVideoProvider = (d.videoProvider && d.videoProvider.winner) || window.__lvVideoProvider || "agnes";
+      document.dispatchEvent(new CustomEvent("provider:changed", {
+        detail: Object.assign({}, d.provider || {}, { videoProvider: d.videoProvider || {} }),
+      }));
     } catch (e) {}
   })();
 
@@ -476,6 +498,8 @@
       const r = await fetch(API + "/api/jobs/" + jobId);
       const j = await r.json();
       if (seq !== _openSeq) return;   
+      
+      lv.queueState = j.queue_state || null;
         if (!r.ok) {
         
         err("任务不存在，已重置");
@@ -599,6 +623,8 @@
         renderShots();
         setMsg("生成中，已接着上次进度继续");
       }
+      
+      _pinOptsToSnapshot();
       saveState();
     } catch (e) {
       err("加载任务异常：" + e.message);
@@ -610,6 +636,18 @@
       goStep(canGoStep(_fb) ? _fb : 1);
     }
     loadJobs();
+  }
+
+  
+  function _pinOptsToSnapshot() {
+    if (!lv.jobId || !lv.jobStatus || lv.jobStatus === "draft") return;
+    const s0 = (lv.segs || [])[0];
+    if (!s0 || !lv.opts) return;
+    let changed = false;
+    if (s0.aspect_ratio) { lv.opts.aspect_ratio = s0.aspect_ratio; changed = true; }
+    if (s0.resolution)   { lv.opts.resolution   = s0.resolution;   changed = true; }
+    if (s0.model)        { lv.opts.model        = s0.model;        changed = true; }
+    if (changed && typeof _syncOptsToUI === "function") _syncOptsToUI();
   }
 
   
@@ -836,17 +874,34 @@
       if (stopBtn) {
         stopBtn.addEventListener("click", async (e) => {
           e.stopPropagation();
-          if (!(await lvConfirm({ title: "停止生成", message: `将停止「${jb.name || "此任务"}」的生成，已完成段保留。`, okText: "停止", danger: true }))) return;
+          
+          if (!(await lvConfirm({ title: "停止生成", message: `将停止「${jb.name || "此任务"}」的生成：后续段不再发射，已完成段保留。\n正在生成的这一段无法撤回（上游不支持），会跑完。`, okText: "停止", danger: true }))) return;
           try {
             const r = await fetch(API + `/api/jobs/${jb.job_id}/cancel`, { method: "POST" });
             if (!r.ok) { const j2 = await r.json().catch(() => ({})); err("停止失败：" + (j2.error || "")); return; }
+            const jc = await r.json().catch(() => ({}));
             
             if (Array.isArray(lv.segs) && lv.jobId === jb.job_id) {
               lv.segs = lv.segs.map((s) => s.status === "processing" || s.status === "pending" ? { ...s, status: "cancelled" } : s);
               renderShots();
               _updateProgSum();
             }
-            setMsg("已停止生成");
+            
+            const _rc = jc && jc.remote_cancelled ? Number(jc.remote_cancelled) : 0;
+            const _rf = (jc && Array.isArray(jc.remote_failed)) ? jc.remote_failed : [];
+            const _ru = jc && jc.remote_unsupported ? Number(jc.remote_unsupported) : 0;
+            const _inf = jc && jc.inflight ? Number(jc.inflight) : 0;
+            
+            if (_rc > 0) {
+              setMsg(_inf ? `已停止：远端 ${_rc} 个任务已取消（本地 ${_inf} 段在收尾）` : `已停止：远端 ${_rc} 个任务已取消`);
+            } else if (_rf.length) {
+              err("已停止本地任务，但远端取消未成功：" + (_rf[0].error || "未知原因")
+                  + (_inf ? `（仍有 ${_inf} 段在远端跑，可能继续扣费）` : ""));
+            } else if (_ru > 0 || _inf > 0) {
+              setMsg(`已停止：该上游无取消接口，仍有 ${_inf || _ru} 段会跑完（可能继续计费）`);
+            } else {
+              setMsg("已停止生成");
+            }
             loadJobs();
           } catch (ex) { err("停止异常：" + ex.message); }
         });

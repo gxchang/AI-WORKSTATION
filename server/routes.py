@@ -16,6 +16,11 @@ import server.provider as _provider
 import server.tts_provider as _ttsprov
 import server.tts_models as _ttsmodels
 import server.ark_provider as _arkprov
+import server.runninghub_provider as _rhprov
+from server.video_caps import (
+    video_provider_models as _video_provider_models,
+    video_provider_state as _video_provider_state,
+)
 import server.ms_provider as _msprov
 import server.llm as _llm
 import server.agent_runs as _runst
@@ -52,6 +57,25 @@ from server.core import (
 import uuid, time
 import queue as _queue, threading as _threading
 from longvideo_api._core import _db as _lv_db
+
+@app.errorhandler(Exception)
+def _api_json_error(e):
+    
+    from werkzeug.exceptions import HTTPException
+    import traceback
+    if isinstance(e, HTTPException):
+        if str(request.path).startswith("/api/"):
+            return jsonify({"error": e.description or str(e)}), e.code
+        return e
+    tb = traceback.format_exc()
+    try:
+        with open(os.path.join(_ROOT, "logs", "server_error.log"), "a", encoding="utf-8") as f:
+            f.write("\n=== %s %s ===\n%s\n" % (request.method, request.path, tb))
+    except Exception:
+        pass
+    print(tb)
+    return jsonify({"error": "%s: %s" % (type(e).__name__, e)}), 500
+
 
 @app.route("/<path:_any>", methods=["OPTIONS"])
 def _preflight(_any):
@@ -217,19 +241,16 @@ def api_config():
 
 
 
-    if _arkprov.video_ready():
-        _ark_vm = _arkprov.video_models()
-        _vm_out = list(_ark_vm)
-    else:
-        _ark_vm = []
-        _vm_out = list(_vm)
+
+
+    _vp_st = _video_provider_state()
+    _vm_out, _vp_limits = _video_provider_models()
     _video_limits = dict(MODEL_LIMITS)
-    for _m in _ark_vm:
-        _video_limits[_m] = _arkprov.video_limits(_m)
+    _video_limits.update(_vp_limits)
 
 
 
-    _lv0 = _video_limits.get(_vm[0]) or {}
+    _lv0 = _video_limits.get(_vm_out[0]) or {}
     _lv_sec_bounds = [int(_lv0.get("min_seconds") or 4), int(_lv0.get("max_seconds") or 12)]
 
 
@@ -268,6 +289,13 @@ def api_config():
 
     return jsonify({
         "model": _vm_out[0],
+        "videoProvider": {
+            "winner": _vp_st["winner"],
+            "label": _vp_st["label"],
+            "conflict": _vp_st["conflict"],
+            "note": _vp_st["note"],
+            "providers": _vp_st["providers"],
+        },
         "free": True,
         "hasKey": bool(_cfg_key()),
         "sizes": ["720P", "1080P", "1K", "2K"],
@@ -433,7 +461,9 @@ def _submit_video(data):
     if not model:
         model = (_arkprov.video_models()[0] if _arkprov.video_ready()
                  else (_provider.get("video_models") or ["agnes-video-2.5-flash"])[0])
-    if _arkprov.is_video_model(model):
+    if _rhprov.is_video_model(model):
+        _out = _submit_video_to_runninghub(data)
+    elif _arkprov.is_video_model(model):
         _out = _submit_video_to_ark(data)
     else:
         _out = _submit_video_to_agnes(data)
@@ -511,6 +541,401 @@ def _submit_video_to_ark(data):
     rows.insert(0, record)
     _save_history(rows)
     return {"video_id": video_id, "rid": rid, "raw": body, "upstream": "ark"}, 200
+
+
+
+def _rh_upload_one(path_or_url, kind="image"):
+    
+    import base64 as _b64
+    import requests as _rq
+    src = str(path_or_url or "").strip()
+    if not src:
+        raise RuntimeError("空的素材地址")
+
+
+
+
+
+
+    _MIME_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp",
+                 "image/gif": "gif", "video/mp4": "mp4", "video/quicktime": "mov",
+                 "audio/mpeg": "mp3", "audio/wav": "wav", "audio/x-wav": "wav"}
+    inline = _to_b64_if_local(src)
+    if isinstance(inline, str) and inline.startswith("data:"):
+        head, _, data = inline.partition(",")
+        blob = _b64.b64decode(data)
+        mime = head[5:].split(";")[0].strip() or "application/octet-stream"
+        ext = _MIME_EXT.get(mime) or (mime.split("/")[-1] if "/" in mime else "bin")
+        name = os.path.basename(src.split("?")[0].rstrip("/")) or f"{kind}.{ext}"
+        if "." not in name:
+            name = f"{name}.{ext}"
+    elif src.startswith("http://") or src.startswith("https://"):
+        r = _rq.get(src, timeout=60)
+        r.raise_for_status()
+        blob, name = r.content, os.path.basename(src.split("?")[0]) or f"{kind}.bin"
+    else:
+
+        cand = [src, os.path.join(_ROOT, src.lstrip("/\\"))]
+        p = next((x for x in cand if os.path.exists(x)), None)
+        if not p:
+            raise RuntimeError(f"素材既不是站内文件也不是可下载外链，找不到：{src}")
+        with open(p, "rb") as f:
+            blob = f.read()
+        name = os.path.basename(p)
+    base = str(_rhprov.get("base_url") or _rhprov.BASE_URL).rstrip("/")
+
+
+
+
+    resp = _rq.post(
+        f"{base}/task/openapi/upload",
+        files={"file": (name, blob)},
+        data={"apiKey": _rhprov.api_key(), "fileType": "input"},
+        timeout=(10, 120),
+    )
+    body = {}
+    try:
+        body = resp.json()
+    except Exception:
+        pass
+    if resp.status_code != 200:
+        raise RuntimeError(f"上传素材失败（{resp.status_code}）：{str(body)[:160] or resp.text[:160]}")
+    data = body.get("data") if isinstance(body.get("data"), dict) else body
+    fn = data.get("fileName") or data.get("file_name") or data.get("name")
+    if not fn:
+        raise RuntimeError(f"上传响应缺少 fileName：{str(body)[:160]}")
+    return fn
+
+
+def _rh_upload_materials(data):
+    
+    out = {"images": [], "audios": [], "videos": [], "first_frame": None, "last_frame": None}
+    for u in (data.get("images") or []):
+        if u:
+            out["images"].append(_rh_upload_one(u, "image"))
+    for u in (data.get("audios") or []):
+        if u:
+            out["audios"].append(_rh_upload_one(u, "audio"))
+    for u in (data.get("videos") or []):
+        if u:
+            out["videos"].append(_rh_upload_one(u, "video"))
+    if data.get("first_frame"):
+        out["first_frame"] = _rh_upload_one(data["first_frame"], "image")
+    if data.get("last_frame"):
+        out["last_frame"] = _rh_upload_one(data["last_frame"], "image")
+    return out
+
+
+def _submit_video_to_runninghub(data):
+    
+    if not _rhprov.ready():
+        return {"error": "RunningHub 未启用或未配置 API Key。"
+                         "请到「服务商设置 → RunningHub」打开开关并填入 Key（或 .env 配置 RUNNINGHUB_API_KEY）。"}, 400
+    model = str(data.get("model") or "").strip() or _rhprov.RH_ID
+
+
+    if data.get("dryrun"):
+        r = _rhprov.dry_run({**data, "model": model},
+                            accel=data.get("accel"),
+                            quality=_rh_quality_from(data),
+                            sampler=_rh_sampler_from(data),
+                            instance=data.get("instance"))
+        return ({"dryrun": True, **r}, 200) if r.get("ok") else ({"error": r.get("error")}, 400)
+
+
+    try:
+        file_names = _rh_upload_materials(data)
+    except Exception as e:
+        return {"error": f"上传参考素材到 RunningHub 失败：{e}"}, 400
+
+    _rh_smp = _rh_sampler_from(data)
+    payload, err = _rhprov.build_submission({**data, "model": model},
+                                            file_names=file_names,
+                                            accel=data.get("accel"),
+                                            quality=_rh_quality_from(data),
+                                            sampler=_rh_smp,
+                                            instance=data.get("instance"))
+    if err:
+        return {"error": err}, 400
+
+
+
+
+
+    import re as _re
+    _dropped = []
+    for _attempt in range(8):
+        body, err = _rhprov.submit(payload)
+        if err:
+            return {"error": err}, 502
+        print(f"[runninghub] create 响应：{str(body)[:400]} key={_rhprov.key_fp()}")
+        if not (isinstance(body, dict) and str(body.get("code")) == "803"):
+            break
+        _msg = str(body.get("msg") or "")
+        _mn = _re.search(r"nodeId=(\d+)", _msg)
+        _mf = _re.search(r"fieldName=([A-Za-z0-9_]+)", _msg)
+        if not _mn:
+            break
+        _nid = _mn.group(1)
+        _nodes = payload["nodeInfoList"]
+        if "node_not_found_in_workflow" in _msg:
+            _keep = [x for x in _nodes if x["nodeId"] != _nid]
+        elif _mf:
+            _keep = [x for x in _nodes if not (x["nodeId"] == _nid and x["fieldName"] == _mf.group(1))]
+        else:
+            _keep = [x for x in _nodes if x["nodeId"] != _nid]
+        if len(_keep) == len(_nodes):
+            break
+        print(f"[runninghub] 803：线上工作流不含 节点{_nid}"
+              + (f"/字段{_mf.group(1)}" if _mf and "node_not_found" not in _msg else "")
+              + f" → 已摘掉并重试（剩 {len(_keep)} 个字段）")
+        _dropped.append(f"{_nid}.{_mf.group(1) if _mf else '*'}")
+        payload = dict(payload, nodeInfoList=_keep)
+
+    if isinstance(body, dict) and str(body.get("code")) == "803":
+        return {"error": f"RunningHub 参数不匹配（803）：{str(body.get('msg'))[:200]}"}, 400
+
+    _d = body.get("data") if isinstance(body.get("data"), dict) else body
+    task_id = (_d.get("taskId") or _d.get("task_id") or _d.get("id")
+               or body.get("taskId") or body.get("task_id") or body.get("id"))
+
+
+
+    if task_id is not None:
+        print(f"[runninghub] taskId={task_id!r} type={type(task_id).__name__}")
+        task_id = str(task_id).strip()
+    if not task_id:
+        _m = str(body.get("msg") or "") if isinstance(body, dict) else ""
+        _extra = f"；上游：{_m[:160]}" if _m else ""
+        return {"error": f"RunningHub 响应里没有任务 ID（已收到：{str(body)[:200]}）{_extra}"}, 502
+
+    rid = uuid.uuid4().hex[:12]
+    record = {
+        "id": rid,
+        "video_id": task_id,
+        "upstream": "runninghub",
+        "sessionId": data.get("sessionId"),
+        "model": model,
+        "mode": data.get("mode", "text"),
+        "prompt": str(data.get("prompt") or ""),
+        "params": dict({
+            "seconds": data.get("seconds"),
+            "aspect_ratio": data.get("aspect_ratio"),
+            "size": data.get("size"),
+
+
+            "seed": _rh_smp.get("seed") if _rh_smp.get("seed") is not None else data.get("seed"),
+            "instance": payload.get("instanceType"),
+            "accel": data.get("accel"),
+
+
+
+            "quality_tier": data.get("quality_tier"),
+            "post_sample": data.get("post_sample"),
+            "refine": data.get("refine"),
+            "face": data.get("face"),
+            "selflift": data.get("selflift"),
+            "sampler": _rh_smp,
+        }, **_video_ref_media(data)),
+        "assets": data.get("assets") or [],
+        "created_at": time.time(),
+        "video_url": None,
+        "status": "processing",
+    }
+    rows = _load_history()
+    rows.insert(0, record)
+    _save_history(rows)
+    return {"video_id": task_id, "rid": rid, "raw": body, "upstream": "runninghub"}, 200
+
+
+def _rh_quality_from(data):
+    
+    q = data.get("quality") or {}
+    out = {}
+    if q.get("refine_steps") is not None:
+        out["refine_steps"] = q["refine_steps"]
+    if q.get("face_steps") is not None:
+        out["face_steps"] = q["face_steps"]
+    if q.get("refine_denoise") is not None:
+        out["refine_denoise"] = q["refine_denoise"]
+    if q.get("face_denoise") is not None:
+        out["face_denoise"] = q["face_denoise"]
+    if q.get("face_enabled") is not None:
+        out["face_enabled"] = q["face_enabled"]
+    return out
+
+
+def _rh_sampler_from(data):
+    
+    s = data.get("sampler") or {}
+    out = {}
+    for k in ("steps", "shift_video", "shift_audio", "cfg", "seed", "sampler", "scheduler"):
+        if s.get(k) is not None:
+            out[k] = s[k]
+    if out.get("seed") is None:
+        _top = data.get("seed")
+        if _top is not None and str(_top).strip() != "":
+            out["seed"] = _top
+        else:
+            import random as _rnd
+            out["seed"] = _rnd.randint(1, 2 ** 31 - 1)
+    return out
+
+
+def _rh_video_status(task_id, model_name=""):
+    
+    body, err = _rhprov.poll_status(task_id)
+    if err:
+        print(f"[runninghub] status 失败：{err}")
+        return jsonify({"error": err}), 502
+    st = _rhprov.parse_status(body)
+    print(f"[runninghub] status={st['status']} raw={str(body)[:220]}")
+
+    if st["status"] == "failed":
+
+        outs, _e = _rhprov.fetch_outputs(task_id)
+        print(f"[runninghub] outputs(失败取因) 响应：{str(outs)[:400]}")
+        _u, reason = _rhprov.parse_outputs(outs or {})
+        if reason and reason != "上游未返回产物地址":
+            st["failed_reason"] = reason
+
+
+        _r = st.get("failed_reason") or "上游未返回失败原因"
+
+
+
+
+        if "APIKEY_TASK_STATUS_ERROR" in str(_r):
+            _r = ("RunningHub 拒绝本次任务：API Key 状态/权限异常。请检查："
+                  "① 该 Key 是否为消费级-会员且会员在有效期内（官方要求基础版及以上）；"
+                  "② 运行档位是否超出权益——先切到 Default（24G）再试；"
+                  "③ 若是企业级 Key，确认该工作流是否允许共享实例。"
+                  f"（上游原文：{_r}）")
+        return jsonify({"status": "failed", "video_url": None,
+                        "error": _r, "message": _r, "failed_reason": _r}), 200
+
+    if st["status"] == "done":
+
+        outs, _e = _rhprov.fetch_outputs(task_id)
+        print(f"[runninghub] outputs 响应：{str(outs)[:300]}")
+        url, reason = _rhprov.parse_outputs(outs or {})
+        cost = _rhprov.parse_usage(outs or {})
+        if cost:
+            _u = (_rhprov.limits(model_name or _rhprov.RH_ID) or {}).get("usage") or {}
+            cost["coins_unit"] = _u.get("coins_unit") or ""
+            cost["money_unit"] = _u.get("money_unit") or ""
+
+            if not _u.get("show_in_meta"):
+                cost = None
+        if not url:
+            return jsonify({"status": "failed", "video_url": None,
+                            "error": reason or "任务成功但没有返回成片地址。"}), 200
+        url = _finalize_video_result(task_id, url, model_name or _rhprov.RH_ID, prefix="runninghub")
+        return jsonify({"status": "completed", "video_url": url, "cost": cost}), 200
+
+    return jsonify({"status": "processing", "video_url": None}), 200
+
+
+def _runninghub_cfg_payload():
+    return {
+        "enabled": _rhprov.ready(),
+        "video_enabled": _rhprov.video_enabled(),
+        "video_ready": _rhprov.video_ready(),
+        "hasKey": bool(_rhprov.api_key()),
+        "api_key_masked": _rhprov.mask_key(_rhprov.api_key()),
+        "workflow_id": _rhprov.get("workflow_id") or _rhprov.WORKFLOW_ID,
+        "base_url": _rhprov.get("base_url") or _rhprov.BASE_URL,
+        "models": _rhprov.video_models(),
+        "limits": {m: _rhprov.limits(m) for m in _rhprov.video_models()},
+        "video_provider": _video_provider_state(),
+        "note": "勾选「用作视频服务商」= 视频走 MiniMax H3（方舟视频自动取消，互斥）；取消 = 回 Agnes",
+    }
+
+
+@app.route("/api/runninghub/provider", methods=["GET", "POST"])
+def runninghub_provider_cfg():
+    
+    if request.method == "POST":
+        patch = request.get_json(silent=True) or {}
+        try:
+            _rhprov.save(patch)
+        except Exception as e:
+            return jsonify(error=f"保存失败：{e}"), 500
+        if patch.get("video_enabled"):
+            _arkprov.save({"video_enabled": False})
+        return jsonify(ok=True, **_runninghub_cfg_payload())
+    return jsonify(**_runninghub_cfg_payload())
+
+
+@app.route("/api/runninghub/provider/test", methods=["POST"])
+def runninghub_provider_test():
+    
+    import requests as _rq
+    draft_key = (request.get_json(silent=True) or {}).get("api_key") or ""
+    key = str(draft_key or _rhprov.api_key() or "").strip()
+    if not key:
+        return jsonify(ok=False, error="尚未填写 API Key。"), 400
+    base = str(_rhprov.get("base_url") or _rhprov.BASE_URL).rstrip("/")
+    try:
+
+        resp = _rq.post(f"{base}/task/openapi/create",
+                        json={"apiKey": key, "workflowId": _rhprov.WORKFLOW_ID,
+                              "apiType": _rhprov.API_TYPE, "nodeInfoList": []},
+                        headers={"Content-Type": "application/json"}, timeout=(10, 30))
+    except _rq.RequestException as e:
+        return jsonify(ok=False, error=f"连接失败：{e}"), 502
+    body = {}
+    try:
+        body = resp.json()
+    except Exception:
+        pass
+    txt = str(body)[:200]
+    if resp.status_code in (401, 403) or "apiKey" in txt and "error" in txt.lower():
+        return jsonify(ok=False, error=f"密钥或地址不被接受（{resp.status_code}）：{txt}"), 200
+
+    return jsonify(ok=True, msg=f"密钥有效（上游返回 {resp.status_code}，属预期内的参数校验）"), 200
+
+
+@app.route("/api/runninghub/cancel", methods=["POST"])
+def runninghub_cancel():
+    
+    data = request.get_json(silent=True) or {}
+    tid = str(data.get("task_id") or "").strip()
+    if not tid:
+        return jsonify(ok=False, error="缺少 task_id"), 400
+    ok, err = _rhprov.cancel(tid)
+    if not ok:
+        return jsonify(ok=False, error=err), 502
+    return jsonify(ok=True)
+
+
+@app.route("/api/runninghub/account", methods=["GET"])
+def runninghub_account():
+    
+
+    acc, err = _rhprov.fetch_account(key=(request.args.get("key") or "").strip() or None)
+    if err:
+        return jsonify(ok=False, error=err), 502
+    return jsonify(ok=True, **acc)
+
+
+@app.route("/api/runninghub/workflow_nodes", methods=["GET"])
+def runninghub_workflow_nodes():
+    
+    nodes, err = _rhprov.workflow_nodes(request.args.get("workflow_id"))
+    if err:
+        return jsonify(ok=False, error=err), 502
+    return jsonify(ok=True, count=len(nodes), nodes=nodes)
+
+
+@app.route("/api/runninghub/dryrun", methods=["POST"])
+def runninghub_dryrun():
+    
+    data = request.get_json(silent=True) or {}
+    data = dict(data)
+    data["dryrun"] = True
+    data.setdefault("model", _rhprov.RH_ID)
+    return _submit_video_to_runninghub(data)
 
 
 def _submit_video_to_agnes(data):
@@ -1067,9 +1492,18 @@ def _img_apply_exclusive(chosen):
     return key
 
 
-def _img_provider_now():
+
+
+
+
+
+
+def _video_apply_exclusive(chosen):
     
-    return _img_provider_state()["winner"]
+    key = str(chosen or "").strip().lower()
+    _rhprov.save({"video_enabled": key == "runninghub"})
+    _arkprov.save({"video_enabled": key == "ark"})
+    return key
 
 
 
@@ -3356,6 +3790,10 @@ def api_status():
     if _arkprov.is_video_model(model_name) or str(video_id).startswith("cgt"):
         return _ark_video_status(video_id, model_name)
 
+
+    if _rhprov.is_video_model(model_name) or str(video_id).startswith("rh-"):
+        return _rh_video_status(video_id, model_name)
+
     try:
         resp = _AGNES_SESSION.get(
             _cfg_poll(),
@@ -3831,10 +4269,15 @@ def _rm_tree(path):
 
 @app.route("/api/base_style.css")
 def base_style_css():
+    
     f = os.path.join(_ROOT, "src", "base", "css", "base.css")
     if not os.path.exists(f):
         return jsonify(error="not found"), 404
-    return send_file(f, mimetype="text/css", conditional=True)
+    resp = make_response(send_file(f, mimetype="text/css"))
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 @app.route("/api/base_ui.js")
 def base_ui_js():
@@ -3846,6 +4289,26 @@ def base_ui_js():
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
     return resp
+
+@app.route("/api/videosampler_ui.js")
+def videosampler_ui_js():
+    
+    f = os.path.join(_ROOT, "src", "base", "js", "videosampler.js")
+    if not os.path.exists(f):
+        return jsonify(error="not found"), 404
+    resp = make_response(send_file(f, mimetype="application/javascript"))
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+
+@app.route("/api/runninghub/sample", methods=["POST"])
+def runninghub_sample():
+    
+    return jsonify(error="生成后采样接口待接入：需先由 P1 确认「二次采样 / 脸部修复」在平台侧"
+                         "是否默认执行、能否旁路（docs/runninghub-h3-adapter-spec.md §10-10）。"), 501
+
 
 @app.route("/api/imageedit_ui.js")
 def imageedit_ui_js():
@@ -4586,6 +5049,9 @@ def api_ark_provider_save():
         snap = _arkprov.save(data)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+    if data.get("video_enabled"):
+        _rhprov.save({"video_enabled": False})
+        snap = _arkprov.config_snapshot(masked=True)
     return jsonify({"ok": True, "config": snap})
 
 

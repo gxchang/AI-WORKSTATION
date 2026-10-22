@@ -404,6 +404,122 @@
     });
   }
 
+  
+  
+  function _isH3() { return window.__lvVideoProvider === "runninghub"; }
+  
+  document.addEventListener("provider:changed", () => {
+    _syncH3JobVis();
+    if (_isH3()) _syncH3JobValues();
+    
+    if (Array.isArray(lv.shots) && lv.shots.length) { try { renderShots(); } catch (e) {} }
+  });
+  
+  
+  const _RH_POP = "lv-arres-panel";
+  
+  function _rhTriggerHtml(id, label) {
+    return '<div class="seg" id="' + id + '">'
+      + '<button type="button" class="seg-cur"><span class="seg-tx">' + label + '</span>'
+      + '<span class="seg-ar ic ic-chevron-down"></span></button></div>';
+  }
+
+  
+  function _h3JobState() {
+    return {
+      tier: lv.opts.quality_tier || "hq",
+      instance: lv.opts.instance_tier || "plus",
+      accel: lv.opts.accel === "1",
+      
+      
+      selflift: lv.opts.selflift || {},
+    };
+  }
+  function _h3JobApply(patch) {
+    if (patch.instance != null) lv.opts.instance_tier = patch.instance;
+    if (patch.tier != null) {
+      lv.opts.quality_tier = patch.tier;
+      lv.opts.accel = (patch.tier === "fast") ? "1" : "";
+    } else if (patch.accel != null) {
+      lv.opts.accel = patch.accel ? "1" : "";
+    }
+    
+    if (patch.selflift != null) lv.opts.selflift = patch.selflift;
+    saveDraft();
+  }
+
+  
+  let _paintTier = null, _paintInst = null;
+  function _initH3JobParams() {
+    const bar = $("lvOpts");
+    if (!bar || !window.RhControls || $("lvRhTierSel")) return;
+    const act = $("lvStep2Act");
+    const put = (id, label) => {
+      const box = document.createElement("div");
+      box.innerHTML = _rhTriggerHtml(id, label);
+      const el = box.firstElementChild;
+      bar.insertBefore(el, act || null);
+      return el;
+    };
+    const elTier = put("lvRhTierSel", "质量档");
+    const elInst = put("lvRhInstSel", "运行设备");
+    window.RhControls.setCap(lv.opts.model);
+    
+    _paintTier = window.RhControls.mountTier(elTier, _h3JobState, _h3JobApply,
+                                             { panelId: "lvRhTierPanel", popClass: _RH_POP });
+    _paintInst = window.RhControls.mountInstance(elInst, _h3JobState, _h3JobApply,
+                                                 { popClass: _RH_POP });
+    _syncH3JobVis();
+    if (_isH3()) _syncH3JobValues();
+  }
+  function _syncH3JobVis() {
+    ["lvRhTierSel", "lvRhInstSel"].forEach((id) => {
+      const el = $(id);
+      if (el) el.style.display = _isH3() ? "" : "none";
+    });
+    
+    const _opts = $("lvOpts");
+    const _bar = _opts && _opts.closest(".lv-input-bar");
+    if (_bar) _bar.classList.toggle("h3-wide", _isH3());
+  }
+  function _syncH3JobValues() {
+    if (!_isH3()) return;
+    if (window.RhControls) window.RhControls.setCap(lv.opts.model);   
+    if (_paintTier) _paintTier();
+    if (_paintInst) _paintInst();
+  }
+
+  
+  function _h3SegParamsHtml(s, idx) {
+    if (s.is_continuation) return { html: "" };
+    
+    let h = _rhTriggerHtml("lvRhRefineSel_" + idx, "二次采样");
+    h += _rhTriggerHtml("lvRhFaceSel_" + idx, "脸部修复");
+    return { html: h };
+  }
+  const _paintRefine = {}, _paintFace = {};
+  
+  
+  function _wireH3SegParams(div, s, idx) {
+    if (s.is_continuation || !window.RhControls) return;
+    const RC = window.RhControls;
+    s.post_refine = s.post_refine || {};
+    s.post_face = s.post_face || {};
+    const get = () => ({ refine: s.post_refine || {}, face: s.post_face || {} });
+    const set = (patch) => {
+      if (patch.refine) s.post_refine = patch.refine;
+      if (patch.face) s.post_face = patch.face;
+      saveDraft();
+    };
+    
+    _paintRefine[idx] = RC.mountRefine(div.querySelector("#lvRhRefineSel_" + idx), get, set,
+                                       { panelId: "lvRhRefinePanel_" + idx, popClass: _RH_POP });
+    _paintFace[idx] = RC.mountFace(div.querySelector("#lvRhFaceSel_" + idx), get, set,
+                                   { panelId: "lvRhFacePanel_" + idx, popClass: _RH_POP });
+    if (_paintRefine[idx]) _paintRefine[idx]();
+    if (_paintFace[idx]) _paintFace[idx]();
+  }
+
   function renderAssets() {
     
     if (window.UISeg) window.UISeg.purge("lvK_");
@@ -760,8 +876,37 @@
       if (!isOpen) { _openArResPanel(cur); wrap.classList.add("open"); }
     });
     panel.querySelector(".arsec-done").addEventListener("click", (e) => { e.stopPropagation(); closeAllSeg(); });
+    
+    const seedInp = panel.querySelector("#lvSeedInput");
+    const seedRnd = panel.querySelector("#lvSeedRand");
+    if (seedInp) {
+      seedInp.addEventListener("input", () => {
+        const v = String(seedInp.value || "").trim();
+        lv.opts.seed = v === "" ? null : Math.max(0, parseInt(v, 10) || 0);
+        saveDraft();
+      });
+      seedInp.addEventListener("click", (e) => e.stopPropagation());
+    }
+    if (seedRnd) {
+      seedRnd.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const n = Math.floor(Math.random() * 1e9);
+        lv.opts.seed = n;
+        if (seedInp) seedInp.value = String(n);
+        saveDraft();
+      });
+    }
     _renderArResAspects();
     _renderArResSizes();
+    _syncArResSeed();
+  }
+  
+  function _syncArResSeed() {
+    const p = ARRES && ARRES.panel;
+    const inp = p && p.querySelector("#lvSeedInput");
+    if (!inp) return;
+    const v = (lv.opts && lv.opts.seed);
+    inp.value = (v === null || v === undefined || v === "") ? "" : String(v);
   }
   
   
@@ -797,6 +942,7 @@
     lvSyncLlmModelsFromConfig();                     
     ["lvSegLlm", "lvSegModel"].forEach((id) => _segRefresh(id));
     _initArRes();
+    _initH3JobParams();                              
   }
 
   
@@ -846,14 +992,25 @@
     _segRefresh("lvSegModel");
     _renderArResAspects();            
     _syncArResTx();
+    _syncArResSeed();                 
+    _syncH3JobVis();                  
+    _syncH3JobValues();               
   }
   function _readOptsFromUI() {
+    const _prev = lv.opts || {};
     const _lm = (function(){ const s=document.getElementById("lvLlmModel"); return s?s.value:null; })();
     lv.opts = {
-      llmModel: _lm || (lv.opts && lv.opts.llmModel) || "agnes-2.5-flash",
+      llmModel: _lm || _prev.llmModel || "agnes-2.5-flash",
       model: lvOptModel.value,
       aspect_ratio: lvOptAspect.value,
       resolution: lvOptRes.value,
+      
+      instance_tier: _prev.instance_tier,
+      accel: _prev.accel,
+      quality_tier: _prev.quality_tier,
+      
+      seed: _prev.seed,
+      selflift: _prev.selflift,
     };
   }
   _syncOptsToUI();
@@ -1485,6 +1642,8 @@
   }
 
   function renderShots() {
+    
+    
     lvShots.innerHTML = "";
     
     
@@ -1649,6 +1808,11 @@
         }
         saveDraft();
       });
+      
+      if (_isH3()) {
+        const _h3p = _h3SegParamsHtml(s, idx);
+        if (_h3p.html) head.insertAdjacentHTML("beforeend", _h3p.html);
+      }
       head.appendChild(delBtn);
       div.appendChild(head);
 
@@ -1899,6 +2063,16 @@
       }
 
       lvShots.appendChild(div);
+      
+      if (_isH3()) _wireH3SegParams(div, s, idx);
+      
+      if (lv.shots[idx + 1] && lv.shots[idx + 1].is_continuation) {
+        const link = document.createElement("div");
+        link.className = "lv-shot-link";
+        link.setAttribute("aria-hidden", "true");
+        link.innerHTML = '<span class="lv-shot-snap"><span class="ic ic-link"></span></span>';
+        lvShots.appendChild(link);
+      }
     });
     
     if (_ro && lv.segs.length) _updateShotStatusLines();
@@ -2155,6 +2329,8 @@ async function _pickImageForShot(s) {
             shots: lv.shots,
             assets: _cleanAssets(lv.assets),
             script: lvScript ? lvScript.value : "",
+            
+            gen_params: lv.opts || {},
           }),
         });
         j = await r.json().catch(() => ({}));
@@ -2207,6 +2383,8 @@ async function _pickImageForShot(s) {
       const j = await r.json().catch(() => ({}));
       
       if (gen !== _pollGen || jid !== lv.jobId) return;
+      
+      lv.queueState = j.queue_state || null;
       if (r.status === 404) {
         
         
@@ -2302,7 +2480,11 @@ async function _pickImageForShot(s) {
       eta = (total - done) * 95;
     }
     const js = (job && job.status) || lv.jobStatus;
-    const jobCN = _jobStatusCN(js);   
+    
+    let jobCN = _jobStatusCN(js);   
+    if (js === "processing" && lv.queueState === "queued") jobCN += "·排队中";
+    
+    else if (js === "processing" && lv.queueState === "retry") jobCN += "·排队重试";
     const cls = js === "completed" ? "green" : js === "failed" ? "red" : js === "processing" ? "amber" : "";
     
     box.classList.toggle("st-processing", js === "processing");
@@ -2317,6 +2499,23 @@ async function _pickImageForShot(s) {
     if (el3) { el3.textContent = (eta > 0 && js !== "completed") ? _fmtDur(eta) : "—"; el3.className = "ps-v"; }
     const el4 = $("lvPsSt");
     if (el4) { el4.textContent = jobCN + (failed ? ` · 失败${failed}段` : ""); el4.className = "ps-v " + cls; }
+    
+    const _costK = $("lvPsCostK"), _costV = $("lvPsCost");
+    if (_costV) {
+      let _coins = 0, _money = 0, _unitC = "", _unitM = "", _any = false;
+      (lv.segs || []).forEach((s) => {
+        if (s && s.is_continuation) return;          
+        const c = s && s.cost;
+        if (!c) return;
+        if (c.coins != null && c.coins !== "") { _coins += Number(c.coins) || 0; _unitC = c.coins_unit || _unitC; _any = true; }
+        if (c.money != null && c.money !== "") { _money += Number(c.money) || 0; _unitM = c.money_unit || _unitM; _any = true; }
+      });
+      const _txt = _costText({ coins: _coins, money: _any && _money ? _money : null,
+                               coins_unit: _unitC, money_unit: _unitM });
+      if (_costK) _costK.hidden = !_any;
+      _costV.hidden = !_any;
+      _costV.textContent = _any ? _txt : "—";
+    }
     const bar = $("lvPsBar");
     if (bar) bar.style.width = pct + "%";
     
@@ -2352,6 +2551,55 @@ async function _pickImageForShot(s) {
   }
 
   
+  function _costText(cost) {
+    if (!cost || (cost.coins == null && cost.money == null)) return "";
+    const _ent = !!(window.__rhAccount
+      && String(window.__rhAccount.api_type || "NORMAL").toUpperCase() !== "NORMAL");
+    const cu = cost.coins_unit || "", mu = cost.money_unit || "";
+    const _hasCoins = cost.coins != null && cost.coins !== "";
+    const _hasMoney = cost.money != null && cost.money !== "";
+    if (_ent && _hasMoney) return mu + Number(cost.money).toFixed(2);
+    if (_hasCoins) return String(cost.coins) + " " + cu;
+    if (_hasMoney) return mu + Number(cost.money).toFixed(2);
+    return "";
+  }
+
+  
+  const _TIER_T = { fast: "Lora加速（8步）", hq: "官方（20步）", hq25: "官方（25步）" };
+  const _INST_T = { default: "Default", plus: "Plus", ultra: "Ultra" };
+  const _REFINE_MODE = { refine: "只二采", upscale: "放大+二采", latent_upscale: "只放大" };
+  function _objVal(v) {
+    if (!v) return null;
+    if (typeof v === "object") return v;
+    try { const o = JSON.parse(v); return (o && typeof o === "object") ? o : null; } catch (e) { return null; }
+  }
+  function _h3JobMetaRows() {
+    const gp = lv.opts || {};
+    const rows = [];
+    if (gp.instance_tier) rows.push(["运行档位", _INST_T[String(gp.instance_tier).toLowerCase()] || gp.instance_tier]);
+    if (gp.quality_tier) rows.push(["质量档", _TIER_T[gp.quality_tier] || gp.quality_tier]);
+    if ("accel" in gp) rows.push(["Lora加速", (gp.accel === true || String(gp.accel) === "1") ? "开" : "关"]);
+    return rows;
+  }
+  function _h3SegMetaRows(s) {
+    const rows = [];
+    const rf = _objVal(s.post_refine);
+    if (rf) {
+      if (rf.mode && rf.mode !== "off") {
+        const parts = [_REFINE_MODE[rf.mode] || rf.mode];
+        if (rf.steps != null) parts.push(rf.steps + " 步");
+        if (rf.mp != null) parts.push(rf.mp + " MP");
+        rows.push(["二次采样", parts.join(" · ")]);
+      } else {
+        rows.push(["二次采样", "关"]);
+      }
+    }
+    const fc = _objVal(s.post_face);
+    if (fc) rows.push(["脸部修复", fc.enabled ? "开" : "关"]);
+    return rows;
+  }
+
+  
   function _fillShotStatusLine(st, s) {
     let durTxt = "";
     if (s.started_at) {
@@ -2373,10 +2621,13 @@ async function _pickImageForShot(s) {
       const _tv = Math.round(s.finished_at || s.updated_at || 0);
       
       
+      
+      const _costT = s.is_continuation ? "" : _costText(s.cost);
       html += `<span class="st-thumb" data-seg="${s.seg_no}" title="点击进入④屏预览本段">
                 <img src="${API}/api/jobs/${lv.jobId}/segment/${s.seg_no}/thumb?v=${_tv}" alt="" onerror="this.parentNode.classList.add('noimg');this.remove()">
-              </span>
-              <button class="st-view" type="button" data-seg="${s.seg_no}">预览本段</button>`;
+              </span>`
+              + (_costT ? `<span class="st-cost" title="本次任务消耗（整组续接合计一笔）">本次 ${_esc(_costT)}</span>` : "")
+              + `<button class="st-view" type="button" data-seg="${s.seg_no}">预览本段</button>`;
     }
     st.innerHTML = html;
   }
@@ -2481,11 +2732,15 @@ async function _pickImageForShot(s) {
         saveState();
         _autoJumpOK = true;   
         
-        lv.segs.forEach((s) => { if (s.status === "failed") { s.status = "pending"; s.error = null; } });
+        
+        lv.segs.forEach((s) => {
+          if (s.status === "failed" || s.status === "cancelled") { s.status = "pending"; s.error = null; }
+        });
         _updateShotStatusLines();
         _updateProgSum({ status: "processing" });
         startPoll();
-        setMsg("已重新加入队列生成失败的镜头…");
+        const _rn = Number(j.retry_segments || 0);
+        setMsg(_rn ? `已重新加入队列：${_rn} 段（已完成段保留，不重跑）` : "已重新加入队列生成失败的镜头…");
       } catch (e) {
         err("重试请求异常：" + e.message);
       }
@@ -2508,7 +2763,8 @@ async function _pickImageForShot(s) {
         _updateShotStatusLines();
         _updateProgSum({ status: "processing" });
         startPoll();
-        setMsg("已继续生成剩余镜头…");
+        const _rn2 = Number(j.retry_segments || 0);
+        setMsg(_rn2 ? `已继续生成：${_rn2} 段重新排队（已完成段保留）` : "已继续生成剩余镜头…");
       } catch (e) {
         err("继续请求异常：" + e.message);
       }
@@ -2808,11 +3064,19 @@ async function _pickImageForShot(s) {
     }
     
     if (lvPrevMeta) {
-      const model = (lv.opts && lv.opts.model) || "agnes-video-2.5-flash";
-      const aspect = (lv.opts && lv.opts.aspect_ratio) || "16:9";
-      const res = (lv.opts && lv.opts.resolution) || "720P";
+      const pick = (...vs) => {
+        for (const v of vs) { const t = (v == null ? "" : String(v)).trim(); if (t) return t; }
+        return "—";
+      };
+      const model = pick(s.model, lv.opts && lv.opts.model);
+      const aspect = pick(s.aspect_ratio, lv.opts && lv.opts.aspect_ratio);
+      const res = pick(s.resolution, lv.opts && lv.opts.resolution);
       const fmt = (k, v) => '<span class="m"><b>' + k + '：</b>' + _esc(v) + '</span>';
-      lvPrevMeta.innerHTML = fmt("模型", model) + fmt("画幅", aspect) + fmt("分辨率", res);
+      
+      let _extra = [];
+      try { _extra = _h3JobMetaRows().concat(_h3SegMetaRows(s)); } catch (e) { console.error("[lv][h3meta] err", e); _extra = []; }
+      lvPrevMeta.innerHTML = fmt("模型", model) + fmt("画幅", aspect) + fmt("分辨率", res)
+        + _extra.map((r) => fmt(r[0], r[1])).join("");
     }
     _segEditor.setText(s.prompt || "");
     _updateCC();
