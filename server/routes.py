@@ -317,6 +317,7 @@ def api_config():
 
             "imageProvider": _img_prov,
             "imageProviderLabel": _img_label,
+            "imagePatchMask": _imgen.supports_patch_mask(_img_prov),
 
             "imageProviderSelected": _img_st["selected"],
             "imageProviderConflict": _img_st["conflict"],
@@ -332,7 +333,7 @@ def api_config():
             "imageModelLimits": _img_limits,
 
 
-            "imageSizeOptions": {m: _imgen.size_options_for(m)
+            "imageSizeOptions": {m: _imgen.size_options_for(m, _img_prov)
                                  for m in (_img_models or [])},
 
 
@@ -1263,6 +1264,13 @@ def _submit_image_task(data):
         return {"error": "请填写提示词，或在图生图模式下上传至少一张参考图片。"}, 400
 
 
+
+
+    if len(images) > 1 and not _imgen.supports_patch_mask(_prov):
+        return {"error": f"当前生图服务商（{_imgen.IMAGE_PROVIDER_LABELS.get(_prov, _prov)}）"
+                         f"不支持「原图 + 蒙版」的局部编辑方式。"}, 400
+
+
     if images:
         try:
             from PIL import Image as _PIL
@@ -1334,6 +1342,27 @@ def _submit_image_task(data):
 
 
 
+
+    _up_size = size if (data.get("size") or "").strip() else ""
+    _user_params = {
+        "model": model,
+
+
+        "prompt": (data.get("_user_prompt") or prompt or "").strip(),
+        "seed": data.get("seed"),
+    }
+    if _up_size:
+        _user_params["size"] = _up_size
+    elif data.get("src_size"):
+        _user_params["resolution"] = str(data.get("src_size")).strip()
+    if ratio:
+        _user_params["ratio"] = str(ratio).strip()
+    if images:
+        _user_params["images"] = [images[0]]
+    _user_params = {k: v for k, v in _user_params.items() if v not in (None, "", [])}
+
+
+
     _fp = _img_fingerprint(model, prompt, images, size, ratio,
                            data.get("seed"), data.get("sessionId"), upstream)
     with _IMG_DEDUP_LOCK:
@@ -1345,7 +1374,9 @@ def _submit_image_task(data):
 
         tid, _ = _create_task("image", model, payload, media_hint="image",
                               session_id=data.get("sessionId"), upstream=upstream,
-                              ratio=ratio)
+                              ratio=ratio,
+                              user_params=_user_params,
+                              patch_mask=bool(data.get("_patch_mask")))
         _IMG_SUBMIT_DEDUP[_fp] = (tid, _now)
 
         if len(_IMG_SUBMIT_DEDUP) > 256:
@@ -1481,6 +1512,11 @@ def _img_provider_state():
             print("[img-provider] 互斥收敛失败（忽略）：%s" % e)
         _IMG_EXCLUSIVE_DONE["done"] = True
     return st
+
+
+def _img_provider_now():
+    
+    return _img_provider_state()["winner"]
 
 
 def _img_apply_exclusive(chosen):

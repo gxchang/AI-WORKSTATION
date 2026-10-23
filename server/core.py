@@ -496,7 +496,7 @@ def _save_tasks(data):
 
 
 def _create_task(kind, model, payload, video_id=None, media_hint=None, session_id=None, upstream=None,
-                 ratio=None):
+                 ratio=None, user_params=None, patch_mask=False):
     
 
 
@@ -519,6 +519,17 @@ def _create_task(kind, model, payload, video_id=None, media_hint=None, session_i
 
 
         **({"ratio": str(ratio).strip()} if ratio and str(ratio).strip() else {}),
+
+
+
+
+
+
+        **({"user_params": user_params} if isinstance(user_params, dict) and user_params else {}),
+
+
+
+        **({"patch_mask": True} if patch_mask else {}),
         "created_at": time.time(),
         "updated_at": time.time(),
         "finished_at": None,
@@ -535,6 +546,24 @@ def _create_task(kind, model, payload, video_id=None, media_hint=None, session_i
     return tid, record
 
 
+def _strip_patch_mask(rec):
+    
+    if not rec.get("patch_mask"):
+        return
+    p = rec.get("payload")
+    if not isinstance(p, dict):
+        return
+    try:
+        import server.imgen as _im
+        keys = ["images", _im.media_key(rec.get("upstream"))]
+    except Exception:
+        keys = ["images", "image", "image_url"]
+    for k in dict.fromkeys(keys):
+        imgs = p.get(k)
+        if isinstance(imgs, list) and len(imgs) > 1:
+            p[k] = [imgs[0]]
+
+
 def _update_task(tid, **fields):
     
     _ensure_db()
@@ -549,6 +578,11 @@ def _update_task(tid, **fields):
             rec["updated_at"] = time.time()
             if fields.get("status") in ("completed", "failed"):
                 rec["finished_at"] = rec.get("finished_at") or time.time()
+
+
+
+            if fields.get("status") == "completed":
+                _strip_patch_mask(rec)
             conn.execute("UPDATE tasks SET status=?, data=? WHERE tid=?",
                          (rec.get("status"), json.dumps(rec, ensure_ascii=False), tid))
             conn.commit()
@@ -1120,7 +1154,7 @@ def _progress_one(tid, rec):
 
 
                 _register_generated_images(image_urls, session_id=rec.get("session_id"),
-                                           payload=rec.get("payload"),
+                                           payload=rec.get("user_params") or rec.get("payload"),
                                            ratio=rec.get("ratio"),
                                            upstream=rec.get("upstream"))
             else:

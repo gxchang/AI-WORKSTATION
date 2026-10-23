@@ -108,7 +108,7 @@ FALLBACK_CAPS = {
             "max_ref_images": 14,
             "sequential": False, "seed": False, "png": False,
             "can_t2i": True, "can_edit": True},
-    "ms": {"edge_min": 64, "edge_max": 1664,
+    "ms": {"edge_min": 64, "edge_max": 1664, "size_policy": "fill_max",
            "can_t2i": True, "can_edit": True, "seed": True},
 }
 
@@ -243,14 +243,31 @@ AGNES_ENDPOINT = "/images/generations"
 
 
 IMAGE_PROVIDERS = (
-    {"key": "ark", "label": "豆包 Seedream（火山方舟）"},
-    {"key": "ms", "label": "魔搭 ModelScope"},
-    {"key": "agnes", "label": "Agnes"},
+    {"key": "ark", "label": "豆包 Seedream（火山方舟）", "patch_mask": True},
+    {"key": "ms", "label": "魔搭 ModelScope", "patch_mask": True},
+
+
+
+    {"key": "agnes", "label": "Agnes", "patch_mask": False},
 )
 IMAGE_PROVIDER_ORDER = tuple(p["key"] for p in IMAGE_PROVIDERS)
 IMAGE_PROVIDER_LABELS = {p["key"]: p["label"] for p in IMAGE_PROVIDERS}
 
 IMAGE_PROVIDER_HOSTS = tuple(k for k in IMAGE_PROVIDER_ORDER if k != "agnes")
+_PATCH_MASK_BY_KEY = {p["key"]: bool(p.get("patch_mask")) for p in IMAGE_PROVIDERS}
+
+
+def media_key(prov):
+    
+    for f in (PROVIDERS.get(str(prov or "").lower()) or {}).get("fields") or []:
+        if f.get("kind") == "media":
+            return f.get("to") or "images"
+    return "images"
+
+
+def supports_patch_mask(prov):
+    
+    return _PATCH_MASK_BY_KEY.get(str(prov or "").lower(), False)
 
 
 def resolve_image_provider(enabled, ready):
