@@ -38,6 +38,38 @@ _RATIO_MIN, _RATIO_MAX = 1.0 / 16.0, 16.0
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+MS_TIER_PRESETS_2K = {
+    "1:1":  (2048, 2048),
+    "4:3":  (2400, 1792),
+    "3:4":  (1792, 2400),
+    "3:2":  (2528, 1696),
+    "2:3":  (1696, 2528),
+    "16:9": (2752, 1536),
+    "9:16": (1536, 2752),
+}
+
+
+
+
+
+
+
+
+MS_EDGE_HARD_MAX = 2048
+
 CAPS = {
 
     "doubao-seedream-5-0-pro-260628": {
@@ -88,19 +120,26 @@ CAPS = {
 
 
 
+
+
     "Qwen/Qwen-Image-2.1": {
-        "edge_min": 64, "edge_max": 1664, "size_policy": "fill_max",
+        "edge_min": 64, "edge_max": 1664,
+        "tier_presets": {"2K": MS_TIER_PRESETS_2K},
         "can_t2i": True, "can_edit": True, "seed": True,
         "ratios": ["1:1", "4:3", "3:4", "3:2", "2:3", "16:9", "9:16"],
     },
 
 
     "Qwen/Qwen-Image-Edit-2511": {
-        "edge_min": 64, "edge_max": 1664, "size_policy": "fill_max",
+        "edge_min": 64, "edge_max": 1664,
+        "tier_presets": {"2K": MS_TIER_PRESETS_2K},
         "can_t2i": False, "can_edit": True, "seed": True,
         "ratios": ["1:1", "4:3", "3:4", "3:2", "2:3", "16:9", "9:16"],
     },
 }
+
+
+
 
 
 FALLBACK_CAPS = {
@@ -108,7 +147,8 @@ FALLBACK_CAPS = {
             "max_ref_images": 14,
             "sequential": False, "seed": False, "png": False,
             "can_t2i": True, "can_edit": True},
-    "ms": {"edge_min": 64, "edge_max": 1664, "size_policy": "fill_max",
+    "ms": {"edge_min": 64, "edge_max": 1664,
+           "tier_presets": {"2K": MS_TIER_PRESETS_2K},
            "can_t2i": True, "can_edit": True, "seed": True},
 }
 
@@ -128,9 +168,11 @@ PARAM_CAP = {
 }
 
 
+
+
 NON_PARAM_CAPS = frozenset({"min_px", "max_px", "max_ref_images", "sequential",
                             "png", "can_t2i", "can_edit", "edge_max", "edge_min",
-                            "size_policy"})
+                            "size_policy", "tier_presets"})
 
 
 def param_cap_map():
@@ -143,7 +185,7 @@ def caps_for(model, provider=None):
     m = str(model or "").strip()
     if m in CAPS:
         return dict(CAPS[m])
-    prov = provider or MODEL_PROVIDER.get(m, "ark")
+    prov = provider or ("ms" if m.startswith("Qwen/") else MODEL_PROVIDER.get(m, "ark"))
     return dict(FALLBACK_CAPS.get(prov, FALLBACK_CAPS["ark"]))
 
 
@@ -158,6 +200,7 @@ def can_t2i(model):
 
 def can_edit(model):
     return bool(caps_for(model).get("can_edit"))
+
 
 
 
@@ -223,6 +266,9 @@ PROVIDERS = {
             {"to": "image_url", "kind": "media", "from": ["extra_body.image", "images"]},
             {"to": "size", "kind": "size"},
             {"to": "seed", "kind": "cast_int", "from": "seed", "gate": "seed"},
+
+
+            {"to": "loras", "kind": "loras", "from": "loras"},
         ],
     },
 }
@@ -392,11 +438,31 @@ def _size_by_pixel_range(tier, a, b, caps, src_px=None):
     return f"{w}x{h}"
 
 
-def _size_by_edge_range(tier, a, b, caps, src_px=None):
+def _size_by_edge_range(tier, a, b, caps, src_px=None, ratio=None):
     
     lo = float(caps.get("edge_min") or FALLBACK_CAPS["ms"]["edge_min"])
     hi = float(caps.get("edge_max") or FALLBACK_CAPS["ms"]["edge_max"])
-    if src_px:
+
+    tkey = str(tier or "").upper().strip()
+    presets = (caps.get("tier_presets") or {}).get(tkey) if (tkey and not src_px) else None
+    if presets:
+        hit = presets.get(str(ratio or "").strip())
+        if hit:
+            w, h = int(hit[0]), int(hit[1])
+
+
+
+
+            hard = int(caps.get("edge_hard_max") or MS_EDGE_HARD_MAX)
+            if max(w, h) > hard:
+                if a >= b:
+                    w, h = hard, int(_snap(hard * b / float(a)))
+                else:
+                    w, h = int(_snap(hard * a / float(b))), hard
+            return "%dx%d" % (w, h)
+        hi = max(hi, float(max(max(w, h) for w, h in presets.values())))
+        target = float(PIXEL_TIERS.get(tkey) or PIXEL_TIERS["1K"])
+    elif src_px:
         target = float(src_px)
     elif caps.get("size_policy") == "fill_max":
 
@@ -405,7 +471,7 @@ def _size_by_edge_range(tier, a, b, caps, src_px=None):
 
         target = hi * hi
     else:
-        target = float(PIXEL_TIERS.get(str(tier or "").upper().strip())
+        target = float(PIXEL_TIERS.get(tkey)
                        or PIXEL_TIERS["1K"])
     r = min(_RATIO_MAX, max(_RATIO_MIN, a / b))
 
@@ -437,7 +503,7 @@ def solve_size(tier, ratio, rule, caps, src_px=None, allowed_tiers=None):
         return str(tier or "").upper().strip() or "1K"
     a, b = _ratio_pair(ratio)
     if rule == "edge_range":
-        return _size_by_edge_range(tier, a, b, caps or {}, src_px=src_px)
+        return _size_by_edge_range(tier, a, b, caps or {}, src_px=src_px, ratio=ratio)
     return _size_by_pixel_range(tier, a, b, caps or {}, src_px=src_px)
 
 
@@ -468,6 +534,10 @@ def reachable_tiers(provider, caps_map, ratio="1:1"):
         for c in (caps_map or {}).values():
             if c.get("tiers") and rule == "pixel_range":
                 hit = t in c["tiers"]
+            elif (c.get("tier_presets") or {}).get(t):
+                hit = True
+            elif t == "1K" and c.get("size_policy") == "fill_max":
+                hit = True
             else:
                 hit = tier_fits(t, ratio, rule, c)
             if hit:
@@ -552,6 +622,22 @@ def build_payload(provider, payload, first_model=None):
                 pass
             continue
 
+        if kind == "loras":
+
+
+
+            raw = _pick(p, f.get("from") or to)
+            if raw in (None, "", [], {}):
+                continue
+            try:
+                from server import ms_provider as _msp
+            except ImportError:
+                import ms_provider as _msp
+            out[to] = _msp.loras_to_ms(raw)
+            if out[to] is None:
+                del out[to]
+            continue
+
     return out
 
 
@@ -588,9 +674,16 @@ def size_options_for(model, provider=None):
                 sz = solve_size(None, ratio, rule, c)
                 items.append({"v": "1K", "s": sz})
             else:
-                for t in AGNES_TIERS:
-                    sz = solve_size(t, ratio, rule, c)
-                    items.append({"v": t, "s": sz})
+
+
+
+                items.append({"v": "1K", "s": solve_size("1K", ratio, rule, c)})
+
+
+            _seen = [it["v"] for it in items]
+            for t in (c.get("tier_presets") or {}):
+                if t not in _seen:
+                    items.append({"v": t, "s": solve_size(t, ratio, rule, c)})
         else:
             for t in (c.get("tiers") or list(AGNES_TIERS)):
                 items.append({"v": t, "s": solve_size(t, ratio, rule, c)})

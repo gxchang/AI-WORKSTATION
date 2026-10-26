@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0" data-page-node-id="eHaf3KuCAKCdvpKdQUGKmW" />
 <title>视频生成工作台</title>
 
-<link rel="stylesheet" href="/api/base_style.css?v=20261021d">
+<link rel="stylesheet" href="/api/base_style.css?v=20261026c">
 </head>
 <body data-page-node-id="HsjgyXIv9KRAMASK9LZ2lp">
 
@@ -324,6 +324,17 @@
         </div>
         <div class="prov-fld">
           <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
+            <label for="msLoraRows" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">LoRA 叠加（最多 6 组，多条时权重之和 = 1.0）</label>
+            <span class="prov-hint" id="msLoraSum" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
+          </div>
+          <div id="msLoraRows"></div>
+          <div class="prov-lora-bar">
+            <button type="button" class="prov-test" id="msLoraAdd">+ 添加一组</button>
+          </div>
+          <div class="prov-hint">LoRA 模型 ID 形如 <code>所有者/仓库名</code>；除非你知道怎么使用，否则不用配置。</div>
+        </div>
+        <div class="prov-fld">
+          <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
             <label class="prov-chk" for="provMsChatAssistantEnabled" title="勾选 = 猫灵助手（智能模式）切换到魔搭接口；不勾选 = 回落 Agnes。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
               <input type="checkbox" id="provMsChatAssistantEnabled" style="margin:0">
             </label>
@@ -634,6 +645,12 @@
           <div class="seg-pop sty-grid" data-page-node-id="PPJ7A9Uta8FG7PlYyoz9oy"></div>
         </div>
 
+        
+        <div class="seg bar-lora" id="barLora" hidden>
+          <span class="bar-lora-tx">LoRA叠加</span>
+          <span class="rh-sw" id="barLoraSw" role="switch" aria-checked="false"></span>
+        </div>
+
         <div class="send-row" data-page-node-id="YJ1zJvAmz9ni7dpYEovtuJ">
           <button type="button" class="polish-btn" id="audioPolish" title="智能润色" style="display:none">
             <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">
@@ -754,11 +771,11 @@
   <div class="at-empty" id="agentAtEmpty"><span id="agentAtEmptyText"></span></div>
 </div>
 
-<script src="/api/base_ui.js?v=20261022r"></script>
+<script src="/api/base_ui.js?v=20261026d"></script>
 
   <script src="/api/assets_ui.js?v=20260930g"></script>
   <script src="/api/assets_picker.js?v=20260922b"></script>
-  <script src="/api/imageedit_ui.js?v=20260923o"></script>
+  <script src="/api/imageedit_ui.js?v=20261026c"></script>
   
   <script src="/api/videosampler_ui.js?v=20261019a"></script>
   <link rel="stylesheet" href="/api/canvas_style.css?v=20261007o2">
@@ -766,7 +783,7 @@
   <script src="/api/canvas_manager.js?v=20260930i"></script>
   
   <script src="/api/canvas_timeline.js?v=20261007o2"></script>
-  <script src="/api/canvas_stage.js?v=20261022r"></script>
+  <script src="/api/canvas_stage.js?v=20261025d"></script>
 <script src="/api/tts_upload.js?v=20260918d"></script>
 <script src="/api/audio_ui.js?v=20261003a"></script>
 

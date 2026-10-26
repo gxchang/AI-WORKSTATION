@@ -1,4 +1,5 @@
 
+import json
 import os
 import re
 import sqlite3
@@ -30,8 +31,13 @@ DEFAULTS = {
 
 
 
-
     "image_models": ["Qwen/Qwen-Image-2.1", "Qwen/Qwen-Image-Edit-2511"],
+
+
+
+
+
+    "loras": [],
 
 
 
@@ -65,7 +71,7 @@ DEFAULTS = {
 }
 
 
-WRITABLE_KEYS = ("enabled", "base_url", "api_key", "image_models",
+WRITABLE_KEYS = ("enabled", "base_url", "api_key", "image_models", "loras",
                   "chat_models_assistant", "chat_models_storyboard",
                   "chat_models_assistant_enabled", "chat_models_storyboard_enabled",
                   "chat_caps_assistant_tools", "chat_caps_assistant_vision",
@@ -201,6 +207,63 @@ def _split_models(raw):
 
 
 
+
+
+
+
+LORAS_MAX = 6
+LORAS_SUM_TOL = 1e-6
+
+
+def _norm_loras(raw):
+    
+    items = []
+    if isinstance(raw, dict):
+        items = [{"id": k, "weight": v} for k, v in raw.items()]
+    elif isinstance(raw, (list, tuple)):
+        for it in raw:
+            if isinstance(it, dict):
+                items.append({"id": it.get("id"), "weight": it.get("weight")})
+            elif isinstance(it, str):
+                items.append({"id": it, "weight": None})
+            elif isinstance(it, (list, tuple)) and it:
+                items.append({"id": it[0], "weight": it[1] if len(it) > 1 else None})
+    out = {}
+    for it in items:
+        mid = str(it.get("id") or "").strip()
+        if not mid:
+            continue
+        w = it.get("weight")
+        if w in (None, ""):
+            w = 1.0
+        try:
+            w = float(w)
+        except (TypeError, ValueError):
+            raise ValueError(f"LoRA「{mid}」的权重不是数字：{it.get('weight')!r}")
+        if not (0 < w <= 1):
+            raise ValueError(f"LoRA「{mid}」的权重须在 (0, 1] 内，当前 {w}")
+        out[mid] = w
+    lst = [{"id": k, "weight": v} for k, v in out.items()]
+    if len(lst) > LORAS_MAX:
+        raise ValueError(f"LoRA 最多 {LORAS_MAX}组，当前 {len(lst)} 组")
+    if len(lst) >= 2:
+        s = sum(x["weight"] for x in lst)
+        if abs(s - 1.0) > LORAS_SUM_TOL:
+            raise ValueError(f"多条 LoRA 的权重之和必须等于 1.0，当前 {round(s, 4)}")
+    return lst
+
+
+def loras_to_ms(lst):
+    
+    lst = _norm_loras(lst)
+    if not lst:
+        return None
+    if len(lst) == 1 and abs(lst[0]["weight"] - 1.0) <= LORAS_SUM_TOL:
+        return lst[0]["id"]
+    return {x["id"]: x["weight"] for x in lst}
+
+
+
 def get(key):
     
     if key == "enabled":
@@ -232,6 +295,20 @@ def get(key):
                 return lst
         lst = _split_models(os.environ.get("MS_IMAGE_MODELS"))
         return lst or list(DEFAULTS["image_models"])
+    if key == "loras":
+        v = _meta_get("loras", "")
+        if v:
+            try:
+                return _norm_loras(json.loads(v))
+            except ValueError:
+                return []
+        ev = os.environ.get("MS_LORAS", "")
+        if ev:
+            try:
+                return _norm_loras(json.loads(ev))
+            except ValueError:
+                return []
+        return []
     if key == "chat_models_assistant":
         return _chat_models_for("chat_models_assistant", "MS_CHAT_MODELS_ASSISTANT")
     if key == "chat_models_storyboard":
@@ -348,6 +425,9 @@ def config_snapshot(masked=True):
         "image_models_text": ", ".join(mdl),
 
 
+        "loras": get("loras"),
+
+
         "chat_models_assistant": chat_model("assistant"),
         "chat_models_assistant_text": ", ".join(chat_model("assistant")),
         "chat_models_assistant_enabled": chat_model_enabled("assistant"),
@@ -378,6 +458,7 @@ def _source_map():
     src = {}
     src["enabled"] = "ui" if _meta_get("enabled", "") != "" else ("env" if os.environ.get("MS_IMAGE_ENABLED") else "default")
     for k, env in (("base_url", "MS_BASE_URL"), ("image_models", "MS_IMAGE_MODELS"),
+                   ("loras", "MS_LORAS"),
                    ("chat_models_assistant", "MS_CHAT_MODELS_ASSISTANT"),
                    ("chat_models_storyboard", "MS_CHAT_MODELS_STORYBOARD"),
                    ("chat_models_assistant_enabled", "MS_CHAT_MODELS_ASSISTANT_ENABLED"),
@@ -414,6 +495,14 @@ def save(patch, keep_old_key=True):
             _meta_set("image_models", ", ".join(lst))
         else:
             _meta_del("image_models")
+    if "loras" in patch:
+
+
+        lst = _norm_loras(patch["loras"])
+        if lst:
+            _meta_set("loras", json.dumps(lst, ensure_ascii=False))
+        else:
+            _meta_del("loras")
     if "chat_models_assistant" in patch:
         lst = _split_models(patch["chat_models_assistant"])
         if lst:
@@ -476,6 +565,12 @@ def registered(model):
 def to_ms_payload(p):
     
     first = (image_models() or DEFAULTS["image_models"])[0]
+    p = dict(p or {})
+    if p.get("loras") is None:
+
+
+
+        p["loras"] = [] if p.get("lora") is False else get("loras")
     return _imgen.build_payload("ms", p, first_model=first)
 
 

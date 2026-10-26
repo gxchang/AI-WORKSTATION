@@ -5,6 +5,7 @@ import json
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 import uuid
 import re
 import requests
@@ -531,6 +532,15 @@ def _create_task(kind, model, payload, video_id=None, media_hint=None, session_i
 
         **({"patch_mask": True} if patch_mask else {}),
         "created_at": time.time(),
+
+
+
+
+
+
+
+
+        "submitted_at": None,
         "updated_at": time.time(),
         "finished_at": None,
     }
@@ -638,8 +648,12 @@ def _err_text(resp):
 
 
 
+
+
+
+
+
 _MS_POLL_INTERVAL = 4
-_MS_POLL_TIMEOUT = 420
 
 
 def _ms_create(base, key, label, wire):
@@ -660,12 +674,25 @@ def _ms_create(base, key, label, wire):
             f"{base}/images/generations",
             headers=dict(hdr, **{"X-ModelScope-Async-Mode": "true"}),
             json=wire,
-            timeout=(15, 120),
+            timeout=(15, 3600),
         )
     except requests.RequestException as e:
-        return None, f"网络异常：{type(e).__name__}: {e}"
+
+
+
+
+
+        if isinstance(e, requests.exceptions.ConnectionError):
+            return None, f"[可重试] 连接失败（请求未送达上游）：{type(e).__name__}: {e}"
+        return None, (f"[不可重试] 提交读超时（请求已送达上游，任务可能已创建、可能已计费；"
+                      f"不自动重试，请到魔搭控制台核对后再决定是否重试）：{type(e).__name__}: {e}")
     if r.status_code != 200:
-        return None, f"{label} 拒绝请求（{r.status_code}）：{_err_text(r)}"
+        _t = _err_text(r)
+        if _is_upstream_busy(r.status_code, _t):
+
+
+            return None, f"[上游忙] {label} 暂时无法接受新任务（HTTP {r.status_code}）：{_t}"
+        return None, f"{label} 拒绝请求（{r.status_code}）：{_t}"
     try:
         tid = (r.json() or {}).get("task_id")
     except Exception:
@@ -676,19 +703,41 @@ def _ms_create(base, key, label, wire):
     return tid, None
 
 
-def _ms_wait(base, key, label, task_id):
+def _ms_wait(base, key, label, task_id, local_tid=None):
     
     hs = {"Authorization": f"Bearer {key}", "Content-Type": "application/json",
           "X-ModelScope-Task-Type": "image_generation"}
-    t0 = time.time()
-    while time.time() - t0 < _MS_POLL_TIMEOUT:
-        time.sleep(_MS_POLL_INTERVAL)
+
+
+
+
+
+
+    fail_streak = 0
+    while True:
+        if _is_task_canceled(local_tid):
+            return False, None, "任务已被用户取消（服务端已停止查询）"
+        time.sleep(_MS_POLL_INTERVAL if fail_streak == 0
+                   else min(30, 4 * (2 ** min(fail_streak - 1, 4))))
         try:
-            q = _AGNES_SESSION.get(f"{base}/tasks/{task_id}", headers=hs, timeout=(10, 60))
+            q = _AGNES_SESSION.get(f"{base}/tasks/{task_id}", headers=hs, timeout=(10, 120))
         except requests.RequestException as e:
-            return False, None, f"轮询任务时网络异常：{type(e).__name__}: {e}"
+            fail_streak += 1
+            if fail_streak == 1 or fail_streak % 10 == 0:
+                print(f"[ms-wait] 第 {fail_streak} 次查状态网络异常（任务仍在后台，继续等）："
+                      f"{type(e).__name__}: {e}")
+            continue
+        if q.status_code == 404:
+
+            return False, None, f"{label} 任务在上游不存在（已被清理或失效），无法继续等待"
         if q.status_code != 200:
-            return False, None, f"{label} 轮询失败（{q.status_code}）：{_err_text(q)}"
+
+            fail_streak += 1
+            if fail_streak == 1 or fail_streak % 10 == 0:
+                print(f"[ms-wait] 第 {fail_streak} 次查状态非 200（HTTP {q.status_code}，"
+                      f"任务仍在后台，继续等）")
+            continue
+        fail_streak = 0
         try:
             d = q.json() or {}
         except Exception:
@@ -712,10 +761,112 @@ def _ms_wait(base, key, label, task_id):
         if st == "FAILED":
             return False, None, f"{label} 生成失败：{json.dumps(d, ensure_ascii=False)[:240]}"
 
-    return False, None, f"{label} 生图超时（{_MS_POLL_TIMEOUT} 秒内未完成），请稍后重试"
 
 
-def _submit_image(payload, upstream=None, ms_task_id=None):
+
+
+def _mark_submitted(local_tid):
+    
+    if not local_tid:
+        return
+    try:
+        rec = _get_task(local_tid) or {}
+        if rec.get("submitted_at"):
+            return
+        _update_task(local_tid, submitted_at=time.time())
+    except Exception as e:
+        print(f"[warn] submitted_at 落库失败（不影响提交与生成）：{e}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+_MAX_INFLIGHT_IMG = 4
+_IMG_EXECUTOR = ThreadPoolExecutor(max_workers=_MAX_INFLIGHT_IMG, thread_name_prefix="img-run")
+
+
+
+
+_IMG_INFLIGHT = set()
+
+
+_BUSY_PAT = re.compile(
+    r"concurren|并发|排队|count_limit|too many|rate[ _-]?limit|throttl|capacity|system is busy|"
+    r"busy|繁忙|稍后再试|超出.*限制", re.I)
+
+
+def _is_upstream_busy(status_code=None, text=None):
+    
+    try:
+        if int(status_code) == 429:
+            return True
+    except Exception:
+        pass
+    try:
+        return bool(text) and bool(_BUSY_PAT.search(str(text)))
+    except Exception:
+        return False
+
+
+def _clear_submitted(local_tid):
+    
+    if not local_tid:
+        return
+    try:
+        rec = _get_task(local_tid) or {}
+        if not rec.get("submitted_at"):
+            return
+        _update_task(local_tid, submitted_at=None, busy_at=time.time(),
+                     busy_count=int(rec.get("busy_count") or 0) + 1,
+                     busy_reason=rec.get("busy_reason"))
+    except Exception as e:
+        print(f"[warn] submitted_at 回滚失败（不影响后续重提）：{e}")
+
+
+def _task_stage(rec):
+    
+    if not isinstance(rec, dict):
+        return "queued"
+    if rec.get("submitted_at"):
+        return "generating"
+    st = rec.get("status")
+    if st in ("completed", "failed", "cancelled"):
+        return st
+    if rec.get("busy_at"):
+        return "busy"
+    return "queued"
+
+
+def _queue_depth(tid):
+    
+    try:
+        with _TASKS_LOCK:
+            d = _load_tasks()
+        cur = (d.get("tasks", {}) or {}).get(tid) or {}
+        if cur.get("submitted_at"):
+            return 0
+        pend = sorted(
+            ((r.get("created_at") or 0), t)
+            for t, r in (d.get("tasks", {}) or {}).items()
+            if r.get("status") == "processing" and not r.get("submitted_at")
+        )
+        for i, (_, t) in enumerate(pend):
+            if t == tid:
+                return i
+    except Exception:
+        return 0
+    return 0
+
+
+def _submit_image(payload, upstream=None, ms_task_id=None, on_submitted=None, local_tid=None):
     
     up = str(upstream or "").lower()
     if up == "ark":
@@ -731,26 +882,63 @@ def _submit_image(payload, upstream=None, ms_task_id=None):
 
     if up == "ms":
 
+        if _is_task_canceled(local_tid):
+            return False, None, "任务已被用户取消（服务端未提交）", None
+
         if not ms_task_id:
+
+
+
+            _mark_submitted(local_tid)
             ms_task_id, err = _ms_create(base, key, label, wire)
             if not ms_task_id:
+
+                if err and err.startswith("[上游忙]"):
+                    _clear_submitted(local_tid)
                 return False, None, err, None
-        ok, urls, err = _ms_wait(base, key, label, ms_task_id)
+
+
+
+
+
+            if on_submitted:
+                try:
+                    on_submitted(ms_task_id)
+                except Exception as e:
+                    print(f"[warn] on_submitted 落库失败（task_id 已拿到，轮询继续）：{e}")
+        ok, urls, err = _ms_wait(base, key, label, ms_task_id, local_tid=local_tid)
         return ok, urls, err, ms_task_id
 
 
 
+
+
+    _mark_submitted(local_tid)
     try:
         resp = _NO_RETRY_SESSION.post(
             f"{base}/images/generations",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json=wire,
-            timeout=(15, 300),
+
+
+
+
+            timeout=(15, 3600),
         )
     except requests.RequestException as e:
-        return False, None, f"网络异常：{type(e).__name__}: {e}", None
+
+
+        if isinstance(e, requests.exceptions.ConnectionError):
+            return False, None, f"[可重试] 连接失败（请求未送达上游）：{type(e).__name__}: {e}", None
+        return False, None, (f"[不可重试] 提交读超时（上游可能已在生成，重试会重复计费；"
+                             f"请稍后重试）：{type(e).__name__}: {e}"), None
     if resp.status_code != 200:
         msg = _err_text(resp)
+        if _is_upstream_busy(resp.status_code, msg):
+
+            _clear_submitted(local_tid)
+            return False, None, (f"[上游忙] {label} 暂时无法接受新任务"
+                                 f"（HTTP {resp.status_code}）：{msg}"), None
         if resp.status_code >= 500 and isinstance(msg, str) and "internal" in msg.lower():
             hint = f"{label} 服务返回内部错误"
             imgs = (payload.get("extra_body") or {}).get("image") or payload.get("image")
@@ -788,7 +976,7 @@ def _submit_image(payload, upstream=None, ms_task_id=None):
 
 
 _PERSIST_MAX_BYTES = 64 * 1024 * 1024
-_PERSIST_TIMEOUT = (10, 120)
+_PERSIST_TIMEOUT = (10, 600)
 
 
 def _persist_generated_image(url, prefix="ark"):
@@ -865,7 +1053,7 @@ def _persist_generated_image(url, prefix="ark"):
 
 _VID_EXTS = {"mp4", "mov", "webm", "mkv"}
 _PERSIST_VIDEO_MAX_BYTES = 256 * 1024 * 1024
-_PERSIST_VIDEO_TIMEOUT = (10, 300)
+_PERSIST_VIDEO_TIMEOUT = (10, 600)
 
 
 def _persist_generated_video(url, prefix="vid"):
@@ -990,6 +1178,37 @@ def _register_generated_video(url, payload, session_id=None):
 
 
 
+def _image_dims_of(name):
+    
+    if not name:
+        return None
+    try:
+        from PIL import Image
+        _p = os.path.join(ASSETS_DIR, name)
+        if not os.path.isfile(_p):
+            return None
+        with Image.open(_p) as _im:
+            _w, _h = _im.size
+        if _w and _h:
+            return (int(_w), int(_h))
+    except Exception:
+        return None
+    return None
+
+
+def _stamp_actual_resolution(meta, name):
+    
+    _wh = _image_dims_of(name)
+    if not _wh:
+        return meta
+    _prov = meta if isinstance(meta, dict) else {}
+    _p = dict(_prov.get("payload") or {})
+    _p["resolution"] = "%dx%d" % _wh
+    _out = dict(_prov)
+    _out["payload"] = _p
+    return _out
+
+
 def _register_generated_images(urls, session_id=None, payload=None, ratio=None, upstream=None):
     
     items = []
@@ -1000,11 +1219,13 @@ def _register_generated_images(urls, session_id=None, payload=None, ratio=None, 
         payload=_assets_store.fit_payload(payload, _caps, _imgen.param_cap_map()), ratio=ratio)
     for u in (urls or []):
         n = _assets_store.asset_name_of(u)
-        if n:
-            items.append({"name": n, "url": u, "type": "image",
-                          "origin": _assets_store.ORIGIN_CREATED,
-                          "origin_session": session_id,
-                          "meta": prov})
+        if not n:
+            continue
+        _meta = _stamp_actual_resolution(prov, n)
+        items.append({"name": n, "url": u, "type": "image",
+                      "origin": _assets_store.ORIGIN_CREATED,
+                      "origin_session": session_id,
+                      "meta": _meta})
     return _assets_store.register_many(items) if items else []
 
 
@@ -1022,6 +1243,30 @@ _WORKER_LOCK = threading.Lock()
 
 _TASK_PROGRESS_LOCKS = {}
 _TASK_PROGRESS_LOCKS_LOCK = threading.Lock()
+
+
+
+
+
+
+
+
+
+
+_CANCELED_TASKS = set()
+_CANCELED_LOCK = threading.Lock()
+
+
+def _mark_task_canceled(tid):
+    with _CANCELED_LOCK:
+        _CANCELED_TASKS.add(tid)
+
+
+def _is_task_canceled(tid):
+    if not tid:
+        return False
+    with _CANCELED_LOCK:
+        return tid in _CANCELED_TASKS
 
 
 def _get_task_progress_lock(tid):
@@ -1045,6 +1290,42 @@ def _get_task(tid):
             conn.close()
 
 
+def _run_image_task(tid, rec):
+    
+    try:
+        _progress_one(tid, rec)
+    except Exception as e:
+        print(f"[error] 生图任务 {tid} 推进异常：{type(e).__name__}: {e}")
+
+
+def _requeue_busy():
+    
+    try:
+        with _TASKS_LOCK:
+            d = _load_tasks()
+        tasks = (d.get("tasks") or {})
+        inflight = [t for t, r in tasks.items()
+                    if r.get("kind") == "image" and r.get("status") == "processing"
+                    and r.get("submitted_at")]
+        if inflight:
+            return
+        busy = sorted(
+            ((r.get("busy_at") or 0), t)
+            for t, r in tasks.items()
+            if r.get("kind") == "image" and r.get("status") == "processing"
+            and r.get("busy_at") and not r.get("submitted_at")
+        )
+        if not busy:
+            return
+        _, tid = busy[0]
+        _n = int((tasks.get(tid) or {}).get("busy_count") or 0)
+
+        _update_task(tid, busy_at=None, error=None)
+        print(f"[requeue] 接口已空出位置：任务 {tid} 重新提交（此前被判忙 {_n} 次）")
+    except Exception as e:
+        print(f"[warn] _requeue_busy 异常：{e}")
+
+
 def _task_worker():
     
     while True:
@@ -1054,7 +1335,17 @@ def _task_worker():
                 processing = [(tid, r) for tid, r in d.get("tasks", {}).items()
                               if r.get("status") == "processing"]
             for tid, rec in processing:
-                _progress_one(tid, rec)
+                if rec.get("kind") == "image":
+                    if rec.get("busy_at"):
+                        continue
+                    if tid in _IMG_INFLIGHT:
+                        continue
+                    _IMG_INFLIGHT.add(tid)
+                    _IMG_EXECUTOR.submit(_run_image_task, tid, rec) \
+                        .add_done_callback(lambda _f, _t=tid: _IMG_INFLIGHT.discard(_t))
+                else:
+                    _progress_one(tid, rec)
+            _requeue_busy()
         except Exception as e:
             print(f"[warn] _task_worker tick 异常：{e}")
         time.sleep(5)
@@ -1097,6 +1388,12 @@ def _progress_one(tid, rec):
         elif kind == "image":
 
 
+            if rec.get("busy_at"):
+                return
+
+
+
+
 
 
 
@@ -1104,33 +1401,63 @@ def _progress_one(tid, rec):
 
             ok, image_urls, err_msg, attempts = False, None, None, 0
             ms_tid = rec.get("upstream_task_id") or None
+
+            def _persist_utid(utid, _tid=tid):
+
+
+                _update_task(_tid, upstream_task_id=utid)
+
             for attempt in range(1, 4):
                 attempts = attempt
+
+
+                if _is_task_canceled(tid):
+                    _update_task(tid, status="cancelled", error="用户取消（worker 已停止）",
+                                 finished_at=time.time())
+                    return
                 if not ms_tid:
 
 
 
                     _fresh = _get_task(tid) or {}
                     ms_tid = _fresh.get("upstream_task_id") or ms_tid
-                ok, image_urls, err_msg, ms_tid = _submit_image(payload, rec.get("upstream"), ms_tid)
+                try:
+                    ok, image_urls, err_msg, ms_tid = _submit_image(
+                        payload, rec.get("upstream"), ms_tid,
+                        on_submitted=_persist_utid, local_tid=tid)
+                except Exception as e:
+
+
+
+                    ok, image_urls = False, None
+                    err_msg = f"服务端内部错误（{type(e).__name__}: {e}），已停止重试"
+                    print(f"[error] 任务 {tid} 生图异常：{type(e).__name__}: {e}")
+                    break
                 if ms_tid:
 
                     _update_task(tid, upstream_task_id=ms_tid)
                 if ok:
                     break
 
-                transient = (
-                    err_msg
-                    and ("网络异常" in err_msg
-                         or "Connection" in err_msg
-                         or "RemoteDisconnected" in err_msg
-                         or "Timeout" in err_msg
-                         or "5xx" in err_msg
-                         or "500" in err_msg
-                         or "502" in err_msg
-                         or "503" in err_msg
-                         or "504" in err_msg)
-                )
+                if _is_task_canceled(tid):
+                    _update_task(tid, status="cancelled", error="用户取消（worker 已停止）",
+                                 finished_at=time.time())
+                    return
+
+
+
+
+
+                if err_msg and err_msg.startswith("[上游忙]"):
+                    _update_task(tid, error=None, submitted_at=None,
+                                 busy_at=time.time(), busy_reason=err_msg)
+                    print(f"[busy] 任务 {tid} 被接口拒收，退回排队：{err_msg}")
+                    return
+
+
+
+
+                transient = bool(err_msg) and err_msg.startswith("[可重试]")
                 if not transient:
                     break
                 if attempt < 3:
@@ -1148,7 +1475,9 @@ def _progress_one(tid, rec):
                     media_url=image_urls[0],
                     prompt=(rec.get("payload") or {}).get("prompt", ""),
                     image_urls=image_urls,
-                    started_at=rec.get("created_at"),
+
+
+                    started_at=rec.get("submitted_at") or rec.get("created_at"),
                     finished_at=rec.get("finished_at"),
                 )
 

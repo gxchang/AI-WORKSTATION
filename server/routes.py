@@ -46,11 +46,13 @@ from server.core import (
     MODEL_LIMITS, VID_EXTS,
     _AGNES_SESSION, _BOOT_ID, _DB_LOCK, _ROOT, _TASKS_LOCK,
     _cfg_base, _cfg_key, _cfg_poll, _create_task, _db_conn, _ensure_db,
-    _infer_ext_and_mime, _llm_chat_completions, _load_agent_sessions,
+    _get_task, _infer_ext_and_mime, _llm_chat_completions, _load_agent_sessions,
     _load_history, _load_sessions, _load_tasks, _mark_session_deleted,
-    _persist_generated_video, _public_base, _register_generated_video,
+    _mark_task_canceled, _persist_generated_video, _public_base, _register_generated_video,
     _safe_name, _save_agent_sessions, _save_history, _save_sessions,
     _server_tombstones, _sync_result_to_session, _to_b64_if_local,
+    _task_stage, _queue_depth,
+    _update_task,
     app,
 )
 
@@ -315,6 +317,13 @@ def api_config():
             "assistantLlmModels": _llm.models_for("assistant"),
             "storyboardLlmModels": _llm.models_for("storyboard"),
 
+
+            "assistantReady": bool(_llm.configured("assistant")[0]),
+            "assistantVision": bool(_llm.caps("assistant", "vision")),
+
+
+            "assistantModel": _llm.default_model("assistant"),
+
             "imageProvider": _img_prov,
             "imageProviderLabel": _img_label,
             "imagePatchMask": _imgen.supports_patch_mask(_img_prov),
@@ -343,7 +352,10 @@ def api_config():
                         fallbackReason=_arkprov.active_state()[1]),
             "ms": dict(_img_prov_block("ms"),
                        hasKey=bool(_msprov.get("api_key")),
-                       fallbackReason=_msprov.active_state()[1]),
+                       fallbackReason=_msprov.active_state()[1],
+
+
+                       loras=_msprov.get("loras")),
 
 
 
@@ -495,7 +507,7 @@ def _submit_video_to_ark(data):
             f"{base}/contents/generations/tasks",
             json=payload,
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            timeout=(10, 60),
+            timeout=(10, 3600),
         )
     except requests.RequestException as e:
         return {"error": f"请求方舟 API 失败：{e}"}, 502
@@ -571,7 +583,7 @@ def _rh_upload_one(path_or_url, kind="image"):
         if "." not in name:
             name = f"{name}.{ext}"
     elif src.startswith("http://") or src.startswith("https://"):
-        r = _rq.get(src, timeout=60)
+        r = _rq.get(src, timeout=(10, 600))
         r.raise_for_status()
         blob, name = r.content, os.path.basename(src.split("?")[0]) or f"{kind}.bin"
     else:
@@ -592,7 +604,7 @@ def _rh_upload_one(path_or_url, kind="image"):
         f"{base}/task/openapi/upload",
         files={"file": (name, blob)},
         data={"apiKey": _rhprov.api_key(), "fileType": "input"},
-        timeout=(10, 120),
+        timeout=(10, 600),
     )
     body = {}
     try:
@@ -1045,7 +1057,7 @@ def _submit_video_to_agnes(data):
                     "Content-Type": "application/json",
                 },
                 json=payload,
-                timeout=(10, 300),
+                timeout=(10, 3600),
             )
             break
         except requests.exceptions.ReadTimeout as e:
@@ -1170,10 +1182,12 @@ def _image_pixel_size(url):
 _IMG_SUBMIT_DEDUP = {}
 _IMG_DEDUP_LOCK = _threading.Lock()
 _IMG_DEDUP_WINDOW = 8.0
-def _img_fingerprint(model, prompt, images, size, ratio, seed, session_id, upstream):
+def _img_fingerprint(model, prompt, images, size, ratio, seed, session_id, upstream, lora=None):
     import hashlib as _hl
+
+
     parts = [str(model), str(prompt), str(tuple(images or [])), str(size),
-             str(ratio), str(seed), str(session_id), str(upstream)]
+             str(ratio), str(seed), str(session_id), str(upstream), str(lora)]
     return _hl.md5("|".join(parts).encode("utf-8")).hexdigest()
 
 
@@ -1315,6 +1329,14 @@ def _submit_image_task(data):
             payload["seed"] = int(data["seed"])
         except (TypeError, ValueError):
             pass
+
+
+
+
+
+
+    if use_ms and data.get("lora") is not None:
+        payload["lora"] = bool(data.get("lora"))
     extra = {"response_format": "url"}
     if images:
 
@@ -1359,12 +1381,21 @@ def _submit_image_task(data):
         _user_params["ratio"] = str(ratio).strip()
     if images:
         _user_params["images"] = [images[0]]
+
+
+
+
+
+    _sent_loras = (payload or {}).get("loras") if isinstance(payload, dict) else None
+    if _sent_loras:
+        _user_params["loras"] = _sent_loras
     _user_params = {k: v for k, v in _user_params.items() if v not in (None, "", [])}
 
 
 
     _fp = _img_fingerprint(model, prompt, images, size, ratio,
-                           data.get("seed"), data.get("sessionId"), upstream)
+                           data.get("seed"), data.get("sessionId"), upstream,
+                           data.get("lora"))
     with _IMG_DEDUP_LOCK:
         _now = time.time()
         _dup = _IMG_SUBMIT_DEDUP.get(_fp)
@@ -1393,10 +1424,17 @@ def _submit_image_task(data):
 @app.route("/api/image/size-preview", methods=["GET"])
 def api_image_size_preview():
     from flask import request as _rq
+
+
+
+
+
+
     return jsonify({"size": _imgen.preview_size(
         _rq.args.get("model") or "",
         _rq.args.get("ratio") or "1:1",
         _rq.args.get("src_size") or "",
+        _img_provider_now(),
     )}), 200
 
 
@@ -1743,6 +1781,15 @@ def _agent_tools():
     return tools
 
 
+def _angle_dest(n):
+    
+    if n > 100:
+        return "到后方"
+    if n >= 80:
+        return "到侧面"
+    return ""
+
+
 def _angle_prompt(args):
     
     a = args or {}
@@ -1760,10 +1807,15 @@ def _angle_prompt(args):
 
 
     h = float(h) % 360.0
+
+
+
     if 0 < h <= 180:
-        parts.append("将镜头向右转%d度" % int(round(h)))
+        n = int(round(h))
+        parts.append("将镜头向右转%d度%s" % (n, _angle_dest(n)))
     elif h > 180:
-        parts.append("将镜头向左转%d度" % int(round(360 - h)))
+        n = int(round(360 - h))
+        parts.append("将镜头向左转%d度%s" % (n, _angle_dest(n)))
 
 
     if abs(v) >= 1:
@@ -2295,7 +2347,7 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None)
                 kind=a.get("kind") or "prop",
                 owner=a.get("owner"), posture=a.get("posture"),
                 origin_session=session_id,
-                meta=_prov_meta,
+                meta=_core_mod._stamp_actual_resolution(_prov_meta, nm),
             )
         except Exception as _reg_e:
             print(f"[warn] 素材图登记失败（不影响生成）: {_reg_e}", flush=True)
@@ -3659,7 +3711,34 @@ def api_task(tid):
         "video_id": rec.get("video_id"),
         "created_at": rec.get("created_at"),
         "finished_at": rec.get("finished_at"),
+
+
+
+        "submitted_at": rec.get("submitted_at"),
+        "stage": _task_stage(rec),
+        "queue_pos": _queue_depth(tid),
+
+        "busy_reason": rec.get("busy_reason"),
+        "busy_count": int(rec.get("busy_count") or 0),
     })
+@app.route("/api/task/cancel", methods=["POST"])
+def api_task_cancel():
+    
+    data = request.get_json(silent=True) or {}
+    tid = str(data.get("task_id") or "").strip()
+    if not tid:
+        return jsonify({"error": "缺少 task_id"}), 400
+    rec = _get_task(tid)
+    if not rec:
+        return jsonify({"error": f"未找到任务 {tid}"}), 404
+    st = rec.get("status")
+    if st in ("completed", "failed"):
+        return jsonify({"ok": True, "status": st, "note": "任务已终结，无需取消"})
+    _mark_task_canceled(tid)
+    _update_task(tid, status="cancelled",
+                 error="用户取消（服务端已收到，worker 不再继续）",
+                 finished_at=time.time())
+    return jsonify({"ok": True, "status": "cancelled"})
 @app.route("/api/tasks")
 def api_tasks():
     
@@ -3675,6 +3754,10 @@ def api_tasks():
             "video_id": rec.get("video_id"),
             "created_at": rec.get("created_at"),
             "finished_at": rec.get("finished_at"),
+
+            "submitted_at": rec.get("submitted_at"),
+            "stage": _task_stage(rec),
+            "busy_count": int(rec.get("busy_count") or 0),
             "has_result": bool(rec.get("video_url") or rec.get("image_urls")),
         })
 
@@ -4192,7 +4275,7 @@ def api_download():
     r = None
     for _attempt in range(3):
         try:
-            r = _AGNES_SESSION.get(url, stream=True, timeout=120)
+            r = _AGNES_SESSION.get(url, stream=True, timeout=(10, 600))
             break
         except Exception as e:
             last_err = e

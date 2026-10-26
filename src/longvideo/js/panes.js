@@ -1494,6 +1494,73 @@
     sel.removeAllRanges(); sel.addRange(r);
     return true;
   }
+  
+  function _sweepAssetTags(editor, host) {
+    if (editor.textContent.indexOf("<") < 0) return;
+    const mats = host.getMats() || { imgs: [], auds: [] };
+    const TAG = /<(Picture|Audio|Video)\s+(\d+)>/gi;
+    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, null);
+    const texts = []; let n;
+    while ((n = walker.nextNode())) { TAG.lastIndex = 0; if (TAG.test(n.nodeValue)) texts.push(n); }
+    if (!texts.length) return;
+    const sel = window.getSelection();
+    if (!sel) return;
+    texts.forEach(function (node) {
+      let m, hits = []; TAG.lastIndex = 0;
+      while ((m = TAG.exec(node.nodeValue))) hits.push({ i: m.index, len: m[0].length, kind: m[1].toLowerCase(), N: +m[2] });
+      for (let k = hits.length - 1; k >= 0; k--) {   
+        const h = hits[k];
+        if (h.kind === "video") continue;            
+        const list = h.kind === "audio" ? mats.auds : mats.imgs;
+        const info = (list || []).find((x) => x.idx === h.N);
+        if (!info || !info.url) continue;
+        const r = document.createRange();
+        r.setStart(node, h.i); r.setEnd(node, h.i + h.len);
+        sel.removeAllRanges(); sel.addRange(r);      
+        const chip = _makeChipEl(info.kind, info.idx, info.label, info.url);
+        chip._onChange = () => { if (host.onCommit) host.onCommit(_promptToText(editor)); };
+        _insertAtCaret(chip);
+      }
+    });
+    if (host.onCommit) host.onCommit(_promptToText(editor));
+  }
+  
+  function _lvCopyText(s) {
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(s);
+    return new Promise(function (res, rej) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = s;
+        ta.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0";
+        document.body.appendChild(ta); ta.select();
+        const ok = document.execCommand("copy");
+        ta.remove();
+        if (ok) res(); else rej(new Error("copy failed"));
+      } catch (e) { rej(e); }
+    });
+  }
+  
+  function _copyShotPrompt(editor) {
+    const CN = { image: "Picture", audio: "Audio" };
+    let out = "";
+    (function walk(node) {
+      node.childNodes.forEach(function (c) {
+        if (c.nodeType === Node.TEXT_NODE) { out += c.textContent; return; }
+        if (c.nodeType !== Node.ELEMENT_NODE) return;
+        if (c.nodeName === "BR") { out += "\n"; return; }
+        if (c.classList && c.classList.contains("lv-mat")) {
+          const k = c.dataset.kind === "audio" ? "audio" : "image";
+          out += "<" + CN[k] + " " + c.dataset.idx + ">";
+          return;
+        }
+        if (c.classList && c.classList.contains("lv-ph")) return;
+        walk(c);
+      });
+    })(editor);
+    out = out.replace(/图\s*(\d+)/g, function (m0, n1) { return "<Picture " + n1 + ">"; })
+             .replace(/音频\s*(\d+)/g, function (m0, n1) { return "<Audio " + n1 + ">"; });
+    return out.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  }
   function _caretRect() {
     const sel = window.getSelection();
     if (!sel.rangeCount) return null;
@@ -1608,10 +1675,20 @@
     const render = (text, mats) => { editor.innerHTML = _promptToHtml(text || "", mats || host.getMats()); };
     render(host.text || "", host.getMats());
     editor.addEventListener("focus", () => { _mentionCtxHost = host; });
+    let _lvComposing = false;
+    editor.addEventListener("compositionstart", () => { _lvComposing = true; });
+    editor.addEventListener("compositionend", () => {
+      _lvComposing = false;
+      _mentionCtxHost = host;
+      if (host.onCommit) host.onCommit(_promptToText(editor));
+      _detectMention(editor);
+      _sweepAssetTags(editor, host);
+    });
     editor.addEventListener("input", () => {
       _mentionCtxHost = host;
       if (host.onCommit) host.onCommit(_promptToText(editor));
       _detectMention(editor);
+      if (!_lvComposing) _sweepAssetTags(editor, host);
     });
     editor.addEventListener("blur", () => {
       if (host.onCommit) host.onCommit(_promptToText(editor));
@@ -1813,6 +1890,23 @@
         const _h3p = _h3SegParamsHtml(s, idx);
         if (_h3p.html) head.insertAdjacentHTML("beforeend", _h3p.html);
       }
+      
+      const copyBtn = document.createElement("button");
+      copyBtn.className = "lv-shot-copy";
+      copyBtn.innerHTML = '<span class="ic ic-copy" aria-hidden="true"></span>';
+      copyBtn.title = "复制本镜提示词与素材引用";
+      copyBtn.disabled = _ro;
+      copyBtn.addEventListener("click", () => {
+        if (_ro) return;
+        const text = _copyShotPrompt(ed.el);
+        if (!text.trim()) { setMsg("本镜还没有可复制的提示词"); return; }
+        _lvCopyText(text).then(function () {
+          setMsg("已复制本镜提示词与素材引用");
+        }, function () {
+          setMsg("复制失败，请手动选中复制");
+        });
+      });
+      head.appendChild(copyBtn);
       head.appendChild(delBtn);
       div.appendChild(head);
 

@@ -1555,7 +1555,7 @@ def dry_run(data, **kw):
 
 
 
-def submit(payload, timeout=(10, 60)):
+def submit(payload, timeout=(10, 600)):
     
     import requests
 
