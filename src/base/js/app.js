@@ -162,6 +162,7 @@ function esc(s){return(s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":
 const THUMB_STEPS=[128,192,320,640,1280];function snapThumbW(w){const v=parseInt(w,10);if(!isFinite(v)||v<=0)return 320;let best=THUMB_STEPS[0];for(const s of THUMB_STEPS){if(Math.abs(s-v)<Math.abs(best-v))best=s;}
 return best;}
 function thumbUrl(u,w){if(!u||typeof u!=="string")return u||"";if(/[?&]w=\d+/.test(u))return u;if(!/\.(png|jpe?g|webp|gif|bmp)$/i.test(u.split(/[?#]/)[0]))return u;return u+(u.indexOf("?")>=0?"&":"?")+"w="+snapThumbW(w);}
+function posterUrl(u){if(!u||typeof u!=="string")return"";return"/api/media/poster?u="+encodeURIComponent(u);}
 function modeName(m){return{text:"文生视频",keyframe:"首尾帧控制",reference:"全能参考"}[m]||m;}
 const promptEl=document.getElementById("prompt");function autoGrow(){promptEl.style.height="auto";promptEl.style.height=Math.min(promptEl.scrollHeight,180)+"px";}
 function cleanText(raw){return String(raw==null?"":raw).replace(/\r\n?/g,"\n").replace(/[\u00a0\u3000]/g," ").replace(/[\u200b-\u200d\ufeff]/g,"").replace(/[ \t]+\n/g,"\n").replace(/\n{3,}/g,"\n\n").replace(/[ \t]{2,}/g," ").trim();}
@@ -799,7 +800,7 @@ html+='</div>';return html;}
 function agentAudioCardHtml(a){a=a||{};const txt=String(a.text||"").trim();const meta=[];const _needFill=(!a.modelId&&a.name)?`<span class="audio-model" data-name="${esc(a.name)}"></span>`:"";if(a.modelId)meta.push(a.modelId);if(a.voiceName&&a.voiceName!=="系统默认音色")meta.push("音色："+a.voiceName);if(Array.isArray(a.tags)&&a.tags.length)meta.push(a.tags.join(""));if(typeof a.duration==="number")meta.push(a.duration.toFixed(1)+" 秒");return`<div class="agent-audio-card" style="margin-top:6px">`
 +(txt?`<div style="line-height:1.7;margin-bottom:8px;white-space:pre-wrap;word-break:break-word">${esc(txt)}</div>`:"")
 +((meta.length||_needFill)?`<div class="audio-meta" style="font-size:11.5px;color:var(--mut);margin-bottom:8px;line-height:1.5;word-break:break-all">${_needFill}${esc(meta.join(" · "))}</div>`:"")
-+`<audio controls preload="metadata" src="${esc(a.url||"")}" style="width:100%;max-width:420px;display:block"></audio></div>`;}
++`<audio controls preload="none" src="${esc(a.url||"")}" style="width:100%;max-width:420px;display:block"></audio></div>`;}
 function agentAudioChips(a){const out=[`<span class="mini"><b>音色</b> ${esc(a.voiceName||"默认音色")}</span>`];if(a.modelId)out.push(`<span class="mini"><b>模型</b> ${esc(a.modelId)}</span>`);return out.join("");}
 function agentAudioSessHtml(a){a=a||{};const txt=String(a.spoken||a.text||"").trim();const ref=a.refUrl?`<button type="button" class="ref-sq" data-refurl="${esc(a.refUrl)}" title="播放参考音频">`
 +`<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.2 L18.6 12 L8 18.8 Z"/></svg></button>`:"";const vd=String(a.voiceDesc||"").trim();const vdBlock=vd?`<div class="audio-voice-desc">`

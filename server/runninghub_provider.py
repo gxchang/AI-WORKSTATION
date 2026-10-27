@@ -107,7 +107,7 @@ VIDEO_MODEL_LIMITS = {
 
         "frame_rate": 24,
         "min_seconds": 1,
-        "max_seconds": 15,
+        "max_seconds": 20,
         "seconds_step": 1,
         "platform_seconds_limit_unknown": True,
 
@@ -310,7 +310,7 @@ VIDEO_MODEL_LIMITS = {
 
 _FALLBACK_LIMITS = {
     "label": "", "sizes": ["480p"],
-    "min_seconds": 1, "max_seconds": 15,
+    "min_seconds": 1, "max_seconds": 20,
     "max_images": 9, "max_audios": 3, "max_videos": 3, "allow_video": True,
     "submit_gap_base": 5,
     "note": "未识别的 RunningHub H3 变体：口径按 H3 已登记表取（不发明数字）",
@@ -1372,18 +1372,14 @@ def parse_status(body):
 
 def parse_usage(body):
     
-    items = []
-    if isinstance(body, list):
-        items = body
-    elif isinstance(body, dict):
-        data = body.get("data")
-        items = data if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
-    for it in items:
+    def _from_node(it):
         if not isinstance(it, dict):
-            continue
-        coins = it.get("consumeCoins")
-        secs = it.get("taskCostTime")
-        money = it.get("consumeMoney")
+            return None
+
+        node = it.get("output") if isinstance(it.get("output"), dict) else it
+        coins = node.get("consumeCoins")
+        secs = node.get("taskCostTime")
+        money = node.get("consumeMoney")
         if coins not in (None, "", "0") or secs not in (None, ""):
             try:
                 return {"coins": int(float(coins)) if coins not in (None, "") else None,
@@ -1391,6 +1387,22 @@ def parse_usage(body):
                         "money": money}
             except (TypeError, ValueError):
                 return {"coins": coins, "seconds": secs, "money": money}
+        return None
+    items = []
+    if isinstance(body, list):
+        items = body
+    elif isinstance(body, dict):
+        data = body.get("data")
+        items = data if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
+    for it in items:
+        c = _from_node(it)
+        if c:
+            return c
+
+    if isinstance(body, dict):
+        c = _from_node(body)
+        if c:
+            return c
     return None
 
 

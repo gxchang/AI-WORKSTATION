@@ -13,6 +13,7 @@ from flask import Blueprint, jsonify, request
 import media_gc as _mgc
 
 import thumbs as _thumbs
+import media_tools as _mt
 
 
 
@@ -131,7 +132,7 @@ def ensure_assets_table(con):
     for col, decl in (("posture", "TEXT"), ("job_id", "TEXT"), ("appearance", "TEXT"),
                       ("subject_id", "INTEGER"), ("origin", "TEXT"),
                       ("origin_session", "TEXT"), ("updated_at", "REAL"),
-                      ("meta", "TEXT")):
+                      ("meta", "TEXT"), ("duration", "REAL")):
         try:
             con.execute("ALTER TABLE %s ADD COLUMN %s %s" % (T_ASSETS, col, decl))
         except sqlite3.OperationalError:
@@ -172,6 +173,73 @@ def _safe(filename: str) -> str:
     keep = [c for c in base if c.isalnum() or c in "._-"]
     s = "".join(keep) or "file"
     return s[:120]
+
+
+def lv_job_disk_path(url):
+    
+    u = (url or "").strip()
+    if not u.startswith("/api/jobs/"):
+        return None
+    parts = [x for x in u[len("/api/jobs/"):].split("?")[0].split("/") if x]
+    if not parts:
+        return None
+    job = parts[0]
+    if not re.fullmatch(r"[0-9A-Za-z_]+", job):
+        return None
+    if len(parts) == 3 and parts[1] == "segment" and re.fullmatch(r"\d{1,3}\.mp4", parts[2]):
+        return os.path.join(_LV_JOBS_DIR, job, "seg_%02d.mp4" % int(parts[2][:-4]))
+
+    if (len(parts) == 5 and parts[1] == "segment" and parts[3] == "v"
+            and re.fullmatch(r"\d{1,3}", parts[2]) and re.fullmatch(r"\d{1,3}\.mp4", parts[4])):
+        return os.path.join(_LV_JOBS_DIR, job,
+                            "seg_%02d_v%d.mp4" % (int(parts[2]), int(parts[4][:-4])))
+    if len(parts) == 2 and parts[1] == "final.mp4":
+        return os.path.join(_LV_JOBS_DIR, job, "final.mp4")
+    return None
+
+
+def _local_of_url(url):
+    
+    if not url:
+        return None
+    u = str(url).split("?")[0].split("#")[0]
+    if u.startswith("/assets/"):
+        return os.path.join(ASSETS_DIR, os.path.basename(u))
+    if u.startswith("/api/tts/file/"):
+        return os.path.join(_ROOT, "storage", "tts_out", os.path.basename(u))
+    lv = lv_job_disk_path(u)
+    if lv:
+        return lv
+    return None
+
+
+def _probe_duration(path):
+    
+    try:
+        fp = _mt.ffprobe()
+        if not fp or not os.path.exists(path):
+            return 0.0
+        p = path
+        if os.name == "nt" and not str(p).isascii():
+            try:
+                import ctypes
+                buf = ctypes.create_unicode_buffer(1024)
+                n = ctypes.windll.kernel32.GetShortPathNameW(str(p), buf, 1024)
+                if n:
+                    p = buf.value
+            except Exception:
+                pass
+        import subprocess as _sp
+        r = _sp.run([fp, "-v", "error", "-show_entries", "format=duration",
+                     "-of", "default=nw=1:nk=1", p],
+                    stdout=_sp.PIPE, stderr=_sp.PIPE, timeout=60)
+        v = (r.stdout or b"").decode("utf-8", "ignore").strip()
+        try:
+            return float(v) if v else 0.0
+        except Exception:
+            return 0.0
+    except Exception:
+        return 0.0
 
 
 def asset_name_of(url):
@@ -258,7 +326,8 @@ def build_provenance(payload=None, model=None, ratio=None):
 
 
 def register(name, url, type, origin, kind=None, label=None, owner=None, posture=None,
-             subject_id=None, origin_session=None, job_id=None, appearance=None, meta=None):
+             subject_id=None, origin_session=None, job_id=None, appearance=None, meta=None,
+             duration=None):
     
     if not name or not url:
         print("[warn] 资产入库被跳过（缺 name/url）：name=%r url=%r" % (name, url))
@@ -287,6 +356,14 @@ def register(name, url, type, origin, kind=None, label=None, owner=None, posture
             subject_id = sync_subject(con, owner=owner, kind=kind, label=label)
         now = time.time()
 
+
+
+
+        if duration is None and type in ("video", "audio"):
+            _lp = _local_of_url(url)
+            if _lp:
+                duration = _probe_duration(_lp)
+
         _meta = json.dumps(meta, ensure_ascii=False) if isinstance(meta, dict) and meta else None
         row = con.execute("SELECT id FROM %s WHERE name=?" % T_ASSETS, (name,)).fetchone()
         if row:
@@ -304,15 +381,19 @@ def register(name, url, type, origin, kind=None, label=None, owner=None, posture
 
                 sets.append("origin_session=COALESCE(origin_session, ?)")
                 vals.append(origin_session)
+            if duration:
+
+                sets.append("duration=?")
+                vals.append(duration)
             vals.append(name)
             con.execute("UPDATE %s SET %s WHERE name=?" % (T_ASSETS, ", ".join(sets)), vals)
         else:
             con.execute(
                 "INSERT INTO %s(name,url,type,label,kind,owner,posture,created_at,"
-                "job_id,subject_id,origin,origin_session,appearance,updated_at,meta) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)" % T_ASSETS,
+                "job_id,subject_id,origin,origin_session,appearance,updated_at,meta,duration) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)" % T_ASSETS,
                 (name, url, type, label, kind, owner, posture, now,
-                 job_id, subject_id, origin, origin_session, appearance, now, _meta),
+                 job_id, subject_id, origin, origin_session, appearance, now, _meta, duration or None),
             )
         con.commit()
         return name
@@ -390,7 +471,7 @@ _SELECT_ASSET = (
     "       a.posture, a.appearance, a.created_at, a.job_id, "
     "       a.subject_id, s.name AS subject_name, s.kind AS subject_kind, "
     "       COALESCE(NULLIF(a.origin,''), 'uploaded') AS origin, a.origin_session, a.updated_at, "
-    "       a.meta "
+    "       a.meta, a.duration "
     "FROM %s a LEFT JOIN %s s ON s.id = a.subject_id" % (T_ASSETS, T_SUBJECTS)
 )
 
@@ -500,10 +581,12 @@ def batch_upload():
 
             label0 = f.filename.rsplit(".", 1)[0] if "." in f.filename else f.filename
 
+            dur0 = _probe_duration(os.path.join(ASSETS_DIR, name)) if typ == "audio" else 0.0
+
             con.execute(
-                "INSERT OR IGNORE INTO assets(name,url,type,label,created_at,job_id,origin) "
-                "VALUES(?,?,?,?,?,?,?)",
-                (name, url, typ, label0, time.time(), job_id, ORIGIN_UPLOADED),
+                "INSERT OR IGNORE INTO assets(name,url,type,label,created_at,job_id,origin,duration) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (name, url, typ, label0, time.time(), job_id, ORIGIN_UPLOADED, dur0 or None),
             )
             out.append({"name": name, "url": url, "type": typ, "label": label0, "dedup": dedup})
         con.commit()

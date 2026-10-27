@@ -191,6 +191,46 @@ def _resolve_asset_file(name):
     return None
 
 
+@app.route("/api/media/poster")
+def api_media_poster():
+    
+    u = (request.args.get("u") or "").strip()
+    full = _tl_local(u)
+    if not full or not os.path.isfile(full):
+        abort(404)
+
+
+
+    import hashlib as _hl
+    _key = _hl.sha1(os.path.abspath(full).encode("utf-8")).hexdigest()[:16]
+    poster = os.path.join(_thumbs.DIR, _key + ".poster.jpg")
+    try:
+        os.makedirs(_thumbs.DIR, exist_ok=True)
+        if not (os.path.isfile(poster) and os.path.getmtime(poster) >= os.path.getmtime(full)):
+            ff = _mt.ffmpeg()
+            if not ff:
+                abort(503)
+
+
+            tmp = poster + ".tmp%d.jpg" % os.getpid()
+
+
+            r = _tl_run([ff, "-y", "-ss", "0.1", "-i", _tl_ffpath(full),
+                         "-f", "image2", "-update", "1",
+                         "-vf", "scale=320:-1", "-frames:v", "1", "-q:v", "3", tmp], timeout=60)
+            if r.returncode != 0 or not os.path.isfile(tmp):
+                try:
+                    if os.path.isfile(tmp):
+                        os.remove(tmp)
+                except Exception:
+                    pass
+                abort(502)
+            os.replace(tmp, poster)
+    except Exception:
+        abort(500)
+    return send_file(poster, mimetype="image/jpeg")
+
+
 def _thumb_or_original(full):
     
     raw = request.args.get("w")
@@ -4246,20 +4286,7 @@ def api_download():
         return send_file(full, mimetype=_mime, as_attachment=True,
                          download_name=os.path.basename(full))
     if not p.scheme and url.startswith("/api/jobs/"):
-        parts = [x for x in url[len("/api/jobs/"):].split("?")[0].split("/") if x]
-        job = parts[0] if parts else ""
-        target = None
-        if not re.fullmatch(r"[0-9A-Za-z_]+", job or ""):
-            return jsonify({"error": "非法的任务标识"}), 400
-        if len(parts) == 3 and parts[1] == "segment" and re.fullmatch(r"\d{1,3}\.mp4", parts[2]):
-            target = os.path.join(_LV_JOBS_DIR, job, "seg_%02d.mp4" % int(parts[2][:-4]))
-
-        elif (len(parts) == 5 and parts[1] == "segment" and parts[3] == "v"
-              and re.fullmatch(r"\d{1,3}", parts[2]) and re.fullmatch(r"\d{1,3}\.mp4", parts[4])):
-            target = os.path.join(_LV_JOBS_DIR, job,
-                                  "seg_%02d_v%d.mp4" % (int(parts[2]), int(parts[4][:-4])))
-        elif len(parts) == 2 and parts[1] == "final.mp4":
-            target = os.path.join(_LV_JOBS_DIR, job, "final.mp4")
+        target = _lv_job_disk_path(url)
         if target is None:
             return jsonify({"error": "不支持的任务产物路径"}), 400
         if not os.path.isfile(target):
@@ -4632,6 +4659,11 @@ def _tl_kind_of(path):
     return "audio"
 
 
+def _lv_job_disk_path(url):
+    
+    return _assets_store.lv_job_disk_path(url)
+
+
 def _tl_local(url):
     
     u = (url or "").strip()
@@ -4641,13 +4673,16 @@ def _tl_local(url):
         name = u[len("/assets/"):]
     elif pb and u.startswith(pb + "/assets/"):
         name = u[len(pb) + len("/assets/"):]
-    if not name:
-        return None
-    try:
-        name = name.split("?")[0]
-    except Exception:
-        pass
-    return _resolve_asset_file(name)
+    if name:
+        try:
+            name = name.split("?")[0]
+        except Exception:
+            pass
+        return _resolve_asset_file(name)
+    lv = _lv_job_disk_path(u)
+    if lv and os.path.isfile(lv):
+        return lv
+    return None
 
 
 def _tl_run(cmd, timeout=300):

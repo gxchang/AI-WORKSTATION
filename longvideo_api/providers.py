@@ -154,12 +154,23 @@ class RhSubmitter(SegmentSubmitter):
                     if not url:
                         url, _reason = _rh.parse_outputs(outs or {})
 
-                    cost = _rh.parse_usage(outs or {})
+
+
+                    cost = _rh.parse_usage(outs or {}) or _rh.parse_usage(body or {})
                     if cost:
                         _u = (_rh.limits(self.model) or {}).get("usage") or {}
                         cost["coins_unit"] = _u.get("coins_unit") or ""
                         cost["money_unit"] = _u.get("money_unit") or ""
                         self.last_cost = cost
+                    else:
+
+
+                        _d = (outs or {}).get("data")
+                        _d0 = _d[0] if isinstance(_d, list) and _d else None
+                        _d0k = list(_d0.keys()) if isinstance(_d0, dict) else str(_d0)[:120]
+                        print(f"[cost][debug] 未取到消耗 video_id={str(video_id)[:16]} "
+                              f"outs_top={list((outs or {}).keys())} data0_keys={_d0k} "
+                              f"status_top={list((body or {}).keys())}", flush=True)
                     return ("completed" if url else "failed"), (url or "")
             time.sleep(8)
         return "processing", ""
