@@ -5055,9 +5055,15 @@ def api_media_concat():
                 pass
             return jsonify(error="成片合成失败：" + (r.stderr.decode("utf-8", "ignore")[-300:] or "未知错误")), 500
         url = f"{_public_base()}/assets/{out_name}"
+
+
+        _reg_origin = _assets_store.ORIGIN_UPLOADED if data.get("origin") == _assets_store.ORIGIN_UPLOADED \
+            else _assets_store.ORIGIN_CREATED
+        _reg_label = (os.path.splitext(os.path.basename(out_name))[0] or None) \
+            if _reg_origin == _assets_store.ORIGIN_UPLOADED else "时间线成片"
         try:
             _assets_store.register(name=out_name, url=url, type=kind_out,
-                                   origin=_assets_store.ORIGIN_CREATED, label="时间线成片")
+                                   origin=_reg_origin, label=_reg_label)
         except Exception as e:
             print("[WARN] 时间线成片入库失败（不影响成片）:", e, flush=True)
         return jsonify({"url": url, "name": out_name, "kind": kind_out})
@@ -5066,6 +5072,72 @@ def api_media_concat():
             _shutil.rmtree(work, ignore_errors=True)
         except Exception:
             pass
+
+
+@app.route("/api/media/trim_range", methods=["POST"])
+def api_media_trim_range():
+    
+    data = request.get_json(silent=True) or {}
+    url = (data.get("url") or "").strip()
+    if not url:
+        return jsonify(error="缺少 url"), 400
+    full = _tl_local(url)
+    if not full or not os.path.exists(full):
+        return jsonify(error="找不到原始视频文件（需为站内 /assets/ 资源）"), 422
+    try:
+        start = float(data.get("start") or 0)
+        end = float(data.get("end") or 0)
+    except Exception:
+        return jsonify(error="start/end 不是合法数字"), 400
+    dur0, iw, ih, _ha = _tl_probe_av(full)
+    if dur0 <= 0:
+        return jsonify(error="无法读取原片时长"), 422
+    if start < 0 or end <= start:
+        return jsonify(error="起止区间非法"), 400
+    if end > dur0 + 0.05:
+        end = dur0
+    if end - start < 0.05:
+        return jsonify(error="选区过短"), 400
+
+    ff = _mt.ffmpeg()
+    if not ff:
+        return jsonify(error="未找到 ffmpeg"), 503
+    venc = _tl_pick_venc()
+    if not venc:
+        return jsonify(error="当前 ffmpeg 没有可用的视频编码器"), 503
+
+    short = uuid.uuid4().hex[:10]
+    out_name = f"tlr_{short}.mp4"
+    final = os.path.join(ASSETS_DIR, out_name)
+    src = _tl_ffpath(full)
+
+
+
+    cmd = [ff, "-y", "-ss", f"{start:.3f}", "-i", src,
+           "-t", f"{end - start:.3f}",
+           "-c:v", venc, "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart", final]
+    r = _tl_run(cmd, timeout=600)
+    if r.returncode != 0 or not os.path.exists(final) or os.path.getsize(final) <= 0:
+        try:
+            if os.path.exists(final):
+                os.remove(final)
+        except Exception:
+            pass
+        return jsonify(error="截取失败：" + (r.stderr.decode("utf-8", "ignore")[-300:] or "未知错误")), 500
+
+    out_url = f"{_public_base()}/assets/{out_name}"
+
+
+    _reg_origin = _assets_store.ORIGIN_UPLOADED if data.get("origin") == _assets_store.ORIGIN_UPLOADED \
+        else _assets_store.ORIGIN_CREATED
+    _reg_label = (os.path.splitext(os.path.basename(out_name))[0] or None) \
+        if _reg_origin == _assets_store.ORIGIN_UPLOADED else "续拍参考片段"
+    try:
+        _assets_store.register(name=out_name, url=out_url, type="video",
+                               origin=_reg_origin, label=_reg_label)
+    except Exception as e:
+        print("[WARN] 续拍参考片段入库失败（不影响截取）:", e, flush=True)
+    return jsonify({"url": out_url, "name": out_name, "kind": "video"})
 
 
 

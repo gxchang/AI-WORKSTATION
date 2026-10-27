@@ -158,6 +158,7 @@ VIDEO_MODEL_LIMITS = {
 
 
 
+
             "params": [
                 {"key": "scale", "label": "低清倍率", "type": "number",
                  "min": 0.25, "max": 1.0, "step": 0.05, "default": 0.5},
@@ -479,6 +480,17 @@ def build_timeline_data(data, file_names=None):
 
 
 
+    cont_ref = bool(data.get("continue_from_video"))
+    ref_vid_file = ""
+    if cont_ref and src_vids:
+        try:
+            _ki = src_vids.index(data["continue_from_video"])
+            ref_vid_file = vids[_ki] if _ki < len(vids) else (vids[0] if vids else "")
+        except ValueError:
+            ref_vid_file = vids[0] if vids else ""
+
+
+
 
 
 
@@ -520,9 +532,11 @@ def build_timeline_data(data, file_names=None):
             "refs": refs,
             "refAudios": ref_audios,
             "refVideos": ref_videos,
-            "referenceVideo": {"videoFile": "", "fileName": "", "type": "input", "subfolder": ""},
+            "referenceVideo": ({"videoFile": ref_vid_file, "fileName": "", "type": "input", "subfolder": ""}
+                               if (cont_ref and ref_vid_file)
+                               else {"videoFile": "", "fileName": "", "type": "input", "subfolder": ""}),
 
-            "continuousReference": False,
+            "continuousReference": cont_ref,
             "genImage": {"imageFile": "", "fileName": ""},
             "sourceWidth": w, "sourceHeight": h,
             "commonEnabled": True, "commonCollapsed": False,
@@ -540,7 +554,8 @@ def build_timeline_data(data, file_names=None):
             "exportSourceImages": False,
             "exportPreFaceRefine": False,
             "refImageSize": "match",
-            "continuityEnabled": len(segments) > 1,
+
+            "continuityEnabled": (len(segments) > 1) or cont_ref,
             "continuityOverlapFrames": 22,
             "continuityMode": "continue",
             "continuityRedraw": 0.1,
@@ -861,7 +876,7 @@ _WF_TEMPLATE_JSON = r"""
    "transition_step": 6,
    "lowres_scale": 0.5,
    "sampler_mode": "euler",
-   "native_low_carry": true,
+   "native_low_carry": false,
    "bd_grp_selflift_lift": "提升 / 3D",
    "latent_upscale_model": "minimax_h3_latent_upscaler_3d_bf16.safetensors",
    "latent_upsample": "bilinear",
@@ -1061,7 +1076,9 @@ def build_workflow(data, timeline, file_names=None, accel=None, quality=None,
 
 
 
-        i26["native_low_carry"] = True
+
+
+        i26["native_low_carry"] = False
         i26["rho"] = 0
         i26["enable_tiling"] = False
 
