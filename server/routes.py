@@ -1249,15 +1249,13 @@ def _submit_image_task(data):
                    "请在「服务商设置」里补齐其中任意一个（Agnes 页或魔搭页）。")
         return {"error": tip}, 500
 
-    if use_ark:
-        allowed_models = _arkprov.image_models()
-        _caps_of = _arkprov.model_limits
-    elif use_ms:
-        allowed_models = _msprov.image_models()
-        _caps_of = _msprov.model_limits
-    else:
-        allowed_models = _provider.get("image_models") or ["agnes-image-2.1-flash", "agnes-image-2.5-flash"]
-        _caps_of = None
+
+
+
+
+    _src = _IMG_PROV_SRC.get(_prov) or _IMG_PROV_SRC["agnes"]
+    allowed_models = _src["models"]()
+    _caps_of = _src["caps"]
 
     _ref_imgs = [u for u in (data.get("images") or []) if u]
     model = str(data.get("model") or "").strip()
@@ -1320,9 +1318,10 @@ def _submit_image_task(data):
 
 
 
-    if len(images) > 1 and not _imgen.supports_patch_mask(_prov):
-        return {"error": f"当前生图服务商（{_imgen.IMAGE_PROVIDER_LABELS.get(_prov, _prov)}）"
-                         f"不支持「原图 + 蒙版」的局部编辑方式。"}, 400
+
+
+
+
 
 
     if images:
