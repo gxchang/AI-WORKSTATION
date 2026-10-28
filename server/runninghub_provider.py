@@ -224,7 +224,6 @@ VIDEO_MODEL_LIMITS = {
 
 
 
-
             "params": [
                 {"key": "mode", "label": "模式", "type": "enum",
                  "choices": [{"v": "refine", "t": "只二采"},
@@ -237,7 +236,7 @@ VIDEO_MODEL_LIMITS = {
                  "default": "lanczos"},
                 {"key": "mp", "label": "放大目标", "type": "number",
                  "min": 0.5, "max": 2.0, "step": 0.1, "default": 1.0,
-                 "note": "偏离 1.0 会脱离 768p LoRA 训练分辨率"},
+                 "note": "放大目标百万像素(MP)；比例与导演台一采画布一致。例：一采 864×480（16:9）时 1.8MP → 1824×1024。"},
                 {"key": "passes", "label": "精修次数", "type": "number",
                  "min": 1, "max": 3, "step": 1, "default": 1},
                 {"key": "steps", "label": "二采步数", "type": "number",
@@ -756,10 +755,10 @@ _WF_TEMPLATE_JSON = r"""
    "megapixels": 1,
    "width": 768,
    "height": 720,
-   "skip_fl2v": false,
+   "skip_fl2v": true,
    "confirm_first_pass": false,
-   "enable_latent_chunking": 2,
-   "enable_tiling": 128,
+   "enable_latent_chunking": false,
+   "enable_tiling": true,
    "tile_count": 2,
    "tile_overlap": 128,
    "refine_model": [
@@ -930,6 +929,76 @@ def workflow_template():
     return json.loads(_WF_TEMPLATE_JSON)
 
 
+def refine_node_fields(rf, lim):
+    
+    rf = rf or {}
+    _rp = {p["key"]: p for p in (((lim or {}).get("post_refine") or {}).get("params") or [])}
+
+    def _v(k):
+        v = rf.get(k)
+        if v is None or str(v).strip() == "":
+            return (_rp.get(k) or {}).get("default")
+        return v
+
+    _m = str(_v("mode") or "upscale")
+    n18 = {"mode": _m}
+
+    if _m in ("upscale", "latent_upscale"):
+        n18["megapixels"] = float(_v("mp"))
+    n18["passes"] = max(1, int(_v("passes")))
+    _um = _v("upscale_method")
+    if _um:
+        n18["upscale_method"] = str(_um)
+
+
+
+    n18["skip_fl2v"] = (_um != "h3_latent")
+
+    if _m in ("upscale", "latent_upscale"):
+        n18["enable_tiling"] = True
+        if _um == "h3_latent":
+            n18["enable_latent_chunking"] = True
+            n18["latent_upscale_model"] = 0.25
+        else:
+            n18["enable_latent_chunking"] = False
+    else:
+        n18["enable_tiling"] = False
+        n18["enable_latent_chunking"] = False
+
+    n20 = {}
+    if _m in ("refine", "upscale"):
+        n20["steps"] = int(_v("steps"))
+        n20["denoise"] = float(_v("denoise"))
+    return n18, n20
+
+
+def face_node_fields(fc, lim):
+    
+    fc = fc or {}
+    _fp = {p["key"]: p for p in (((lim or {}).get("post_face") or {}).get("params") or [])}
+
+    def _v(k):
+        v = fc.get(k)
+        if v is None or str(v).strip() == "":
+            return (_fp.get(k) or {}).get("default")
+        return v
+
+    out = {}
+    for _k in ("steps", "mask_dilation", "feather"):
+        _val = _v(_k)
+        if _val is not None:
+            out[_k] = int(_val)
+    for _k in ("denoise", "confidence"):
+        _val = _v(_k)
+        if _val is not None:
+            out[_k] = float(_val)
+    for _k in ("select", "paste_region"):
+        _val = _v(_k)
+        if _val is not None:
+            out[_k] = str(_val)
+    return out
+
+
 def build_workflow(data, timeline, file_names=None, accel=None, quality=None,
                    sampler=None, refine=None, face=None):
     
@@ -964,57 +1033,16 @@ def build_workflow(data, timeline, file_names=None, accel=None, quality=None,
     else:
 
 
-
-
-        i18 = inputs(18)
-        _rp = {p["key"]: p for p in (lim.get("post_refine", {}).get("params") or [])}
-
-        def _rpv(k):
-            v = rf.get(k)
-            if v is None or str(v).strip() == "":
-                return (_rp.get(k) or {}).get("default")
-            return v
-
-        _m = str(_rpv("mode") or "upscale")
-        i18["mode"] = _m
-        if _m in ("upscale", "latent_upscale"):
-            i18["megapixels"] = float(_rpv("mp"))
-        i18["passes"] = max(1, int(_rpv("passes")))
-        i18["skip_fl2v"] = True
-        _um = _rpv("upscale_method")
-        if _um:
-            i18["upscale_method"] = str(_um)
-        if _m in ("refine", "upscale"):
-            inputs(20)["steps"] = int(_rpv("steps"))
-            inputs(20)["denoise"] = float(_rpv("denoise"))
+        _n18, _n20 = refine_node_fields(rf, lim)
+        inputs(18).update(_n18)
+        inputs(20).update(_n20)
 
     if not fc.get("enabled"):
         i12.pop("face_refine", None)
     else:
 
 
-
-        i27 = inputs(27)
-        _fp = {p["key"]: p for p in (lim.get("post_face", {}).get("params") or [])}
-
-        def _fpv(k):
-            v = fc.get(k)
-            if v is None or str(v).strip() == "":
-                return (_fp.get(k) or {}).get("default")
-            return v
-
-        for _k in ("steps", "mask_dilation", "feather"):
-            _v = _fpv(_k)
-            if _v is not None:
-                i27[_k] = int(_v)
-        for _k in ("denoise", "confidence"):
-            _v = _fpv(_k)
-            if _v is not None:
-                i27[_k] = float(_v)
-        for _k in ("select", "paste_region"):
-            _v = _fpv(_k)
-            if _v is not None:
-                i27[_k] = str(_v)
+        inputs(27).update(face_node_fields(fc, lim))
 
 
     i12.pop("selflift", None)
@@ -1199,12 +1227,6 @@ def build_node_info(data, timeline, accel=None, quality=None, sampler=None,
         return nodes
     rf = refine or {}
     fc = face or {}
-    rs = int(quality.get("refine_steps") or lim.get("refine_steps_default") or 3)
-    fs = int(quality.get("face_steps") or lim.get("face_steps_default") or 8)
-    rlo, rhi = lim.get("refine_steps_range") or [1, 30]
-    flo, fhi = lim.get("face_steps_range") or [1, 30]
-    rs = max(int(rlo), min(int(rhi), rs))
-    fs = max(int(flo), min(int(fhi), fs))
 
 
 
@@ -1213,38 +1235,17 @@ def build_node_info(data, timeline, accel=None, quality=None, sampler=None,
 
     rf_mode = str(rf.get("mode") or "off")
     if rf_mode in ("refine", "upscale", "latent_upscale"):
-        nodes.append({"nodeId": N_REFINE, "fieldName": "mode", "fieldValue": rf_mode})
 
-        if rf_mode in ("upscale", "latent_upscale"):
-            nodes.append({"nodeId": N_REFINE, "fieldName": "megapixels",
-                          "fieldValue": float(rf.get("mp") or lim.get("refine_megapixels") or 1.0)})
-
-        nodes.append({"nodeId": N_REFINE, "fieldName": "passes",
-                      "fieldValue": max(1, int(rf.get("passes") or 1))})
-
-        nodes.append({"nodeId": N_REFINE, "fieldName": "skip_fl2v", "fieldValue": True})
-
-        if rf_mode in ("refine", "upscale"):
-            nodes += [
-                {"nodeId": "20", "fieldName": "steps",
-                 "fieldValue": int(rf.get("steps") or rs)},
-                {"nodeId": "20", "fieldName": "denoise",
-                 "fieldValue": float(rf.get("denoise") if rf.get("denoise") is not None
-                                     else (quality.get("refine_denoise")
-                                           or lim.get("refine_denoise_default") or 0.25))},
-            ]
+        _n18, _n20 = refine_node_fields(rf, lim)
+        for _k, _v in _n18.items():
+            nodes.append({"nodeId": N_REFINE, "fieldName": _k, "fieldValue": _v})
+        for _k, _v in _n20.items():
+            nodes.append({"nodeId": "20", "fieldName": _k, "fieldValue": _v})
 
     if fc.get("enabled"):
-        nodes += [
-            {"nodeId": N_FACE, "fieldName": "steps",
-             "fieldValue": int(fc.get("steps") or fs)},
-            {"nodeId": N_FACE, "fieldName": "denoise",
-             "fieldValue": float(fc.get("denoise") if fc.get("denoise") is not None
-                                 else (quality.get("face_denoise")
-                                       or lim.get("face_denoise_default") or 0.4))},
 
-            {"nodeId": N_FACE, "fieldName": "paste_region", "fieldValue": "face_only"},
-        ]
+        for _k, _v in face_node_fields(fc, lim).items():
+            nodes.append({"nodeId": N_FACE, "fieldName": _k, "fieldValue": _v})
     return nodes
 
 

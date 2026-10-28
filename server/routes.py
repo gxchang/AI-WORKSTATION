@@ -4438,25 +4438,6 @@ def base_ui_js():
     resp.headers["Expires"] = "0"
     return resp
 
-@app.route("/api/videosampler_ui.js")
-def videosampler_ui_js():
-    
-    f = os.path.join(_ROOT, "src", "base", "js", "videosampler.js")
-    if not os.path.exists(f):
-        return jsonify(error="not found"), 404
-    resp = make_response(send_file(f, mimetype="application/javascript"))
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    resp.headers["Pragma"] = "no-cache"
-    resp.headers["Expires"] = "0"
-    return resp
-
-
-@app.route("/api/runninghub/sample", methods=["POST"])
-def runninghub_sample():
-    
-    return jsonify(error="生成后采样接口待接入：需先由 P1 确认「二次采样 / 脸部修复」在平台侧"
-                         "是否默认执行、能否旁路（docs/runninghub-h3-adapter-spec.md §10-10）。"), 501
-
 
 @app.route("/api/imageedit_ui.js")
 def imageedit_ui_js():
@@ -5173,7 +5154,6 @@ def api_media_trim_range():
     except Exception as e:
         print("[WARN] 续拍参考片段入库失败（不影响截取）:", e, flush=True)
     return jsonify({"url": out_url, "name": out_name, "kind": "video"})
-
 
 
 @app.route("/api/tts_upload.js")
