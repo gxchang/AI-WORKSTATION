@@ -236,7 +236,7 @@ VIDEO_MODEL_LIMITS = {
                  "default": "lanczos"},
                 {"key": "mp", "label": "放大目标", "type": "number",
                  "min": 0.5, "max": 2.0, "step": 0.1, "default": 1.0,
-                 "note": "放大目标百万像素(MP)；比例与导演台一采画布一致。例：一采 864×480（16:9）时 1.8MP → 1824×1024。"},
+                 "note": "例：一采 864×480（16:9）时 1.8MP → 1824×1024，最终结果以实际为准"},
                 {"key": "passes", "label": "精修次数", "type": "number",
                  "min": 1, "max": 3, "step": 1, "default": 1},
                 {"key": "steps", "label": "二采步数", "type": "number",
@@ -746,7 +746,7 @@ _WF_TEMPLATE_JSON = r"""
   "inputs": {
    "mode": "upscale",
    "upscale_method": "lanczos",
-   "latent_upscale_model": 0.25,
+   "latent_upscale_model": "minimax_h3_latent_upscaler_3d_bf16.safetensors",
    "sampler": "euler",
    "passes": 1,
    "seed_mode": "inherit",
@@ -929,7 +929,7 @@ def workflow_template():
     return json.loads(_WF_TEMPLATE_JSON)
 
 
-def refine_node_fields(rf, lim):
+def refine_node_fields(rf, lim, w=None, h=None):
     
     rf = rf or {}
     _rp = {p["key"]: p for p in (((lim or {}).get("post_refine") or {}).get("params") or [])}
@@ -952,18 +952,41 @@ def refine_node_fields(rf, lim):
 
 
 
-    n18["skip_fl2v"] = (_um != "h3_latent")
+
+
+    n18["skip_fl2v"] = True
 
     if _m in ("upscale", "latent_upscale"):
         n18["enable_tiling"] = True
         if _um == "h3_latent":
             n18["enable_latent_chunking"] = True
-            n18["latent_upscale_model"] = 0.25
+
+
+
+
+
+
+
+
+
+
+            _lum = ((lim or {}).get("selflift") or {}).get("latent_upscale_model")
+            n18["latent_upscale_model"] = (_lum or
+                                           "minimax_h3_latent_upscaler_3d_bf16.safetensors")
         else:
             n18["enable_latent_chunking"] = False
     else:
         n18["enable_tiling"] = False
         n18["enable_latent_chunking"] = False
+
+
+
+
+
+
+    if w and h:
+        n18["width"] = int(w)
+        n18["height"] = int(h)
 
     n20 = {}
     if _m in ("refine", "upscale"):
@@ -1033,7 +1056,8 @@ def build_workflow(data, timeline, file_names=None, accel=None, quality=None,
     else:
 
 
-        _n18, _n20 = refine_node_fields(rf, lim)
+        _n18, _n20 = refine_node_fields(rf, lim,
+                                        int(timeline["width"]), int(timeline["height"]))
         inputs(18).update(_n18)
         inputs(20).update(_n20)
 
@@ -1236,7 +1260,7 @@ def build_node_info(data, timeline, accel=None, quality=None, sampler=None,
     rf_mode = str(rf.get("mode") or "off")
     if rf_mode in ("refine", "upscale", "latent_upscale"):
 
-        _n18, _n20 = refine_node_fields(rf, lim)
+        _n18, _n20 = refine_node_fields(rf, lim, w, h)
         for _k, _v in _n18.items():
             nodes.append({"nodeId": N_REFINE, "fieldName": _k, "fieldValue": _v})
         for _k, _v in _n20.items():

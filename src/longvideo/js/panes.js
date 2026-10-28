@@ -549,7 +549,7 @@
         ${f.voiceField}
         ${f.postureField}
         ${_appearanceBlockHtml(a)}
-        <button class="lv-del" type="button" data-name="${a.name}" title="从本任务移除使用；若被别处引用，文件保留">移除</button>`;
+        <button class="lv-del" type="button" data-name="${a.name}" title="从本任务移除；文件保留在资产库，可随时重新引用">移除</button>`;
       card.querySelector(".lv-i-label").addEventListener("input", (e) => { a.label = e.target.value; saveDraft(); });
       
       const _tw = card.querySelector(".lv-th-wave");
@@ -605,26 +605,11 @@
     const names = lv.assets.filter((a) => _selNames.has(a.name)).map((a) => a.name);
     if (!names.length) return;
     
-    
-    const msg = `确定移除选中的 ${names.length} 个素材的使用？若被别处引用，文件仍保留。`;
-    if (!(await lvConfirm({ title: "移除素材", message: msg, okText: "移除" }))) return;
-    setMsg("移除中…");
-    try {
-      const r = await fetch(API + "/api/assets/delete_batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ names: names, from_job: lv.jobId }),
-      });
-      const j = await r.json();
-      if (!r.ok) { err(j.error || "批量删除失败"); return; }
-      
-      const heldMsg = summarizeStillReferenced(j.still_referenced);
-      const failCnt = (j.failed && j.failed.length) || 0;
-      lv.assets = lv.assets.filter((a) => !names.includes(a.name));
-      renderAssets();   
-      if (heldMsg) err(heldMsg.trim());
-      else setMsg(`已移除 ${j.count || names.length} 个素材` + (failCnt ? `，${failCnt} 个失败` : ""));
-    } catch (e) { err("批量移除异常：" + e.message); }
+    const msg = `确定将选中的 ${names.length} 个素材从本任务移除？文件仍保留在资产库，可随时重新引用。`;
+    if (!(await lvConfirm({ title: "从本任务移除", message: msg, okText: "移除" }))) return;
+    lv.assets = lv.assets.filter((a) => !names.includes(a.name));
+    renderAssets();   
+    setMsg(`已从本任务移除 ${names.length} 个素材（文件保留在资产库）`);
   }
 
   $("lvBulkDel").addEventListener("click", deleteSelected);
@@ -641,23 +626,10 @@
   async function deleteAsset(name) {
     const a = lv.assets.find((x) => x.name === name);
     
-    
-    if (!(await lvConfirm({ title: "移除素材", message: "确定移除素材「" + name + "」的使用？若被别处引用，文件仍保留。", okText: "移除" }))) return;
-    setMsg("移除中…");
-    try {
-      const r = await fetch(API + "/api/assets/delete/" + encodeURIComponent(name), {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ from_job: lv.jobId }),
-      });
-      const j = await r.json();
-      if (!r.ok) { err(j.error || "删除失败"); return; }
-      lv.assets = lv.assets.filter((x) => x.name !== name);
-      renderAssets();
-      
-      const held = summarizeStillReferenced({ [name]: j.still_referenced });
-      if (held) err(held.trim()); else setMsg("已移除 " + name);
-    } catch (e) { err("删除异常：" + e.message); }
+    if (!(await lvConfirm({ title: "从本任务移除", message: "将「" + name + "」从本任务素材中移除；文件仍保留在资产库，可随时重新引用。", okText: "移除" }))) return;
+    lv.assets = lv.assets.filter((x) => x.name !== name);
+    renderAssets();   
+    setMsg("已从本任务移除 " + name + "（文件保留在资产库）");
   }
 
   
@@ -1372,6 +1344,14 @@
     if (_mentionPop) _mentionPop.hidden = true;
     _mentionCtx = null;
   }
+  
+  
+  
+  function _assetLabel(name) {
+    if (!name) return name;
+    const a = (lv.assets || []).find((x) => x.name === name || x.label === name);
+    return a ? (a.label || a.name) : name;
+  }
   function _registryImgs() {
     return (lv.assets || []).filter((a) => a.type === "image").map((a) => ({ kind: "image", name: a.name, url: a.url, label: a.label || a.name }));
   }
@@ -1379,8 +1359,8 @@
     return (lv.assets || []).filter((a) => a.type === "audio").map((a) => ({ kind: "audio", name: a.name, url: a.url, label: a.label || a.name }));
   }
   function _matsForShot(s) {
-    const imgs = (s.images || []).map((name, i) => ({ kind: "image", idx: i + 1, name, url: _assetUrl(name, (s.images_urls || [])[i]), label: name }));
-    const auds = (s.audio || []).map((who, i) => ({ kind: "audio", idx: i + 1, name: who, url: _assetUrl(who, (s.audio_urls || [])[i]), label: who }));
+    const imgs = (s.images || []).map((name, i) => ({ kind: "image", idx: i + 1, name, url: _assetUrl(name, (s.images_urls || [])[i]), label: _assetLabel(name) }));
+    const auds = (s.audio || []).map((who, i) => ({ kind: "audio", idx: i + 1, name: who, url: _assetUrl(who, (s.audio_urls || [])[i]), label: _assetLabel(who) }));
     return { imgs, auds };
   }
   function _matsForSeg(seg) {
@@ -1389,8 +1369,8 @@
     const urls = _parseArr(seg.images_urls);
     const imgs = [];
     let seq = 0;
-    keys.forEach((k, i) => { seq++; imgs.push({ kind: "image", idx: seq, name: k, url: _assetUrl(k, urls[i]), label: k }); });
-    const auds = _parseArr(seg.audio).map((who, i) => ({ kind: "audio", idx: i + 1, name: who, url: _assetUrl(who, _parseArr(seg.audio_urls)[i]), label: who }));
+    keys.forEach((k, i) => { seq++; imgs.push({ kind: "image", idx: seq, name: k, url: _assetUrl(k, urls[i]), label: _assetLabel(k) }); });
+    const auds = _parseArr(seg.audio).map((who, i) => ({ kind: "audio", idx: i + 1, name: who, url: _assetUrl(who, _parseArr(seg.audio_urls)[i]), label: _assetLabel(who) }));
     return { imgs, auds };
   }
   function _segCurrent() { return lv.segs.find((x) => x.seg_no === lv.selSeg); }
@@ -2013,7 +1993,7 @@
           tile.dataset.kind = "image";
           tile.dataset.idx = String(_imgSeq);
           tile.dataset.shotIdx = String(idx);
-          tile.title = _esc(c.label || key);
+          tile.title = _esc(c.label || _assetLabel(key));
           tile.innerHTML = '<img class="lv-thumb" src="' + _esc(_thumb(url || "", 128)) + '" alt="">'
             + '<span class="lv-thumb-idx">图' + _imgSeq + '</span>'
             + '<span class="lv-combo-lbl">' + _esc(c.label || "?")
@@ -2035,7 +2015,7 @@
           tile.dataset.kind = "image";
           tile.dataset.idx = String(_imgSeq);
           tile.dataset.shotIdx = String(idx);
-          tile.title = _esc(key);
+          tile.title = _esc(_assetLabel(key));
           tile.innerHTML = '<img class="lv-thumb" src="' + _esc(_thumb(url || "", 128)) + '" alt="">'
             + '<span class="lv-thumb-idx">图' + _imgSeq + '</span>'
             + '<button class="lv-thumb-x" title="移除此图引用" data-act="rm-img" data-i="' + i + '"><span class="ic ic-cancel" aria-hidden="true"></span></button>';
@@ -2095,7 +2075,7 @@
           renderShots();
           saveDraft();
         });
-        if (u) tile.title = u;
+        if (u) tile.title = _esc(_assetLabel(who) || who || u);
         matTiles.appendChild(tile);
       }
 
@@ -2940,19 +2920,29 @@ async function _pickImageForShot(s) {
     const imgs = rawImgs.filter((k) => k && k !== "tail");
     if (imgs.length) {
       imgs.forEach((key, i) => {
-        const clean = String(key || "").replace(/^lv_[a-f0-9]+_?/i, "").replace(/^lv_/i, "").replace(/\.(png|jpe?g|webp|bmp)$/i, "");
-        const lbl = clean.length > 10 ? clean.slice(0, 10) + "…" : clean;
+        
+        
+        const friendly = _assetLabel(key);
+        let lbl;
+        if (friendly === key) {
+          const clean = String(key || "").replace(/^lv_[a-f0-9]+_?/i, "").replace(/^lv_/i, "").replace(/\.(png|jpe?g|webp|bmp)$/i, "");
+          lbl = clean.length > 10 ? clean.slice(0, 10) + "…" : (clean || "参考图");
+        } else {
+          lbl = friendly;
+        }
         const urlIdx = isCont ? 1 + i : i;
-        out.push({ kind: "image", idx: startIdx + i, label: lbl || "参考图", url: _assetUrl(key, rawUrls[urlIdx]) });
+        out.push({ kind: "image", idx: startIdx + i, label: lbl, url: _assetUrl(key, rawUrls[urlIdx]) });
       });
     } else if (!isCont) {
       out.push({ kind: "image", idx: 1, label: "无图", url: "", isMiss: true });
     }
     
+    
     const aud = _parseArr(s.audio);
     const audUrls = _parseArr(s.audio_urls);
     aud.forEach((who, i) => {
-      out.push({ kind: "audio", idx: i + 1, label: who, url: _assetUrl(who, audUrls[i]) });
+      const friendly = _assetLabel(who);
+      out.push({ kind: "audio", idx: i + 1, label: friendly === who ? who : friendly, url: _assetUrl(who, audUrls[i]) });
     });
     return out;
   }
