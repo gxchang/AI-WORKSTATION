@@ -13,6 +13,11 @@
 
   
   (window.__viewOpeners = window.__viewOpeners || {})["longvideo"] = showLV;
+  
+  if (window.Views) Views.registerOpener("longvideo", showLV);
+  else document.addEventListener("DOMContentLoaded", function () {
+    try { window.Views && Views.registerOpener("longvideo", showLV); } catch (e) {}
+  });
 
   
   window.lvOpenJob = function (jobId) {
