@@ -183,11 +183,11 @@ VIDEO_MODEL_LIMITS = {
 
         "instance_tiers": [
             {"v": "default", "label": "Default", "vram": "24G",
-             "coins_per_sec": 0.2, "yuan_per_hour": 4, "tip": "使用24G显存生成"},
+             "coins_per_sec": 0.73, "yuan_per_hour": 6, "tip": "使用24G显存生成"},
             {"v": "plus",    "label": "Plus",    "vram": "48G",
-             "coins_per_sec": 0.4, "yuan_per_hour": 6, "tip": "使用48G显存生成"},
+             "coins_per_sec": 0.97, "yuan_per_hour": 8, "tip": "使用48G显存生成"},
             {"v": "ultra",   "label": "Ultra",   "vram": "84G",
-             "coins_per_sec": 0.6, "yuan_per_hour": 9, "tip": "使用84G显存生成"},
+             "coins_per_sec": 1.94, "yuan_per_hour": 16, "tip": "使用84G显存生成"},
         ],
 
         "account_api": {

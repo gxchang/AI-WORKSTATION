@@ -798,6 +798,14 @@ _IMG_EXECUTOR = ThreadPoolExecutor(max_workers=_MAX_INFLIGHT_IMG, thread_name_pr
 _IMG_INFLIGHT = set()
 
 
+
+
+
+
+_DERIVE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="derive")
+_DERIVE_INFLIGHT = set()
+
+
 _BUSY_PAT = re.compile(
     r"concurren|并发|排队|count_limit|too many|rate[ _-]?limit|throttl|capacity|system is busy|"
     r"busy|繁忙|稍后再试|超出.*限制", re.I)
@@ -835,6 +843,14 @@ def _task_stage(rec):
     
     if not isinstance(rec, dict):
         return "queued"
+
+
+
+    if rec.get("kind") == "derive":
+        st0 = rec.get("status")
+        if st0 in ("completed", "failed", "cancelled"):
+            return st0
+        return str(rec.get("stage") or "queued")
     if rec.get("submitted_at"):
         return "generating"
     st = rec.get("status")
@@ -1174,6 +1190,169 @@ def _register_generated_video(url, payload, session_id=None):
 
 
 
+_DERIVE_SUFFIX = {"depth": "_depth", "frame_head": "_first",
+                  "frame_tail": "_last", "audio": "_audio",
+                  "frame_at": "_frame"}
+_DERIVE_LABEL = {"depth": "深度", "frame_head": "首帧",
+                 "frame_tail": "尾帧", "audio": "音频",
+                 "frame_at": "帧"}
+
+
+def _derive_out_name(src_name, kind, ext):
+    
+    stem = os.path.splitext(os.path.basename(str(src_name or "video")))[0] or "video"
+    base = f"{stem}{_DERIVE_SUFFIX.get(kind, '_' + kind)}"
+    cand, i = f"{base}.{ext}", 1
+    while os.path.exists(os.path.join(ASSETS_DIR, cand)):
+        i += 1
+        cand = f"{base}_{i}.{ext}"
+    return cand
+
+
+def _register_derived_asset(url, src_url, type_, kind, session_id=None, payload=None):
+    
+    try:
+        src = _assets_store.asset_row_of(src_url) or {}
+        inherit = {}
+        if src.get("subject_id"):
+
+            inherit = {"kind": src.get("kind"), "owner": src.get("owner"),
+                       "posture": src.get("posture"), "subject_id": src.get("subject_id")}
+        src_label = (src.get("label") or "").strip()
+
+
+
+        payload = dict(payload or {})
+        if src_label:
+            payload["src_label"] = src_label
+        name = _assets_store.asset_name_of(url) or os.path.basename(url)
+        label = f"{src_label}·{_DERIVE_LABEL.get(kind, kind)}" if src_label else \
+            os.path.splitext(name)[0]
+        meta = _assets_store.build_provenance(payload=payload, model=None)
+        return _assets_store.register(
+            name=name, url=url, type=type_,
+            origin=_assets_store.ORIGIN_UPLOADED,
+            label=label,
+            origin_session=session_id,
+            meta=meta,
+            **inherit,
+        )
+    except Exception as e:
+        print(f"[warn] 派生产物入库失败（不影响任务）: {e}", flush=True)
+        return None
+
+
+def derive_produce(kind, src_name, payload=None, on_progress=None, session_id=None):
+    
+    import server.depth as _dep
+
+    payload = payload or {}
+    src_url = "/assets/" + src_name
+    src_path = os.path.join(ASSETS_DIR, src_name)
+    if not os.path.isfile(src_path):
+        raise FileNotFoundError("源素材文件已不存在（可能已被删除或移动）")
+
+    if kind == "depth":
+        short = int(payload.get("short") or 518)
+        out_name = _derive_out_name(src_name, kind, "mp4")
+        info = _dep.extract_depth(src_path, os.path.join(ASSETS_DIR, out_name),
+                                  short=short, on_progress=on_progress)
+
+
+
+        type_, extra = "video", {"short": short, "frames": info.get("frames"),
+                                 "elapsed": info.get("seconds"),
+                                 "model": "depth-anything-v2-small"}
+    elif kind in ("frame_head", "frame_tail"):
+        out_name = _derive_out_name(src_name, kind, "png")
+        info = _dep.grab_frame(src_path, os.path.join(ASSETS_DIR, out_name),
+                               "tail" if kind.endswith("tail") else "head")
+        type_, extra = "image", {"which": info.get("which")}
+    elif kind == "frame_at":
+
+
+        try:
+            at = float(payload.get("at"))
+        except (TypeError, ValueError):
+            raise ValueError("缺少取帧落点（at），无法定位要取哪一帧")
+        out_name = _derive_out_name(src_name, kind, "png")
+        info = _dep.grab_frame(src_path, os.path.join(ASSETS_DIR, out_name), at=at)
+        type_, extra = "image", {"at": info.get("at"), "frame": info.get("frame")}
+    elif kind == "audio":
+        ext = _dep.audio_ext_of(src_path)
+        out_name = _derive_out_name(src_name, kind, ext)
+        info = _dep.extract_audio(src_path, os.path.join(ASSETS_DIR, out_name))
+        type_, extra = "audio", {"codec": info.get("codec")}
+    else:
+        raise ValueError(f"未知的派生类型「{kind}」")
+
+    out_url = "/assets/" + out_name
+    _register_derived_asset(out_url, src_url, type_, kind, session_id=session_id,
+                            payload={"kind": kind, "src": src_url, **extra})
+    return {"url": out_url, "name": out_name, "type": type_, "info": info, "extra": extra}
+
+
+
+
+
+
+
+_DERIVE_SYNC_LOCK = threading.Lock()
+
+
+def _run_derive_task(tid, rec):
+    
+    payload = rec.get("payload") or {}
+    kind = str(payload.get("kind") or "")
+    src_url = str(payload.get("src") or "")
+    src_name = _assets_store.asset_name_of(src_url)
+    if not src_name:
+        _update_task(tid, status="failed",
+                     error="源素材文件已不存在（可能已被删除或移动）", stage=None)
+        return
+
+    def _prog(done, total):
+        if _is_task_canceled(tid):
+            raise RuntimeError("__canceled__")
+
+
+        d = min(int(done), int(total)) if total else int(done)
+        _update_task(tid, stage=(f"{d}/{int(total)}" if total else str(d)),
+                     progress=(round(float(d) / total, 3) if total else None))
+
+    try:
+        out = derive_produce(kind, src_name, payload, on_progress=_prog,
+                             session_id=rec.get("session_id"))
+    except Exception as e:
+        if _is_task_canceled(tid):
+
+            print(f"[derive] #{tid} 已按用户要求停止", flush=True)
+            return
+        msg = str(e) or type(e).__name__
+        print(f"[derive] #{tid} 失败：{msg}", flush=True)
+        _update_task(tid, status="failed", error=msg[:300], stage=None)
+        return
+
+    _update_task(tid, status="completed", derive_url=out["url"], derive_name=out["name"],
+                 derive_type=out["type"], derive_info=out["info"], stage=None, progress=1.0)
+    print(f"[derive] #{tid} {kind} 完成 -> {out['name']}", flush=True)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1343,6 +1522,14 @@ def _task_worker():
                     _IMG_INFLIGHT.add(tid)
                     _IMG_EXECUTOR.submit(_run_image_task, tid, rec) \
                         .add_done_callback(lambda _f, _t=tid: _IMG_INFLIGHT.discard(_t))
+                elif rec.get("kind") == "derive":
+
+
+                    if tid in _DERIVE_INFLIGHT:
+                        continue
+                    _DERIVE_INFLIGHT.add(tid)
+                    _DERIVE_EXECUTOR.submit(_run_derive_task, tid, rec) \
+                        .add_done_callback(lambda _f, _t=tid: _DERIVE_INFLIGHT.discard(_t))
                 else:
                     _progress_one(tid, rec)
             _requeue_busy()
@@ -1514,6 +1701,15 @@ def _start_worker_once():
 @app.before_request
 def _boot_task_worker():
     _start_worker_once()
+
+
+
+
+
+@app.before_request
+def _boot_depth_env():
+    from . import depth_boot
+    depth_boot.ensure_started()
 
 
 

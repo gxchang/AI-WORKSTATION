@@ -257,6 +257,29 @@ def asset_name_of(url):
 
 
 
+def asset_row_of(name_or_url):
+    
+    raw = (name_or_url or "").strip()
+    if not raw:
+        return None
+
+    name = (asset_name_of(raw) or raw).split("?")[0].split("#")[0]
+    try:
+        con = _db()
+    except Exception as e:
+        print("[warn] 资产反查无法连库：%s" % (e,))
+        return None
+    try:
+        row = con.execute(_SELECT_ASSET + " WHERE a.name=? OR a.url=?", (name, raw)).fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        print("[warn] 资产反查失败：%s" % (e,))
+        return None
+    finally:
+        con.close()
+
+
+
 
 
 
@@ -788,15 +811,11 @@ def asset_info():
     if not raw:
         return jsonify(found=False)
 
-    name = (asset_name_of(raw) or raw).split("?")[0].split("#")[0]
-    con = _db()
-    try:
-        row = con.execute(_SELECT_ASSET + " WHERE a.name=? OR a.url=?", (name, raw)).fetchone()
-        if not row:
-            return jsonify(found=False)
-        return jsonify(found=True, asset=dict(row))
-    finally:
-        con.close()
+
+    row = asset_row_of(raw)
+    if not row:
+        return jsonify(found=False)
+    return jsonify(found=True, asset=row)
 
 
 @assets_bp.route("/subjects", methods=["GET"])

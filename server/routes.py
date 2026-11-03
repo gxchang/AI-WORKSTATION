@@ -31,6 +31,9 @@ import thumbs as _thumbs
 import server.tts_client as _ttsclient
 import server.msg_store as _msgst
 import assets_api.store as _assets_store
+import server.depth as _depthmod
+import server.depth_env as _depth_env
+import server.depth_boot as _depth_boot
 
 
 
@@ -260,6 +263,29 @@ def index():
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
     return resp
+def _derive_caps():
+    
+    st = _depth_env.probe()
+    depth = {
+        "ok": bool(st["ok"]),
+        "via": "local",
+        "reason": st["reason"],
+
+
+        "accel": bool(st["accel"]),
+
+        "setup": "" if st["ok"] else st["setup_cmd"],
+        "shorts": [518, 700],
+    }
+    if not st["ok"]:
+        depth["boot"] = _depth_boot.status()
+    return {
+        "depth": depth,
+        "frame": {"ok": True},
+        "audio": {"ok": True},
+    }
+
+
 @app.route("/api/config")
 def api_config():
 
@@ -340,6 +366,8 @@ def api_config():
         },
         "free": True,
         "hasKey": bool(_cfg_key()),
+
+        "derive": _derive_caps(),
         "sizes": ["720P", "1080P", "1K", "2K"],
         "modelLimits": _video_limits,
         "models": list(_video_limits.keys()),
@@ -3759,6 +3787,13 @@ def api_task(tid):
 
         "busy_reason": rec.get("busy_reason"),
         "busy_count": int(rec.get("busy_count") or 0),
+
+
+        "derive_url": rec.get("derive_url"),
+        "derive_name": rec.get("derive_name"),
+        "derive_type": rec.get("derive_type"),
+        "derive_info": rec.get("derive_info"),
+        "progress": rec.get("progress"),
     })
 @app.route("/api/task/cancel", methods=["POST"])
 def api_task_cancel():
@@ -3778,6 +3813,97 @@ def api_task_cancel():
                  error="用户取消（服务端已收到，worker 不再继续）",
                  finished_at=time.time())
     return jsonify({"ok": True, "status": "cancelled"})
+
+
+
+
+
+_DERIVE_KINDS = ("depth", "frame_head", "frame_tail", "audio", "frame_at")
+_DERIVE_MODEL = {"depth": "depth-anything-v2-small", "frame_head": "ffmpeg",
+                 "frame_tail": "ffmpeg", "audio": "ffmpeg", "frame_at": "ffmpeg"}
+
+
+@app.route("/api/canvas/derive", methods=["POST"])
+def api_canvas_derive():
+    
+    data = request.get_json(silent=True) or {}
+    kind = str(data.get("kind") or "").strip()
+    src_url = str(data.get("url") or data.get("src") or "").strip()
+    if kind not in _DERIVE_KINDS:
+        return jsonify({"error": f"未知的派生类型「{kind}」"}), 400
+    name = _assets_store.asset_name_of(src_url)
+    if not name:
+        return jsonify({"error": "只能对本站素材做派生（源必须是 /assets/ 下的文件）"}), 400
+    src_path = _resolve_asset_file(name)
+    if not src_path:
+        return jsonify({"error": "源素材文件不存在（可能已被删除）"}), 404
+
+    payload = {"kind": kind, "src": "/assets/" + name}
+    if kind == "frame_at":
+
+        try:
+            payload["at"] = float(data.get("at"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "缺少取帧落点（at）"}), 400
+    session_id = data.get("session_id")
+
+    if kind != "depth":
+
+        try:
+            with _core_mod._DERIVE_SYNC_LOCK:
+                out = _core_mod.derive_produce(kind, name, payload, session_id=session_id)
+        except Exception as e:
+            msg = str(e) or type(e).__name__
+
+            code = "no_audio" if kind == "audio" and ("音轨" in msg or "audio" in msg.lower()) else None
+            body = {"error": msg[:200]}
+            if code:
+                body["code"] = code
+            return jsonify(body), (400 if code else 500)
+        return jsonify({"ok": True, "sync": True, "kind": kind,
+                        "url": out["url"], "name": out["name"], "type": out["type"]})
+
+
+
+    st = _depth_env.probe()
+    if not st["ok"]:
+        return jsonify({"error": st["reason"], "code": "depth_unavailable"}), 503
+    short = int(data.get("short") or 518)
+    payload["short"] = short if short in (518, 700) else 518
+
+    tid, _rec = _core_mod._create_task("derive", _DERIVE_MODEL.get(kind, "ffmpeg"),
+                                       payload, media_hint="video",
+                                       session_id=session_id)
+    return jsonify({"ok": True, "task_id": tid, "kind": kind, "src": payload["src"]})
+
+
+
+@app.route("/api/canvas/media-probe")
+def api_canvas_media_probe():
+    
+    url = (request.args.get("url") or "").strip()
+    name = _assets_store.asset_name_of(url)
+    path = _resolve_asset_file(name) if name else None
+    if not path:
+        return jsonify({"ok": False, "error": "not_asset"})
+    try:
+        return jsonify(dict(_depthmod.probe_video(path), ok=True))
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:120]})
+
+
+@app.route("/api/canvas/depth-status")
+def api_canvas_depth_status():
+    
+    st = _depth_env.probe()
+    return jsonify({
+        "ok": bool(st["ok"]),
+        "reason": st["reason"],
+        "setup": "" if st["ok"] else st["setup_cmd"],
+        "boot": _depth_boot.status(),
+    })
+
+
 @app.route("/api/tasks")
 def api_tasks():
     
