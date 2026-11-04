@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0" data-page-node-id="eHaf3KuCAKCdvpKdQUGKmW" />
 <title>视频生成工作台</title>
 
-<link rel="stylesheet" href="/api/base_style.css?v=20261026c">
+<link rel="stylesheet" href="/api/base_style.css?v=20261104f">
 <script>
 
 try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "session") document.documentElement.classList.add("boot-defer"); } catch (e) {}
@@ -48,11 +48,14 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
 
 
 <div class="stream" id="stream" data-page-node-id="wx68X82c6gfhwsfHJK2pdK">
+  
   <div class="welcome" id="welcome" data-page-node-id="EL3QGpBvfLZJycEa0ahHas">
-    <div class="bg ic ic-video" data-page-node-id="cfNDCR1z0IwBkHyRtT5wbx"></div>
-    在下方输入提示词，上传素材后图片会直接<b data-page-node-id="6sQMVaGcFtaxN73pHwwZoh">插入到光标处</b>，文字与缩略图混排<br data-page-node-id="gc4Qe5419ywBHdZEufm0g6"/>
-    底部可切换 全能参考 / 首尾帧控制，生成后结果会显示在这里<br data-page-node-id="3E9zbYnzRrCQZLmHJRRIoX"/>
-    每条记录可「返回编辑」一键回填，结果可分享
+    <div class="wv-tools cols4">
+      <button type="button" class="wv-tool" data-tool="depth" title="逐帧估深度，输出灰阶参考视频"><span class="wv-tool-ic"><span class="ic ic-drv-depth"></span></span><span class="wv-tool-name">深度动作捕捉</span><span class="wv-tool-desc">逐帧估深度，输出灰阶参考视频</span></button>
+      <button type="button" class="wv-tool" data-tool="frame" title="取首帧、尾帧，或拖到要的那一帧"><span class="wv-tool-ic"><span class="ic ic-drv-frame"></span></span><span class="wv-tool-name">截取帧</span><span class="wv-tool-desc">取首帧、尾帧，或拖到要的那一帧</span></button>
+      <button type="button" class="wv-tool" data-tool="slice" title="切成想要的片段，各自落成素材"><span class="wv-tool-ic"><span class="ic ic-drv-slice"></span></span><span class="wv-tool-name">视频切片</span><span class="wv-tool-desc">切成想要的片段，各自落成素材</span></button>
+      <button type="button" class="wv-tool" data-tool="audio" title="抽出原音轨，输出音频素材"><span class="wv-tool-ic"><span class="ic ic-drv-audio"></span></span><span class="wv-tool-name">分离音频</span><span class="wv-tool-desc">抽出原音轨，输出音频素材</span></button>
+    </div>
   </div>
 </div>
 
@@ -676,7 +679,7 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
 
 <script src="/api/waveform.js?v=20261010a"></script>
 
-<script src="/api/longvideo_ui.js?v=20261021a"></script>
+<script src="/api/longvideo_ui.js?v=20261104a"></script>
 <div class="at-pop" id="atpop" data-page-node-id="RouEFDOwMOhgyF1Ngo2Ym9">
   <div class="at-hd" id="atHead" data-page-node-id="i0vFw3jzxFqIJpw8v6A4QP">选择素材插入</div>
   <div id="atList" data-page-node-id="l2hwoVK4rSw6pEqG2URnEL"></div>
@@ -775,19 +778,19 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
   <div class="at-empty" id="agentAtEmpty"><span id="agentAtEmptyText"></span></div>
 </div>
 
-<script src="/api/base_ui.js?v=20261026f"></script>
+<script src="/api/base_ui.js?v=20261104g"></script>
 
   <script src="/api/assets_ui.js?v=20260930g"></script>
   <script src="/api/assets_picker.js?v=20260922b"></script>
   <script src="/api/imageedit_ui.js?v=20261026c"></script>
-  <link rel="stylesheet" href="/api/canvas_style.css?v=20261007o2">
+  <link rel="stylesheet" href="/api/canvas_style.css?v=20261103o6">
   <script src="/api/canvas_dagre.js?v=20260930i"></script>
-  <script src="/api/canvas_manager.js?v=20260930i"></script>
+  <script src="/api/canvas_manager.js?v=20261104a"></script>
   
-  <script src="/api/canvas_timeline.js?v=20261007o2"></script>
-  <script src="/api/canvas_stage.js?v=20261025d"></script>
+  <script src="/api/canvas_timeline.js?v=20261104a"></script>
+  <script src="/api/canvas_stage.js?v=20261104g"></script>
 <script src="/api/tts_upload.js?v=20260918d"></script>
-<script src="/api/audio_ui.js?v=20261003a"></script>
+<script src="/api/audio_ui.js?v=20261104a"></script>
 
 </body>
 </html>

@@ -2639,9 +2639,9 @@ async function _pickImageForShot(s) {
   }
 
   
-  const _TIER_T = { fast: "Lora加速（8步）", hq: "官方（20步）", hq25: "官方（25步）" };
+  const _TIER_T = { fast: "快速（8步）", hq: "标准（20步）", hq25: "精细（25步）" };
   const _INST_T = { default: "Default", plus: "Plus", ultra: "Ultra" };
-  const _REFINE_MODE = { refine: "只二采", upscale: "放大+二采", latent_upscale: "只放大" };
+  const _REFINE_MODE = { refine: "仅精修", upscale: "放大+精修", latent_upscale: "仅放大" };
   function _objVal(v) {
     if (!v) return null;
     if (typeof v === "object") return v;

@@ -163,8 +163,8 @@ VIDEO_MODEL_LIMITS = {
                 {"key": "scale", "label": "低清倍率", "type": "number",
                  "min": 0.25, "max": 1.0, "step": 0.05, "default": 0.5},
                 {"key": "latent_upsample", "label": "上采样插值", "type": "enum",
-                 "choices": [{"v": "bilinear", "t": "Bilinear"},
-                             {"v": "nearest", "t": "Nearest"}],
+                 "choices": [{"v": "bilinear", "t": "双线性"},
+                             {"v": "nearest", "t": "最近邻"}],
                  "default": "bilinear"},
             ],
 
@@ -224,21 +224,56 @@ VIDEO_MODEL_LIMITS = {
 
 
 
+
+
+
+
+
+
+
+
+
+
             "params": [
+
+
+
                 {"key": "mode", "label": "模式", "type": "enum",
-                 "choices": [{"v": "refine", "t": "只二采"},
-                             {"v": "upscale", "t": "放大+二采"},
-                             {"v": "latent_upscale", "t": "只放大"}],
+                 "choices": [{"v": "refine", "t": "仅精修"},
+                             {"v": "upscale", "t": "放大+精修"},
+                             {"v": "latent_upscale", "t": "仅放大"}],
                  "default": "upscale"},
+
+
+
+
                 {"key": "upscale_method", "label": "放大算法", "type": "enum",
                  "choices": [{"v": "lanczos", "t": "Lanczos"},
+                             {"v": "nvidia_rtx_vsr", "t": "RTX VSR"},
                              {"v": "h3_latent", "t": "H3 潜空间"}],
                  "default": "lanczos"},
                 {"key": "mp", "label": "放大目标", "type": "number",
-                 "min": 0.5, "max": 2.0, "step": 0.1, "default": 1.0,
+                 "min": 0.5, "max": 2.0, "step": 0.1, "default": 1.0, "unit": "MP",
                  "note": "例：一采 864×480（16:9）时 1.8MP → 1824×1024，最终结果以实际为准"},
-                {"key": "passes", "label": "精修次数", "type": "number",
-                 "min": 1, "max": 3, "step": 1, "default": 1},
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                {"key": "passes", "label": "二采次数", "type": "number",
+                 "min": 1, "max": 15, "step": 1, "default": 1,
+                 "note": "1 = 放大后精修 1 次；每多 1 次 = 多 1 次同分辨率精修"},
                 {"key": "steps", "label": "二采步数", "type": "number",
                  "min": 1, "max": 30, "step": 1, "default": 3},
                 {"key": "denoise", "label": "重绘幅度", "type": "number",
@@ -261,26 +296,45 @@ VIDEO_MODEL_LIMITS = {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
             "params": [
+                {"key": "confidence", "label": "检测阈值", "type": "number",
+                 "min": 0.1, "max": 0.9, "step": 0.05, "default": 0.35},
+                {"key": "select", "label": "锁定对象", "type": "enum",
+                 "choices": [{"v": "largest_face", "t": "最大脸"},
+                             {"v": "centre_most", "t": "最靠中心"}],
+                 "default": "largest_face"},
                 {"key": "denoise", "label": "重绘幅度", "type": "number",
                  "min": 0.0, "max": 1.0, "step": 0.05, "default": 0.4},
                 {"key": "steps", "label": "采样步数", "type": "number",
                  "min": 1, "max": 30, "step": 1, "default": 8},
-                {"key": "confidence", "label": "检测阈值", "type": "number",
-                 "min": 0.1, "max": 0.9, "step": 0.05, "default": 0.35},
-                {"key": "mask_dilation", "label": "mask 膨胀", "type": "number",
-                 "min": 0, "max": 64, "step": 1, "default": 16},
-                {"key": "feather", "label": "羽化", "type": "number",
-                 "min": 0, "max": 64, "step": 1, "default": 24},
-                {"key": "select", "label": "选脸策略", "type": "enum",
-                 "choices": [{"v": "largest_face", "t": "最大脸"},
-                             {"v": "centre_most", "t": "最居中"}],
-                 "default": "largest_face"},
                 {"key": "paste_region", "label": "贴回范围", "type": "enum",
                  "choices": [{"v": "face_only", "t": "仅脸部"},
-                             {"v": "face_ellipse", "t": "脸部椭圆"},
-                             {"v": "full_crop", "t": "全裁剪区"}],
+                             {"v": "face_ellipse", "t": "椭圆选区"},
+                             {"v": "full_crop", "t": "整个裁剪框"}],
                  "default": "face_only"},
+                {"key": "mask_dilation", "label": "贴回区外扩", "type": "number",
+                 "min": 0, "max": 64, "step": 1, "default": 16},
+                {"key": "feather", "label": "边缘羽化", "type": "number",
+                 "min": 0, "max": 64, "step": 1, "default": 24},
             ],
             "default": {"enabled": False, "denoise": 0.4, "steps": 8, "confidence": 0.35,
                         "mask_dilation": 16, "feather": 24, "select": "largest_face",
@@ -941,13 +995,30 @@ def refine_node_fields(rf, lim, w=None, h=None):
         return v
 
     _m = str(_v("mode") or "upscale")
+    _um = _v("upscale_method")
+
+
+
+
+
+
+
+
+
+    _use_latent = (_m == "latent_upscale") or (str(_um) == "h3_latent")
+
     n18 = {"mode": _m}
 
     if _m in ("upscale", "latent_upscale"):
         n18["megapixels"] = float(_v("mp"))
-    n18["passes"] = max(1, int(_v("passes")))
-    _um = _v("upscale_method")
-    if _um:
+
+
+    if _m in ("refine", "upscale"):
+        n18["passes"] = max(1, int(_v("passes")))
+
+
+
+    if _m == "upscale" and _um:
         n18["upscale_method"] = str(_um)
 
 
@@ -955,10 +1026,9 @@ def refine_node_fields(rf, lim, w=None, h=None):
 
 
     n18["skip_fl2v"] = True
-
     if _m in ("upscale", "latent_upscale"):
         n18["enable_tiling"] = True
-        if _um == "h3_latent":
+        if _use_latent:
             n18["enable_latent_chunking"] = True
 
 
@@ -974,10 +1044,18 @@ def refine_node_fields(rf, lim, w=None, h=None):
             n18["latent_upscale_model"] = (_lum or
                                            "minimax_h3_latent_upscaler_3d_bf16.safetensors")
         else:
+
+
+
             n18["enable_latent_chunking"] = False
     else:
-        n18["enable_tiling"] = False
-        n18["enable_latent_chunking"] = False
+
+
+
+
+
+        n18["enable_tiling"] = True
+
 
 
 

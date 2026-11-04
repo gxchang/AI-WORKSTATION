@@ -48,7 +48,8 @@ from server.core import (
     ALLOWED_EXTS, ASSETS_DIR, DOWNLOAD_ALLOW_HOSTS, FRONTEND_DIR, IMG_EXTS,
     MODEL_LIMITS, VID_EXTS,
     _AGNES_SESSION, _BOOT_ID, _DB_LOCK, _ROOT, _TASKS_LOCK,
-    _cfg_base, _cfg_key, _cfg_poll, _create_task, _db_conn, _ensure_db,
+    _cfg_base, _cfg_key, _cfg_poll, _create_task, _db_conn, _delete_agent_session,
+    _ensure_db,
     _get_task, _infer_ext_and_mime, _llm_chat_completions, _load_agent_sessions,
     _load_history, _load_sessions, _load_tasks, _mark_session_deleted,
     _mark_task_canceled, _persist_generated_video, _public_base, _register_generated_video,
@@ -2606,7 +2607,8 @@ def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None):
             _c = _ttsclient.synthesize_candidate(
                 _txt_spoken, speed=a.get("speed") or 1,
                 reference_path=_ref_path, model_id=_mid,
-                voice_desc=_vdesc, preset_voice=_pvoice)
+                voice_desc=_vdesc, preset_voice=_pvoice,
+                optimize_text_preview=False)
         except Exception as _e:
             failed.append({"label": _label, "error": f"音频生成失败：{type(_e).__name__}: {_e}"})
             continue
@@ -2789,6 +2791,7 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None):
                 model_id=_mid,
                 voice_desc=_vdesc,
                 preset_voice=_pvoice,
+                optimize_text_preview=False,
             )
         except Exception as _e:
             return {"kind": "error", "error": f"音频生成失败：{type(_e).__name__}: {_e}"}, False
@@ -3759,6 +3762,14 @@ def api_agent_sessions_post():
         "force": bool(data.get("force")),
     })
     return jsonify({"ok": True, "count": len(sessions)})
+@app.route("/api/agent_sessions/<sid>", methods=["DELETE"])
+def api_agent_delete_session(sid):
+    
+    res = _delete_agent_session(sid)
+    if not res.get("existed"):
+
+        return jsonify(dict(res, ok=True, note="already-gone"))
+    return jsonify(res)
 @app.route("/api/task/<tid>")
 def api_task(tid):
     

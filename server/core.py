@@ -1893,15 +1893,62 @@ def _load_agent_sessions():
         try:
             rows = conn.execute("SELECT data FROM agent_sessions").fetchall()
             cur = conn.execute("SELECT value FROM meta WHERE key='agentCurrentId'").fetchone()
+            tomb = _tombstoned_session_ids(conn)
         finally:
             conn.close()
     out = []
     for r in rows:
         try:
-            out.append(json.loads(r["data"]))
+            obj = json.loads(r["data"])
         except Exception:
-            pass
-    return {"sessions": out, "currentId": cur["value"] if cur else None}
+            continue
+        if isinstance(obj, dict) and obj.get("id") in tomb:
+            continue
+        out.append(obj)
+    cur_id = cur["value"] if cur else None
+    if cur_id in tomb:
+        cur_id = out[0]["id"] if out else None
+    return {"sessions": out, "currentId": cur_id}
+
+
+def _delete_agent_session(sid):
+    
+    _ensure_db()
+    ntask, nhist = 0, 0
+    with _DB_LOCK:
+        conn = _db_conn()
+        try:
+            row = conn.execute("SELECT data FROM agent_sessions WHERE id=?", (sid,)).fetchone()
+            existed = row is not None
+            tids = []
+            for r in conn.execute("SELECT tid, data FROM tasks"):
+                try:
+                    if json.loads(r["data"] or "{}").get("session_id") == sid:
+                        tids.append(r["tid"])
+                except Exception:
+                    continue
+            for t in tids:
+                conn.execute("DELETE FROM tasks WHERE tid=?", (t,))
+            ntask = len(tids)
+            _h0 = conn.execute("SELECT COUNT(*) AS c FROM history").fetchone()["c"]
+            _purge_history_rows(conn, [sid])
+            nhist = _h0 - conn.execute("SELECT COUNT(*) AS c FROM history").fetchone()["c"]
+            conn.execute("DELETE FROM agent_sessions WHERE id=?", (sid,))
+            _mark_session_deleted(conn, [sid])
+            cur = conn.execute("SELECT value FROM meta WHERE key='agentCurrentId'").fetchone()
+            if cur and cur["value"] == sid:
+                first = conn.execute(
+                    "SELECT id FROM agent_sessions WHERE id NOT IN "
+                    "(SELECT id FROM deleted_sessions) ORDER BY created_at DESC LIMIT 1"
+                ).fetchone()
+                new_cur = first["id"] if first else None
+                conn.execute(
+                    "INSERT INTO meta(key, value) VALUES('agentCurrentId', ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (new_cur,))
+            conn.commit()
+        finally:
+            conn.close()
+    return {"ok": True, "existed": existed, "tasks": ntask, "history": nhist}
 
 
 def _save_agent_sessions(data):
@@ -1910,14 +1957,12 @@ def _save_agent_sessions(data):
     sessions = (data or {}).get("sessions", [])
     current_id = (data or {}).get("currentId")
     force = bool((data or {}).get("force"))
-    ids = [s["id"] for s in sessions if isinstance(s, dict) and "id" in s]
-
-
-    _pruned_urls, _pruned_ids = [], []
     with _DB_LOCK:
         conn = _db_conn()
         try:
             stored_msgs, stored_tombs = {}, {}
+
+            _tomb = _tombstoned_session_ids(conn)
             if not force:
                 for row in conn.execute("SELECT id, data FROM agent_sessions"):
                     try:
@@ -1930,6 +1975,9 @@ def _save_agent_sessions(data):
                         stored_msgs[row[0]] = []
             for s in sessions:
                 if not isinstance(s, dict) or "id" not in s:
+                    continue
+
+                if s["id"] in _tomb:
                     continue
                 s = _merge_tombstones(s, stored_tombs)
                 incoming = s.get("messages") or []
@@ -1949,36 +1997,10 @@ def _save_agent_sessions(data):
                     (s["id"], s.get("name"), s.get("createdAt"), json.dumps(s, ensure_ascii=False)),
                 )
 
-            if ids:
-                placeholders = ",".join("?" * len(ids))
-                _keep = set(ids)
-                _pruned_ids = [r["id"] for r in conn.execute("SELECT id FROM agent_sessions")
-                               if r["id"] not in _keep]
-                if _pruned_ids:
-                    _ph = ",".join("?" * len(_pruned_ids))
-                    for r in conn.execute(
-                            "SELECT data FROM agent_sessions WHERE id IN (%s)" % _ph, _pruned_ids):
-                        _pruned_urls.extend(_mgc.urls_in(r["data"]))
-                conn.execute(f"DELETE FROM agent_sessions WHERE id NOT IN ({placeholders})", ids)
-            else:
 
-                _pruned_ids = [r["id"] for r in conn.execute("SELECT id FROM agent_sessions")]
-                for r in conn.execute("SELECT data FROM agent_sessions"):
-                    _pruned_urls.extend(_mgc.urls_in(r["data"]))
-                conn.execute("DELETE FROM agent_sessions")
 
-            if _pruned_ids:
-                _tids = []
-                for r in conn.execute("SELECT tid, data FROM tasks"):
-                    try:
-                        if json.loads(r["data"] or "{}").get("session_id") in _pruned_ids:
-                            _tids.append(r["tid"])
-                    except Exception:
-                        continue
-                for t in _tids:
-                    conn.execute("DELETE FROM tasks WHERE tid=?", (t,))
 
-                _pruned_urls.extend(_purge_history_rows(conn, _pruned_ids))
+
             if current_id is not None:
                 conn.execute(
                     "INSERT INTO meta(key, value) VALUES('agentCurrentId', ?) "
@@ -1989,8 +2011,7 @@ def _save_agent_sessions(data):
         finally:
             conn.close()
 
-    if _pruned_urls:
-        print(f"[agent_sessions] prune 保留 {len(_pruned_urls)} 个媒体 URL 对应文件（不删）")
+
 
 
 def _sync_result_to_session(session_id, dedup_key, kind, model, media_url, prompt="",

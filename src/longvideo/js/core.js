@@ -1121,6 +1121,7 @@
       });
       const j = await r.json();
       if (!r.ok) { err(j.error || "批量删除失败"); return; }
+      const partial = (j.total || 0) > (j.ok || 0);
       
       if (lv.jobId && ids.includes(lv.jobId)) {
         lv.jobId = null; lv.jobStatus = null; lv.segs = []; lv.shots = []; lv.assets = [];
@@ -1131,7 +1132,9 @@
         _syncStartBtn();   
         goStep(1);
       }
-      setMsg(`已删除 ${j.ok || 0}/${j.total || ids.length} 个任务` + ((j.total || 0) > (j.ok || 0) ? "，部分失败" : ""));
+      setMsg(`已删除 ${j.ok || 0}/${j.total || ids.length} 个任务` + (partial ? "，部分失败" : ""));
+      
+      if (!partial) setJobManage(false);
       loadJobs();
     } catch (e) { err("批量删除异常：" + e.message); }
   }
