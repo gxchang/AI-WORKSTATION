@@ -487,8 +487,45 @@
   
   
   let _openSeq = 0;
+  
+  
+  
+  
+  
+  let _optGen = 0;
+  let _optTipTimer = null;
+  let _optActive = null;
+  function _restoreOptimizeLoading() {
+    const b = $("lvOptimize");
+    if (b) { b.disabled = true; b.innerHTML = '<span class="lv-spin"></span>分镜中…'; }
+    if (_optTipTimer) { clearInterval(_optTipTimer); _optTipTimer = null; }
+    const owner = _optActive;
+    _optTipTimer = setInterval(() => {
+      if (!owner || owner.done || _optActive !== owner || owner.view !== "owner") {
+        clearInterval(_optTipTimer); _optTipTimer = null; return;
+      }
+      const sec = Math.round((Date.now() - owner.t0) / 1000);
+      setMsg(`AI 正在分镜…（已等待 ${sec} 秒），请耐心等候`);
+    }, 7000);
+  }
+  function _cancelInFlightOptimize(nextJobId) {
+    
+    const back = _optActive && !_optActive.done && nextJobId &&
+                 _optActive.jobId === nextJobId && _optActive.gen === _optGen;
+    
+    
+    if (_optActive && !_optActive.done) _optActive.view = back ? "owner" : "away";
+    if (back) { _restoreOptimizeLoading(); return; }
+    if (_optTipTimer) { clearInterval(_optTipTimer); _optTipTimer = null; }
+    
+    
+    
+    const b = $("lvOptimize");
+    if (b) { b.disabled = false; b.innerHTML = '<span class="ic ic-spark" aria-hidden="true"></span>智能分镜'; }
+  }
   async function openJob(jobId, preferredStep, fromRestore) {
     const seq = ++_openSeq;   
+    _cancelInFlightOptimize(jobId);   
     stopPoll();   
     setMsg("加载任务中…");
     try {
@@ -1147,6 +1184,7 @@
   }
 
   async function newTask() {
+    _cancelInFlightOptimize();
     
     const isGenerated = lv.jobId && lv.jobStatus && lv.jobStatus !== "draft";
     if (isGenerated && !(await lvConfirm({ title: "新建任务", message: "当前任务已生成/进行中，确定新建一个任务？当前任务会保留在「最近任务」中，可随时回来继续。" }))) return;
@@ -1172,7 +1210,7 @@
   }
 
   
-  async function withBtn(btn, loadingText, fn) {
+  async function withBtn(btn, loadingText, fn, isStale, onDone) {
     if (!btn || btn.disabled) return;
     const orig = btn.innerHTML;
     btn.disabled = true;
@@ -1180,7 +1218,13 @@
     try { await fn(); }
     catch (e) { err(e && e.message ? e.message : String(e)); }
     finally {
-      btn.disabled = false;
-      btn.innerHTML = orig;
+      
+      if (onDone) { try { onDone(); } catch (_) {} }
+      
+      
+      if (!(isStale && isStale())) {
+        btn.disabled = false;
+        btn.innerHTML = orig;
+      }
     }
   }

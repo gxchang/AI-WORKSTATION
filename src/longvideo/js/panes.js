@@ -1037,26 +1037,93 @@
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", _initOptsSegs);
   else _initOptsSegs();
 
+  
+  async function _persistDetachedShots(jobId, shots, source, script) {
+    if (!jobId) { setMsg("分镜已完成，但发起时没有任务归属，结果未保存"); return; }
+    if (!shots.length) { setMsg("分镜未产出镜头，原任务未改动"); return; }
+    try {
+      
+      const _body = { shots };
+      if (script) _body.script = script;
+      const r = await fetch(API + `/api/jobs/${encodeURIComponent(jobId)}/shots`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(_body),
+      });
+      const rj = await r.json().catch(() => ({}));
+      if (!r.ok) { setMsg(`原任务分镜保存失败：${rj.error || ""}（结果未写入）`); return; }
+      await fetch(API + `/api/jobs/${encodeURIComponent(jobId)}/shots/archive`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shots, source: source || "智能分镜" }),
+      }).catch(() => {});
+      
+      
+      if (lv.jobId === jobId) {
+        try {
+          const g = await fetch(API + `/api/jobs/${encodeURIComponent(jobId)}`);
+          const gj = await g.json().catch(() => ({}));
+          if (g.ok && lv.jobId === jobId) {
+            lv.shots = Array.isArray(gj.shots) ? gj.shots : shots;
+            lv.shotsHist = Array.isArray(gj.shots_history) ? gj.shots_history : lv.shotsHist;
+            renderShots();
+            lvStep2Act.hidden = lv.shots.length === 0;
+            _syncStartBtn();
+          }
+        } catch (_) {}
+        setMsg(`分镜已保存并刷新到当前任务（${shots.length} 个镜头）`);
+      } else {
+        setMsg(`分镜已保存到原任务（${shots.length} 个镜头），切回并重新打开该任务即可查看`);
+      }
+      loadJobs();
+    } catch (e) {
+      setMsg("原任务分镜保存异常：" + (e && e.message ? e.message : String(e)));
+    }
+  }
+
   $("lvOptimize").addEventListener("click", () => {
+    
+    
+    const _ownerScript = lvScript.value.trim();
+    const _ownerJobIdAtClick = lv.jobId;
+    const _ownerStatus = lv.jobStatus;
+    const _ownerLlm = document.getElementById("lvLlmModel").value;
+    const _ownerVideoModel = (lv.opts && lv.opts.model) || "";
+    const _ownerSource = lv.curShotVer >= 0 ? "重新分镜" : "智能分镜";
+    const myGen = ++_optGen;
+    const _t0 = Date.now();
+    
+    
+    let ownerJobId = _ownerJobIdAtClick || null;
+    _optActive = { jobId: ownerJobId, gen: myGen, t0: _t0, done: false, view: "owner" };
+    const _isStale = () => myGen !== _optGen || !_optActive ||
+                     _optActive.gen !== myGen || _optActive.view !== "owner";
     withBtn($("lvOptimize"), "分镜中…", async () => {
-      const script = lvScript.value.trim();
+      const script = _ownerScript;
       if (!script) { err("请先填写脚本"); return; }
       
+      if (!ownerJobId) {
+        if (_isStale()) return;
+        ownerJobId = await ensureJob();
+        if (_optActive && _optActive.gen === myGen) _optActive.jobId = ownerJobId;
+        if (_isStale()) return;   
+      }
       
       
       
       
       
-      const _isReeditEntry = !!(lv.jobId && lv.jobStatus && lv.jobStatus !== "draft");
+      
+      const _isReeditEntry = !!(ownerJobId && _ownerStatus && _ownerStatus !== "draft");
       if (_isReeditEntry) {
         if (!(await lvConfirm({
           title: "重新编排",
           message: "将解锁分镜进入重新编辑（不重新生成镜头）：\n· 分镜恢复可编辑（改提示词/秒数/绑定/删加镜头）\n· 已生成成片保留供对照\n· 需要重新生成镜头时，解锁后再点一次「智能分镜」\n· 改完点「开始生成」才会重新生成（旧视频会自动保留）\n\n进入重新编辑？",
           okText: "解锁编辑",
         }))) return;
+        if (_isStale()) return;   
         try {
-          const rr = await fetch(API + `/api/jobs/${lv.jobId}/reedit`, { method: "POST" });
+          const rr = await fetch(API + `/api/jobs/${encodeURIComponent(ownerJobId)}/reedit`, { method: "POST" });
           const rj = await rr.json().catch(() => ({}));
+          if (_isStale()) return;   
           if (!rr.ok) { err("进入重编失败：" + (rj.error || "")); return; }
           lv.jobStatus = "draft";
           _autoJumpOK = false;
@@ -1074,9 +1141,10 @@
       
       
       const _tipEvery = 7;
-      const _t0 = Date.now();
       let _tipI = 0;
-      const _tipTimer = setInterval(() => {
+      if (_optTipTimer) { clearInterval(_optTipTimer); _optTipTimer = null; }
+      _optTipTimer = setInterval(() => {
+        if (_isStale()) { clearInterval(_optTipTimer); _optTipTimer = null; return; }
         _tipI++;
         const sec = Math.round((Date.now() - _t0) / 1000);
         setMsg(`AI 正在分镜…（已等待 ${sec} 秒），请耐心等候`);
@@ -1086,17 +1154,25 @@
         r = await fetch(API + "/api/optimizer", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ script, job_id: lv.jobId || null, llm_model: document.getElementById("lvLlmModel").value, video_model: (lv.opts && lv.opts.model) || "" }),
+          body: JSON.stringify({ script, job_id: ownerJobId || null, llm_model: _ownerLlm, video_model: _ownerVideoModel }),
         });
         j = await r.json();
       } catch (e) {
-        clearInterval(_tipTimer);
+        if (_optTipTimer) { clearInterval(_optTipTimer); _optTipTimer = null; }
+        if (_isStale()) return;
         err("分镜请求异常：网络挂了或服务端崩溃 — " + e.message);
         return;
       }
-      clearInterval(_tipTimer);
+      if (_optTipTimer) { clearInterval(_optTipTimer); _optTipTimer = null; }
       if (!r.ok) {
+        if (_isStale()) { setMsg("原任务分镜失败，未改动任何任务：" + (j.error || "")); return; }
         err("分镜失败：" + (j.error || "") + (j.detail ? ("\n" + j.detail) : ""));
+        return;
+      }
+      
+      
+      if (_isStale()) {
+        await _persistDetachedShots(ownerJobId, j.shots || [], _ownerSource, _ownerScript);
         return;
       }
       lv.shots = j.shots || [];
@@ -1111,31 +1187,42 @@
       const _elapsed = Math.round((Date.now() - _t0) / 1000);
       const _basis = lv.storyboardBasis;
       const _basisTx = _basis.secMax ? ` · 按 ${_basis.model}（单段 ≤${_basis.secMax} 秒）拆分` : "";
-      setMsg(`已生成 ${lv.shots.length} 个镜头${_basisTx} · 分镜引擎 ${_usedModel} · 用时约 ${_elapsed}s（点「开始生成」生成视频）`);
+      
+      const _variantTx = j.prompt_variant === "workbench" ? " · 规约 分镜表版" : " · 规约 通用版";
+      setMsg(`已生成 ${lv.shots.length} 个镜头${_basisTx} · 分镜引擎 ${_usedModel}${_variantTx} · 用时约 ${_elapsed}s（点「开始生成」生成视频）`);
       
       if (lv.shots.length) lvShots.scrollIntoView({ behavior: "smooth", block: "start" });
       saveState();
       
+      
+      
       try {
-        if (lv.jobId && lv.shots.length) {
-          const ar = await fetch(API + `/api/jobs/${lv.jobId}/shots/archive`, {
+        if (ownerJobId && lv.shots.length) {
+          const ar = await fetch(API + `/api/jobs/${encodeURIComponent(ownerJobId)}/shots/archive`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ shots: lv.shots, source: lv.curShotVer >= 0 ? "重新分镜" : "智能分镜" }),
+            body: JSON.stringify({ shots: lv.shots, source: _ownerSource }),
           });
           const arj = await ar.json().catch(() => ({}));
+          if (_isStale()) return;
           if (ar.ok && typeof arj.idx === "number") {
             lv.curShotVer = arj.idx;             
-            const g = await fetch(API + `/api/jobs/${lv.jobId}`);
+            const g = await fetch(API + `/api/jobs/${encodeURIComponent(ownerJobId)}`);
             const gj = await g.json().catch(() => ({}));
+            if (_isStale()) return;
             if (g.ok && Array.isArray(gj.shots_history)) lv.shotsHist = gj.shots_history;
           }
         }
       } catch (_) {  }
+      if (_isStale()) return;   
       $("lvShotsHist").hidden = !lv.shotsHist.length;
       
       if (lv.shots.length) lvShowOptTip();
       saveDraftNow().then(loadJobs);   
+    }, _isStale, () => {
+      
+      if (_optActive && _optActive.gen === myGen) _optActive.done = true;
+      if (_optTipTimer) { clearInterval(_optTipTimer); _optTipTimer = null; }
     });
   });
 
@@ -2576,16 +2663,18 @@ async function _pickImageForShot(s) {
     
     const _costK = $("lvPsCostK"), _costV = $("lvPsCost");
     if (_costV) {
-      let _coins = 0, _money = 0, _unitC = "", _unitM = "", _any = false;
+      let _point = 0, _coins = 0, _money = 0, _unitP = "", _unitC = "", _unitM = "", _any = false;
       (lv.segs || []).forEach((s) => {
         if (s && s.is_continuation) return;          
         const c = s && s.cost;
         if (!c) return;
+        if (c.point != null && c.point !== "") { _point += Number(c.point) || 0; _unitP = c.point_unit || _unitP; _any = true; }
         if (c.coins != null && c.coins !== "") { _coins += Number(c.coins) || 0; _unitC = c.coins_unit || _unitC; _any = true; }
         if (c.money != null && c.money !== "") { _money += Number(c.money) || 0; _unitM = c.money_unit || _unitM; _any = true; }
       });
-      const _txt = _costText({ coins: _coins, money: _any && _money ? _money : null,
-                               coins_unit: _unitC, money_unit: _unitM });
+      const _txt = _costText({ point: _any && _point ? _point : null,
+                               coins: _coins, money: _any && _money ? _money : null,
+                               point_unit: _unitP, coins_unit: _unitC, money_unit: _unitM });
       if (_costK) _costK.hidden = !_any;
       _costV.hidden = !_any;
       _costV.textContent = _any ? _txt : "—";
@@ -2626,12 +2715,16 @@ async function _pickImageForShot(s) {
 
   
   function _costText(cost) {
-    if (!cost || (cost.coins == null && cost.money == null)) return "";
+    if (!cost || (cost.point == null && cost.coins == null && cost.money == null)) return "";
     const _ent = !!(window.__rhAccount
       && String(window.__rhAccount.api_type || "NORMAL").toUpperCase() !== "NORMAL");
-    const cu = cost.coins_unit || "", mu = cost.money_unit || "";
+    const pu = cost.point_unit || "", cu = cost.coins_unit || "", mu = cost.money_unit || "";
+    const _hasPoint = cost.point != null && cost.point !== "";
     const _hasCoins = cost.coins != null && cost.coins !== "";
     const _hasMoney = cost.money != null && cost.money !== "";
+    
+    
+    if (_hasPoint) return Number(Number(cost.point).toFixed(3)) + " " + pu;
     if (_ent && _hasMoney) return mu + Number(cost.money).toFixed(2);
     if (_hasCoins) return String(cost.coins) + " " + cu;
     if (_hasMoney) return mu + Number(cost.money).toFixed(2);

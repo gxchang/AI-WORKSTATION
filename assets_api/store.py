@@ -43,6 +43,33 @@ ORIGIN_UPLOADED = "uploaded"
 ORIGINS = (ORIGIN_CREATED, ORIGIN_UPLOADED)
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ORIGIN_VIEW_SESSION   = "session"
+ORIGIN_VIEW_CANVAS    = "canvas"
+ORIGIN_VIEW_LONGVIDEO = "longvideo"
+ORIGIN_VIEW_ASSISTANT = "assistant"
+ORIGIN_VIEW_UPLOAD    = "upload"
+ORIGIN_VIEWS = (ORIGIN_VIEW_SESSION, ORIGIN_VIEW_CANVAS, ORIGIN_VIEW_LONGVIDEO,
+                ORIGIN_VIEW_ASSISTANT, ORIGIN_VIEW_UPLOAD)
+
+
 SUBJECT_KINDS = ("character", "scene", "prop")
 
 _ASSET_KIND_TO_SUBJECT_KIND = {
@@ -118,6 +145,7 @@ def ensure_assets_table(con):
             subject_id INTEGER,
             origin TEXT,
             origin_session TEXT,
+            origin_view TEXT,
             updated_at REAL,
             meta TEXT
         )"""
@@ -132,7 +160,8 @@ def ensure_assets_table(con):
     for col, decl in (("posture", "TEXT"), ("job_id", "TEXT"), ("appearance", "TEXT"),
                       ("subject_id", "INTEGER"), ("origin", "TEXT"),
                       ("origin_session", "TEXT"), ("updated_at", "REAL"),
-                      ("meta", "TEXT"), ("duration", "REAL")):
+                      ("meta", "TEXT"), ("duration", "REAL"),
+                      ("origin_view", "TEXT")):
         try:
             con.execute("ALTER TABLE %s ADD COLUMN %s %s" % (T_ASSETS, col, decl))
         except sqlite3.OperationalError:
@@ -350,7 +379,7 @@ def build_provenance(payload=None, model=None, ratio=None):
 
 def register(name, url, type, origin, kind=None, label=None, owner=None, posture=None,
              subject_id=None, origin_session=None, job_id=None, appearance=None, meta=None,
-             duration=None):
+             duration=None, origin_view=None):
     
     if not name or not url:
         print("[warn] 资产入库被跳过（缺 name/url）：name=%r url=%r" % (name, url))
@@ -360,6 +389,13 @@ def register(name, url, type, origin, kind=None, label=None, owner=None, posture
         print("[warn] 资产入库 origin 非法（%r，应为 %s），已跳过：%s"
               % (origin, "|".join(ORIGINS), name))
         return None
+    if origin_view and origin_view not in ORIGIN_VIEWS:
+
+
+
+        print("[warn] 资产入库 origin_view 非法（%r，应为 %s），已置空：%s"
+              % (origin_view, "|".join(ORIGIN_VIEWS), name))
+        origin_view = None
 
 
 
@@ -404,6 +440,11 @@ def register(name, url, type, origin, kind=None, label=None, owner=None, posture
 
                 sets.append("origin_session=COALESCE(origin_session, ?)")
                 vals.append(origin_session)
+            if origin_view:
+
+
+                sets.append("origin_view=COALESCE(origin_view, ?)")
+                vals.append(origin_view)
             if duration:
 
                 sets.append("duration=?")
@@ -413,10 +454,12 @@ def register(name, url, type, origin, kind=None, label=None, owner=None, posture
         else:
             con.execute(
                 "INSERT INTO %s(name,url,type,label,kind,owner,posture,created_at,"
-                "job_id,subject_id,origin,origin_session,appearance,updated_at,meta,duration) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)" % T_ASSETS,
+                "job_id,subject_id,origin,origin_session,origin_view,appearance,updated_at,"
+                "meta,duration) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)" % T_ASSETS,
                 (name, url, type, label, kind, owner, posture, now,
-                 job_id, subject_id, origin, origin_session, appearance, now, _meta, duration or None),
+                 job_id, subject_id, origin, origin_session, origin_view, appearance, now,
+                 _meta, duration or None),
             )
         con.commit()
         return name
@@ -494,7 +537,7 @@ _SELECT_ASSET = (
     "       a.posture, a.appearance, a.created_at, a.job_id, "
     "       a.subject_id, s.name AS subject_name, s.kind AS subject_kind, "
     "       COALESCE(NULLIF(a.origin,''), 'uploaded') AS origin, a.origin_session, a.updated_at, "
-    "       a.meta, a.duration "
+    "       a.origin_view, a.meta, a.duration "
     "FROM %s a LEFT JOIN %s s ON s.id = a.subject_id" % (T_ASSETS, T_SUBJECTS)
 )
 

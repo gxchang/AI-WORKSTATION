@@ -153,6 +153,7 @@ def _register_uploaded_asset(name, url, kind):
         return _assets_store.register(
             name=name, url=url, type=kind,
             origin=_assets_store.ORIGIN_UPLOADED,
+            origin_view=_assets_store.ORIGIN_VIEW_UPLOAD,
             label=os.path.splitext(os.path.basename(name))[0] or None,
         )
     except Exception as e:
@@ -605,6 +606,7 @@ def _submit_video_to_ark(data):
         "video_id": video_id,
         "upstream": "ark",
         "sessionId": data.get("sessionId"),
+        "origin_view": data.get("origin_view"),
         "model": model,
         "mode": data.get("mode", "text"),
         "prompt": str(data.get("prompt") or ""),
@@ -797,6 +799,7 @@ def _submit_video_to_runninghub(data):
         "video_id": task_id,
         "upstream": "runninghub",
         "sessionId": data.get("sessionId"),
+        "origin_view": data.get("origin_view"),
         "model": model,
         "mode": data.get("mode", "text"),
         "prompt": str(data.get("prompt") or ""),
@@ -904,6 +907,7 @@ def _rh_video_status(task_id, model_name=""):
         cost = _rhprov.parse_usage(outs or {})
         if cost:
             _u = (_rhprov.limits(model_name or _rhprov.RH_ID) or {}).get("usage") or {}
+            cost["point_unit"] = _u.get("point_unit") or ""
             cost["coins_unit"] = _u.get("coins_unit") or ""
             cost["money_unit"] = _u.get("money_unit") or ""
 
@@ -1172,6 +1176,9 @@ def _submit_video_to_agnes(data):
         "video_id": video_id,
         "upstream": "agnes",
         "sessionId": data.get("sessionId"),
+
+
+        "origin_view": data.get("origin_view"),
         "model": model,
         "mode": mode,
         "prompt": payload["prompt"],
@@ -1192,9 +1199,20 @@ def _submit_video_to_agnes(data):
 
     return {"video_id": video_id, "rid": rid, "raw": body}, 200
 
+def _clean_origin_view(data):
+    
+    v = (data or {}).get("origin_view")
+    if v in _assets_store.ORIGIN_VIEWS:
+        return v
+    if v:
+        print("[warn] 未知的 origin_view（%r），按未记录处理" % (v,), flush=True)
+    return None
+
+
 @app.route("/api/generate", methods=["POST"])
 def api_generate():
     data = request.get_json(silent=True) or {}
+    data["origin_view"] = _clean_origin_view(data)
 
 
 
@@ -1336,6 +1354,7 @@ def _submit_image_task(data):
             src_size = "%dx%d" % (_w, _h)
 
 
+
             if not ratio:
                 ratio = "%d:%d" % (_w, _h)
 
@@ -1391,7 +1410,10 @@ def _submit_image_task(data):
     else:
         payload["size"] = size
     if ratio:
-        payload["ratio"] = ratio
+
+        _r = ratio if (use_ark or use_ms) else _agnes_ratio(ratio)
+        if _r:
+            payload["ratio"] = _r
     if data.get("seed") not in (None, ""):
         try:
             payload["seed"] = int(data["seed"])
@@ -1475,7 +1497,8 @@ def _submit_image_task(data):
                               session_id=data.get("sessionId"), upstream=upstream,
                               ratio=ratio,
                               user_params=_user_params,
-                              patch_mask=bool(data.get("_patch_mask")))
+                              patch_mask=bool(data.get("_patch_mask")),
+                              origin_view=data.get("origin_view"))
         _IMG_SUBMIT_DEDUP[_fp] = (tid, _now)
 
         if len(_IMG_SUBMIT_DEDUP) > 256:
@@ -1509,6 +1532,7 @@ def api_image_size_preview():
 @app.route("/api/image/generate", methods=["POST"])
 def api_image_generate():
     data = request.get_json(silent=True) or {}
+    data["origin_view"] = _clean_origin_view(data)
     body, code = _submit_image_task(data)
     return jsonify(body), code
 
@@ -1518,6 +1542,250 @@ def api_image_generate():
 def _agent_llm_model():
     am = _provider.get("agent_models") or ["agnes-3.0-flash"]
     return am[0]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+_SCREENPLAY_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_SCREENPLAY_RULES = {
+    "story_idea":   os.path.join(_SCREENPLAY_ROOT, "prompts", "agent_screenplay", "story_idea.txt"),
+    "story_script": os.path.join(_SCREENPLAY_ROOT, "prompts", "agent_screenplay", "story_script.txt"),
+    "assets":       os.path.join(_SCREENPLAY_ROOT, "prompts", "agent_screenplay", "assets.txt"),
+    "script_chunk": os.path.join(_SCREENPLAY_ROOT, "prompts", "agent_screenplay", "script_chunk.txt"),
+    "story_ref_gen": os.path.join(_SCREENPLAY_ROOT, "prompts", "agent_screenplay", "story_ref_gen.txt"),
+}
+def _load_screenplay_rules(mode):
+    
+    with open(_SCREENPLAY_RULES[mode], "r", encoding="utf-8") as _f:
+        return _f.read()
+
+
+_SCREENPLAY_RULE_HEADER = (
+    "以下是本阶段必须逐条遵守的创作规则，不得跳过、压缩或改写；"
+    "本轮输出只能依据这些规则产出。\n\n"
+)
+
+
+def _screenplay_rules_text(stage):
+    
+    if stage not in _SCREENPLAY_RULES:
+        raise ValueError("未知剧本阶段：%s" % stage)
+    return _SCREENPLAY_RULE_HEADER + _load_screenplay_rules(stage)
+
+
+def _screenplay_second_pass(messages, call, stage, on_progress=None,
+                            on_reasoning=None, on_delta=None):
+    
+    msgs = list(messages)
+    call_id = call.get("id") or "call_screenplay"
+    msgs.append({
+        "role": "assistant", "content": "",
+        "tool_calls": [{"id": call_id, "type": "function",
+                        "function": {"name": "read_screenplay_rules",
+                                     "arguments": json.dumps({"stage": stage}, ensure_ascii=False)}}],
+    })
+    msgs.append({"role": "tool", "tool_call_id": call_id,
+                 "content": _screenplay_rules_text(stage)})
+    if on_progress:
+        on_progress(stage)
+    _max_tok = _llm.max_output_for("assistant", AGENT_MAX_TOKENS)
+    if on_reasoning is None and on_delta is None:
+        body, err = _llm_chat_completions(
+            msgs, tools=None, tool_choice=None,
+            max_tokens=_max_tok,
+            timeout=(10, 900))
+        if err:
+            raise RuntimeError(err)
+        msg = (body.get("choices") or [{}])[0].get("message") or {}
+        content = (msg.get("content") or "").strip()
+        think = (msg.get("reasoning_content") or "").strip()
+        if not think:
+            think, content = _agent_split_think(content)
+        return content, think
+
+    r = _llm.chat("assistant", msgs, tools=None, tool_choice=None, stream=True,
+                  max_tokens=_max_tok, timeout=(10, 900))
+    if r.status_code != 200:
+        try:
+            _d = r.json()
+            _emsg = _d.get("detail") or (_d.get("error") or {}).get("message") or _d
+        except Exception:
+            _emsg = r.content.decode("utf-8", errors="replace")[:300]
+        raise RuntimeError("LLM 拒绝请求（%s）：%s" % (r.status_code, _emsg))
+    acc = ""
+    think_acc = ""
+
+
+    for raw in r.iter_lines(decode_unicode=False):
+        if not raw:
+            continue
+        line = raw.decode("utf-8", errors="replace").strip()
+        if not line.startswith("data:"):
+            continue
+        chunk = line[5:].strip()
+        if chunk == "[DONE]":
+            break
+        try:
+            obj = json.loads(chunk)
+        except Exception:
+            continue
+        delta = ((obj.get("choices") or [{}])[0].get("delta") or {})
+        rc = delta.get("reasoning_content")
+        if rc:
+            if think_acc and rc.startswith(think_acc) and len(rc) > len(think_acc):
+                inc = rc[len(think_acc):]
+            elif think_acc and rc == think_acc and len(think_acc) >= 64:
+                inc = ""
+            else:
+                inc = rc
+            if inc:
+                think_acc += inc
+                on_reasoning(inc)
+        c = delta.get("content")
+        if c:
+            if acc and c.startswith(acc) and len(c) > len(acc):
+                inc = c[len(acc):]
+            elif acc and c == acc and len(acc) >= 64:
+                inc = ""
+            else:
+                inc = c
+            if inc:
+                acc += inc
+                on_delta(inc)
+    content = acc.strip()
+    think = think_acc.strip()
+    if not think:
+        think, content = _agent_split_think(content)
+    return content, think
+
+
+
+
+_AGENT_TOOL_SECOND_PASS = {"generate_longvideo_assets", "generate_longvideo_audio"}
+
+
+def _agent_need_tool_second_pass(names):
+    
+    s = {n for n in names if n}
+    return bool(s & _AGENT_TOOL_SECOND_PASS) and "submit_longvideo_job" not in s
+
+
+def _agent_tool_result_brief(item):
+    
+    if not isinstance(item, dict):
+        return {}
+    out = {"kind": item.get("kind")}
+    if item.get("error"):
+        out["error"] = str(item["error"])[:200]
+    assets = item.get("assets")
+    if isinstance(assets, list):
+        out["ok"] = len(assets)
+        out["assets"] = [{k: a.get(k) for k in ("label", "owner", "type") if a.get(k)}
+                         for a in assets if isinstance(a, dict)]
+    failed = item.get("failed")
+    if isinstance(failed, list):
+        out["failed"] = len(failed)
+        first = next((f.get("error") for f in failed
+                      if isinstance(f, dict) and f.get("error")), None)
+        if first:
+            out["first_error"] = str(first)[:200]
+    return out
+
+
+def _agent_tool_second_pass(messages, calls, items, first_content="",
+                            on_reasoning=None, on_delta=None):
+    
+    msgs = list(messages)
+    tc = [{"id": c.get("id") or ("call_%d" % i), "type": "function",
+           "function": {"name": c.get("name") or "",
+                        "arguments": c.get("arguments") or "{}"}}
+          for i, c in enumerate(calls)]
+    msgs.append({"role": "assistant", "content": first_content or "", "tool_calls": tc})
+    for i, t in enumerate(tc):
+        brief = items[i] if i < len(items) else {}
+        msgs.append({"role": "tool", "tool_call_id": t["id"],
+                     "content": json.dumps(_agent_tool_result_brief(brief), ensure_ascii=False)})
+    _max_tok = _llm.max_output_for("assistant", AGENT_MAX_TOKENS)
+    if on_reasoning is None and on_delta is None:
+        body, err = _llm_chat_completions(
+            msgs, tools=None, tool_choice=None,
+            max_tokens=_max_tok, timeout=(10, 900))
+        if err:
+            raise RuntimeError(err)
+        msg = (body.get("choices") or [{}])[0].get("message") or {}
+        content = (msg.get("content") or "").strip()
+        think = (msg.get("reasoning_content") or "").strip()
+        if not think:
+            think, content = _agent_split_think(content)
+        return content, think
+    r = _llm.chat("assistant", msgs, tools=None, tool_choice=None, stream=True,
+                  max_tokens=_max_tok, timeout=(10, 900))
+    if r.status_code != 200:
+        try:
+            _d = r.json()
+            _emsg = _d.get("detail") or (_d.get("error") or {}).get("message") or _d
+        except Exception:
+            _emsg = r.content.decode("utf-8", errors="replace")[:300]
+        raise RuntimeError("LLM 拒绝请求（%s）：%s" % (r.status_code, _emsg))
+    acc = ""
+    think_acc = ""
+    _on_r = on_reasoning or (lambda inc: None)
+    _on_d = on_delta or (lambda inc: None)
+
+    for raw in r.iter_lines(decode_unicode=False):
+        if not raw:
+            continue
+        line = raw.decode("utf-8", errors="replace").strip()
+        if not line.startswith("data:"):
+            continue
+        chunk = line[5:].strip()
+        if chunk == "[DONE]":
+            break
+        try:
+            obj = json.loads(chunk)
+        except Exception:
+            continue
+        delta = ((obj.get("choices") or [{}])[0].get("delta") or {})
+        rc = delta.get("reasoning_content")
+        if rc:
+            if think_acc and rc.startswith(think_acc) and len(rc) > len(think_acc):
+                inc = rc[len(think_acc):]
+            elif think_acc and rc == think_acc and len(think_acc) >= 64:
+                inc = ""
+            else:
+                inc = rc
+            if inc:
+                think_acc += inc
+                _on_r(inc)
+        c = delta.get("content")
+        if c:
+            if acc and c.startswith(acc) and len(c) > len(acc):
+                inc = c[len(acc):]
+            elif acc and c == acc and len(acc) >= 64:
+                inc = ""
+            else:
+                inc = c
+            if inc:
+                acc += inc
+                _on_d(inc)
+    content = acc.strip()
+    think = think_acc.strip()
+    if not think:
+        think, content = _agent_split_think(content)
+    return content, think
+
 
 
 
@@ -1533,26 +1801,72 @@ AGENT_SYSTEM_PROMPT = (
     "6. 用户只是闲聊、询问或做与接口无关的事，直接回文字，不要强行调用工具。\n"
     "7. 排版：正文按语义分段，段与段之间空一行；作文/文案/脚本等多段内容严禁挤成一大段。\n"
     "\n"
-    "【长视频草稿任务：分四步，每一步都要等用户确认，严禁一步完成】\n"
-    "8. 用户要「做长视频 / 生成漫剧 / 开长视频任务」时，按下面四步走，且每步之间必须停下来等用户确认，"
+    "【长视频草稿任务：分八步，每一步都要等用户确认，严禁一步完成】\n"
+    "8. 用户要「做长视频 / 生成短剧 / 开长视频任务 / 提供题材」时，按下面八步走，且每步之间必须停下来等用户确认，"
     "不得在未确认的情况下把脚本+素材一次性塞进某个工具：\n"
-    "   · 第1步（不调工具）：先分析脚本，抽取其中的角色 / 场景 / 道具 / 角色声线，列出每项的【名称 + 类型 + 生成提示词】，"
-    "用文字呈现给用户确认。这一步不要调用任何工具，等用户说「可以 / 没问题 / 确认」再继续。\n"
-    "     - 角色声线项：需标注归属角色（owner）、该角色的台词或旁白文本、期望音色（预置音色 / 参考音色 / 自定义音色描述）。\n"
-    "   · 第2步（generate_longvideo_assets）：用户确认提示词后，调用 generate_longvideo_assets 逐张生成素材图，"
-    "把图片展示给用户。**这一步只生图、不建任务**。\n"
+    "   · 第1步（写故事大纲）：用户只给了一句想法 / 主题 / 图片 / 零散场景时，"
+    "先调用 read_screenplay_rules，stage 传 story_idea 读取本阶段规则原文，再严格按规则写出故事大纲"
+    "（故事概览、角色表含愿望与恐惧与角色弧线、三幕式、5–7 个情节点、主题与情感曲线），用文字呈现给用户确认。"
+    "大纲只搭框架，不写台词、不写场景细节、不写镜头语言；用户已给的设定只在空缺处补全，不推翻。"
+    "等用户说「可以 / 没问题 / 确认」再继续。\n"
+    "   · 第2步（写分场剧本）：大纲确认后，先调用 read_screenplay_rules，stage 传 story_script "
+    "读取本阶段规则原文，再严格按规则写出完整的分场拍摄剧本并交给用户确认。"
+    "动作描述只写可见动作表情 / 可闻声音台词 / 可拍画面信息，不写心理活动与作者解释；"
+    "信息揭示、关系变化、谈判对抗必须写出有效对话。用户确认后的剧本原文就是第4步拆分镜表的依据。\n"
+    "     用户已有脚本、或明确不要写剧本时，可跳过第1、2步，直接从第3步开始。\n"
+    "     第1、2、3、4、5步只调用 read_screenplay_rules 这一个只读工具：必须先读规则再写，"
+    "不读规则就直接写大纲、剧本、素材清单、分镜表或生图提示词视为违规；这五步同轮严禁调用任何生成、素材或建草稿工具。"
+    "此时通用约定第 1、2 条（能用工具就调工具 / 参数缺失不反问）不适用。\n"
+    "   · 第3步（素材清单）：先调用 read_screenplay_rules，stage 传 assets 读取本阶段规则原文，"
+    "再严格按规则遍历全剧本抽取素材（角色 / 物品道具 / 场景，含主体与变体），用文字呈现给用户确认。"
+    "不读规则就直接列清单视为违规。清单按规则的字段输出（类型 / 性别 / 主体来源 / 对应素材 / 主体 / 变体 / 音色描述等），"
+    "其中「主体」那段描述就是后续生图要用的画面描述，必须按规则写全（角色写到面部与足部、场景是空镜）；"
+    "主体来源只有两档：用户已上传参考图 / 待生成主体，用户已确认沿用的形象绝不重画。"
+    "「对应素材」写该条资产对应的上传图编号（对话素材清单里的 图1 / 图2 …，没有就写「无」），"
+    "必须单独成行，绝不能混进「主体」描述里（那段落会原样当生图提示词，写进「参考图1」会污染画面）。"
+    "这一步除 read_screenplay_rules 外不调用任何工具，等用户说「可以 / 没问题 / 确认」再继续。\n"
+    "     - 角色声线项：需标注归属角色（owner）、该角色的台词或旁白文本、音色（按规则的固定字段写，第7步直接用它配音）。\n"
+    "   · 第4步（分镜表）：用户确认第3步清单后，先调用 read_screenplay_rules，stage 传 script_chunk "
+    "读取本阶段规则原文，再严格按规则把第2步确认的剧本拆成六列分镜表（镜号 / 景别角度 / 画面描述 / 声音 / 运镜 / 时长），"
+    "用文字呈现给用户确认。不读规则就直接拆镜视为违规。"
+    "这一步除 read_screenplay_rules 外不调用任何工具，等用户说「可以 / 没问题 / 确认」再进入第5步。\n"
+    "   · 第5步（生图提示词）：用户确认第4步分镜表后，先调用 read_screenplay_rules，stage 传 story_ref_gen "
+    "读取本阶段规则原文，再严格按规则把清单逐条拼成【生图表】交给用户确认。"
+    "不读规则就直接拼提示词视为违规。"
+    "文字内容一律取自第3步清单原文，不得改写、不得重新设计；新增的只是外层拼装："
+    "全片统一的一句风格声明、单体约束（只画这个角色/物品/场景本身）、按类型的固定话术、写死的画幅与分辨率。"
+    "每条必须写全：kind（character / scene / prop）、主体来源、对应素材、生成方式（沿用原图 / 重新生成）、"
+    "画幅、分辨率、风格参考、prompt（一整段可直接提交）。"
+    "画幅严格按规格：角色与场景 16:9、物品与产品 1:1，不随用户口语文风漂移；分辨率一律 2K。"
+    "这一步除 read_screenplay_rules 外不调用任何工具，等用户说「可以 / 没问题 / 确认」再进入第6步。\n"
+    "   · 第6步（generate_longvideo_assets）：用户确认第5步生图表后，把表逐条转成 assets 参数"
+    "（label 用表里的素材名、kind 取 character / scene / prop、prompt 用该条的 prompt 原文、"
+    "size 填 2K、ratio 按该条的画幅填；变体项另填 base_label（其主体的素材名），主体项不填），"
+    "调用 generate_longvideo_assets 逐张生成素材图，把图片展示给用户。**这一步只生图、不建任务**。"
+    "生图表全部条目（含变体）必须在同一次 generate_longvideo_assets 调用里一次性提交，变体填 base_label。\n"
+    "     `生成方式` 为「沿用原图」的项不要再生成，直接把 `对应素材` 那张图的 URL 填进该项的 url"
+    "（URL 只能从「用户本轮附带的素材」清单里取，严禁编造；工具会自动跳过所有带 url 的项、不重复计费）；"
+    "`生成方式` 为「重新生成」的项不带 url，按该条 prompt 正常生成。"
+    "展示图片时对已沿用的项点明「这一张用的是你上传的原图，想换风格可以让我按 prompt 重画」。\n"
     "     若用户后续要求修改某张素材（如'第一张重画'、'角色变形了'）：必须继续调用 generate_longvideo_assets，"
-    "传入完整的最新素材清单——已满意的素材保留其 url，需要重绘的素材保留 label/kind/prompt 但不带 url；"
+    "传入完整的最新素材清单——已满意的素材保留其 url，需要重绘的素材保留 label/kind/prompt（变体项保留 base_label）但不带 url；"
     "工具会自动跳过带 url 的项、只重绘缺 url 的项，并返回完整清单。严禁用 generate_image 处理长视频素材修改，"
     "因为那样生成的图不会进入长视频素材清单。\n"
-    "   · 第3步（generate_longvideo_audio）：若第1步清单含角色声线，用户确认图后，调用 generate_longvideo_audio"
+    "   · 第7步（generate_longvideo_audio）：若第3步清单含角色声线，用户确认第6步素材图后，调用 generate_longvideo_audio"
     "为每个需要配音的角色生成声线音频，把音频展示给用户。**这一步只生音频、不建任务**。\n"
+    "     音色取自第3步清单该角色条目下的「音色描述」原文：逐字填进 audios[].voice_desc，"
+    "后端会据此自动选自定义配音模型（也可显式填 audios[].model），不要改用预置音色；"
+    "不同角色必须用各自的音色描述，不得共用一个预置音色，也不得省略。\n"
     "     声线通过 owner 绑定角色，分镜会自动把音频对到对应角色，无需在提示词里手写字面音；"
     "修改某条声线时继续调用本工具、只传需重生的项（已满意的保留 url）。\n"
     "     若用户明确不需要音频（纯画面 / 默声），可跳过本步。\n"
     "     严禁用 generate_audio 处理长视频声线素材——那样生成的音频不会进入长视频素材清单、分镜也无法绑定角色。\n"
-    "   · 第4步（submit_longvideo_job）：用户看完图、确认素材与声线无误后，调用 submit_longvideo_job，"
-    "把脚本 + 已生成素材（每项带 url）+ 已生成声线（每项带 url，按 owner 绑定角色）+ 用户提供的素材（每项带 url）提交建草稿。\n"
+    "   · 第8步（submit_longvideo_job）：用户看完图、确认素材与声线无误后，调用 submit_longvideo_job，"
+    "把第4步用户确认的分镜表原文填进 script 参数（不是第2步的剧本原文；长视频工作台会在这张表的基础上二次提取优化分镜），"
+    "连同已生成素材（每项带 url）+ 已生成声线（每项带 url，按 owner 绑定角色）+ 用户提供的素材（每项带 url）提交建草稿。"
+    "同时必须填 name 参数给任务命名：剧本有名称（第1/2步的剧名 / 剧本标题）就原样使用剧本名称；"
+    "没有剧本名称就用一句与剧本内容相关的简短概述（不超过 20 字）命名。"
+    "严禁用时间、日期、「任务」「未命名」等占位名，也严禁用「任务 M/D HH:MM」这类默认名。\n"
     "   严禁在未获用户明确确认前调用 generate_longvideo_assets / generate_longvideo_audio / submit_longvideo_job。"
 )
 
@@ -1560,7 +1874,6 @@ AGENT_SYSTEM_PROMPT = (
 
 
 
-AGENT_THINKING_PARAMS = {"chat_template_kwargs": {"enable_thinking": True}}
 
 
 
@@ -1572,6 +1885,23 @@ AGENT_MAX_TOKENS = 32768
 
 _IMG_TIERS_ALL = ["1K", "2K", "3K", "4K"]
 _IMG_RATIOS_ALL = ["1:1", "3:4", "4:3", "16:9", "9:16", "2:3", "3:2", "21:9"]
+
+
+def _agnes_ratio(ratio):
+    
+    r = str(ratio or "").strip()
+    if r in _IMG_RATIOS_ALL:
+        return r
+    a, b = _imgen._ratio_pair(r)
+    if not b:
+        return "1:1"
+    want = a / b
+
+    def _v(x):
+        p, q = _imgen._ratio_pair(x)
+        return p / q if q else 1.0
+
+    return min(_IMG_RATIOS_ALL, key=lambda x: abs(_v(x) - want))
 
 
 
@@ -1757,7 +2087,8 @@ MULTI_ANGLE_TOOL = {
         "name": "generate_multi_angle",
         "description": "把一张**已有的图**换个机位重新拍（多角度 / 换视角 / 改景别）。"
                        "用于「换个角度看看 / 转成俯视 / 从侧面拍 / 拉近一点 / 拍个特写」这类需求。"
-                       "与 generate_image 的区别：本工具专管**机位变化**，角度用数值精确表达，不要写成散文。",
+                       "与 generate_image 的区别：本工具专管**机位变化**，角度用数值精确表达，不要写成散文。"
+                       "必须给出机位变化：horizontal / vertical 至少一个非 0，或给 shot；只填 image、extra、ratio 会被拒绝。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -1770,11 +2101,23 @@ MULTI_ANGLE_TOOL = {
                          "description": "景别：closeup=特写、wide=广角；不改景别则不传"},
                 "ratio": {"type": "string",
                           "description": "输出画幅（如 16:9 / 9:16），缺省 16:9"},
+                "extra": {"type": "string",
+                          "description": "额外的画面要求：写场景/内容约束，不要写机位角度（角度用上面的数值参数）"},
             },
             "required": ["image"],
         },
     },
 }
+
+
+def _agent_video_caps():
+    
+    models, limits = _video_provider_models()
+    all_limits = dict(MODEL_LIMITS)
+    all_limits.update(limits or {})
+    model = ((models or [])[0]
+             or (_provider.get("video_models") or ["agnes-video-2.5-flash"])[0])
+    return model, (all_limits.get(model) or {})
 
 
 def _agent_tools():
@@ -1792,12 +2135,7 @@ def _agent_tools():
                 props["ratio"]["enum"] = ratios
         if fn.get("name") == "generate_video":
 
-            if _arkprov.video_ready():
-                _vmodel = _arkprov.video_models()[0]
-                _vlim = _arkprov.video_limits(_vmodel)
-            else:
-                _vmodel = (_provider.get("video_models") or ["agnes-video-2.5-flash"])[0]
-                _vlim = MODEL_LIMITS.get(_vmodel) or {}
+            _vmodel, _vlim = _agent_video_caps()
             _lo, _hi = int(_vlim.get("min_seconds") or 4), int(_vlim.get("max_seconds") or 12)
             vprops = ((fn.get("parameters") or {}).get("properties")) or {}
             if isinstance(vprops.get("seconds"), dict):
@@ -1845,7 +2183,11 @@ def _agent_tools():
 
 
     if _multi_angle_available():
-        tools.append(json.loads(json.dumps(MULTI_ANGLE_TOOL, ensure_ascii=False)))
+        _ma = json.loads(json.dumps(MULTI_ANGLE_TOOL, ensure_ascii=False))
+        _maprops = ((_ma.get("function") or {}).get("parameters") or {}).get("properties") or {}
+        if isinstance(_maprops.get("ratio"), dict):
+            _maprops["ratio"]["enum"] = ratios
+        tools.append(_ma)
     return tools
 
 
@@ -1897,7 +2239,13 @@ def _angle_prompt(args):
         parts.append("将镜头转为广角镜头")
     if not parts:
         return "", "没给出任何机位变化：horizontal / vertical 至少给一个非 0 的值，或给 shot=closeup|wide。"
-    return "，".join(parts), ""
+    out = "，".join(parts)
+
+
+    extra = str(a.get("extra") or "").strip()
+    if extra:
+        out += " " + extra
+    return out, ""
 
 
 
@@ -1993,6 +2341,28 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "read_screenplay_rules",
+            "description": "写故事大纲 / 分场剧本 / 列素材清单 / 拆分镜表 / 拼生图提示词之前必须先调用，读取该阶段的完整创作规则原文并严格按其执行。"
+                           "第1步写大纲传 story_idea；第2步写分场剧本传 story_script；第3步抽素材清单传 assets；"
+                           "第4步把剧本拆成六列分镜表传 script_chunk；第5步把清单拼成生图表传 story_ref_gen。"
+                           "只用于这五步；调用后本轮为纯文本产出，不得再调用任何生成、素材或建草稿工具。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "stage": {"type": "string",
+                              "enum": ["story_idea", "story_script", "assets", "script_chunk", "story_ref_gen"],
+                              "description": "本轮阶段：第1步写故事大纲=story_idea，第2步写分场剧本=story_script，"
+                                             "第3步抽角色/场景/道具素材清单=assets，"
+                                             "第4步把剧本拆成六列分镜表=script_chunk，"
+                                             "第5步按规格拼生图提示词=story_ref_gen"}
+                },
+                "required": ["stage"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "generate_video",
             "description": "根据提示词生成一段视频。用于「生成视频 / 做一段短片 / 出片」这类需求。",
             "parameters": {
@@ -2070,7 +2440,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "generate_longvideo_assets",
-            "description": "（长视频流程第2步：须先与用户确认提示词清单）根据素材清单逐张生成素材图，并返回每张图的 URL 预览。**本工具只生图、不建任务**。生成后把图片展示给用户，等用户确认无误，再用 submit_longvideo_job 提交建草稿。支持局部修改：清单中已带 url 的项会被保留、不会重复生成；需要重绘的项保留 label/kind/prompt 但不带 url。用户要求修改某张素材时，必须继续调用本工具，严禁用 generate_image 处理长视频素材。",
+            "description": "（长视频流程第6步：须先与用户确认第5步的生图表）根据素材清单逐张生成素材图，并返回每张图的 URL 预览。**本工具只生图、不建任务**。生成后把图片展示给用户，等用户确认无误，再用 submit_longvideo_job 提交建草稿。支持局部修改：清单中已带 url 的项会被保留、不会重复生成；需要重绘的项保留 label/kind/prompt 但不带 url。用户要求修改某张素材时，必须继续调用本工具，严禁用 generate_image 处理长视频素材。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2087,6 +2457,7 @@ AGENT_TOOLS = [
                                 "posture": {"type": "string", "description": "可选：姿态 / 外观描述"},
                                 "size": {"type": "string", "description": "可选分辨率"},
                                 "ratio": {"type": "string", "description": "可选画幅"},
+                                "base_label": {"type": "string", "description": "仅变体项填：该变体所属主体在剧本里的素材名（与主体项的 label 完全一致）。工具会先出主体图，再把主体图作为参考图传给本项；主体项与无主体归属的项不填。不要用它改写 label。"},
                                 "images": {"type": "array", "items": {"type": "string"}, "description": "可选参考图 URL（图生图）"}
                             },
                             "required": ["label", "kind", "prompt"]
@@ -2102,11 +2473,11 @@ AGENT_TOOLS = [
         "function": {
             "name": "generate_longvideo_audio",
             "description": (
-                "（长视频流程第3步：须用户先看素材图确认）为长视频草稿中的角色生成声线音频（配音），"
+                "（长视频流程第7步：须用户先看第6步素材图确认）为长视频草稿中的角色生成声线音频（配音），"
                 "并返回每段音频的 URL 预览。本工具只生音频、不建任务。生成后把音频展示给用户，"
                 "等用户确认无误，再用 submit_longvideo_job 一并提交。"
                 "支持按角色绑定（owner）：声线会自动对到分镜中对应角色，无需在提示词里手写字面音。"
-                "支持局部重生成：清单中已带 url 的项会保留、不重复生成；需重做的项保留 owner/text/voice 但不带 url。"
+                "支持局部重生成：清单中已带 url 的项会保留、不重复生成；需重做的项保留 owner/text/voice_desc 但不带 url。"
                 "用户要求修改某条声线时，必须继续调用本工具，严禁用 generate_audio 处理长视频声线素材"
                 "（那样音频不会进入长视频素材清单、分镜也无法绑定角色）。"
             ),
@@ -2125,7 +2496,8 @@ AGENT_TOOLS = [
                                 "preset_voice": {"type": "string", "enum": [], "description": "厂商预置音色 id（官方配音用）"},
                                 "voice_id": {"type": "string", "description": "音色库里的音色 id（参考配音 voiceclone 用）"},
                                 "reference_audio": {"type": "string", "description": "参考音频站内 URL（参考配音 voiceclone 用，与 voice_id 二选一）"},
-                                "voice_desc": {"type": "string", "description": "自定义音色描述（voicedesign 用），如「低沉的老年男声，语速偏慢」"},
+                                "voice_desc": {"type": "string", "description": "音色描述，填第3步素材清单该角色条目下「音色描述」的原文（如「性别男，年龄38，语调低沉温和，音高偏低，语速中等偏慢，口音无」）；自定义配音（voicedesign）用，不同角色必须各用自己那条，不得共用或省略"},
+                                "model": {"type": "string", "description": "音频模型 id。不填时后端按有无 voice_desc 自动选自定义配音模型（当前生效家里名字以 voicedesign 结尾的那个）；显式填则按所填执行。默认官方配音不消费音色描述"},
                                 "tags": {"type": "array", "items": {"type": "string"}, "description": "语气/风格标签，如 (悲伤)/(东北话)；裸词不生效，需带括号"},
                                 "speed": {"type": "number", "enum": [], "description": "语速（仅部分模型支持）"}
                             },
@@ -2141,11 +2513,12 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "submit_longvideo_job",
-            "description": "（长视频流程第3步：须用户先看素材图确认）把一份脚本 + 已生成的素材图（每项带 url）落成一个长视频草稿任务。用于用户确认素材无误后提交。返回任务 job_id，用户可在长视频工作台继续（点智能分镜接生成）。",
+            "description": "（长视频流程第8步：须用户先看素材图确认）把第4步用户确认的六列分镜表 + 已生成的素材图（每项带 url）落成一个长视频草稿任务。用于用户确认素材无误后提交。返回任务 job_id，用户可在长视频工作台继续（点智能分镜接生成，工作台会在分镜表基础上二次提取优化分镜）。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "script": {"type": "string", "description": "故事脚本文本（用户自带或已与助手确认）。可空，由用户在长视频侧补全。"},
+                    "script": {"type": "string", "description": "第4步用户确认的分镜表原文（六列 Markdown 表），不是第2步的剧本原文；这就是长视频工作台脚本框里的内容。可空，由用户在长视频侧补全。"},
+                    "name": {"type": "string", "description": "长视频任务名称：剧本有名称（第1/2步的剧名、剧本标题）就原样用剧本名称；没有名称就用一句与剧本内容相关的简短概述（不超过 20 字）命名。禁止使用时间、日期、「任务」「未命名」等占位名，这个名称会显示在长视频工作台的任务列表和会话气泡里。"},
                     "job_id": {"type": "string", "description": "可选：已有草稿任务 id，传入则更新该任务（替换素材）而非新建。"},
                     "assets": {
                         "type": "array",
@@ -2177,7 +2550,7 @@ AGENT_TOOLS = [
                         }
                     }
                 },
-                "required": ["assets"]
+                "required": ["assets", "name"]
             }
         }
     },
@@ -2226,16 +2599,20 @@ def _lv_upsert_assets(con, job_id, assets):
         owner = a.get("owner")
         posture = a.get("posture")
         typ = a.get("type") or "image"
-        origin = a.get("origin") or _assets_store.ORIGIN_UPLOADED
+        cur = con.execute("SELECT name, origin FROM assets WHERE name=?", (name,)).fetchone()
+        origin = a.get("origin") or (cur[1] if cur else "")
+        if not origin:
+            _n = _assets_store.asset_name_of(url) or ""
+            _row = _n and con.execute("SELECT origin FROM assets WHERE name=?", (_n,)).fetchone()
+            origin = (_row[0] if _row else "") or _assets_store.ORIGIN_CREATED
 
         sid = _assets_store.sync_subject(con, owner=owner, kind=kind, label=a.get("label"))
         now = time.time()
-        cur = con.execute("SELECT name FROM assets WHERE name=?", (name,)).fetchone()
         if cur:
             con.execute(
-                "UPDATE assets SET label=?,kind=?,owner=?,posture=?,job_id=?,origin=?,subject_id=?,updated_at=? "
+                "UPDATE assets SET label=?,kind=?,owner=?,posture=?,job_id=?,subject_id=?,updated_at=? "
                 "WHERE name=?",
-                (label, kind, owner, posture, job_id, origin, sid, now, name),
+                (label, kind, owner, posture, job_id, sid, now, name),
             )
         else:
             con.execute(
@@ -2265,14 +2642,52 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None)
     _cands = [m for m in _psrc["models"]() if (_caps(m) if _caps else {}).get("can_t2i")] if _caps \
         else list(_psrc["models"]())
     _img_model = (_cands or _psrc["models"]() or [""])[0]
-    print(f"[lv-assets] 开始：共 {_total} 项，生效家={_prov}，模型={_img_model}", flush=True)
-    for _i, a in enumerate(_assets):
+
+
+
+
+
+
+    _label_idx = {}
+    for _j, _it in enumerate(_assets):
+        if not isinstance(_it, dict):
+            continue
+        _lb = str(_it.get("label") or "").strip()
+        if _lb and _lb not in _label_idx:
+            _label_idx[_lb] = _j
+    _dep = {}
+    for _j, _it in enumerate(_assets):
+        if not isinstance(_it, dict):
+            continue
+        _bl = str(_it.get("base_label") or "").strip()
+        _bi = _label_idx.get(_bl) if _bl else None
+        if _bi is not None and _bi != _j:
+            _dep[_j] = _bi
+
+
+
+    _order = []
+    for _j in range(_total):
+        _chain, _k = [], _j
+        while _k is not None and _k not in _order and _k not in _chain:
+            _chain.append(_k)
+            _k = _dep.get(_k)
+        for _x in reversed(_chain):
+            if _x not in _order:
+                _order.append(_x)
+    _resolved = {}
+    print(f"[lv-assets] 开始：共 {_total} 项，生效家={_prov}，模型={_img_model}，"
+          f"变体接力 {len(_dep)} 项", flush=True)
+    for _seq, _i in enumerate(_order):
+        a = _assets[_i]
         label = a.get("label") or ""
         _t0 = time.time()
         print(f"[lv-assets] #{_i} 「{label}」进入循环 has_url={bool(a.get('url'))} "
               f"prompt_len={len(str(a.get('prompt') or ''))}", flush=True)
 
+
         if a.get("url"):
+            _resolved[_i] = a.get("url")
             norm.append({
                 "name": a.get("name") or f"lv_{uuid.uuid4().hex[:10]}_{_safe_name(label or 'asset')}",
                 "url": a.get("url"),
@@ -2287,12 +2702,12 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None)
             })
             if on_progress:
                 try:
-                    on_progress(_i + 1, _total, label or "已有素材")
+                    on_progress(_seq + 1, _total, label or "已有素材")
                 except Exception:
                     pass
             if on_item:
                 try:
-                    on_item(_i, norm[-1])
+                    on_item(_i, norm[-1], _seq)
                 except Exception:
                     pass
             print(f"[lv-assets] #{_i} 复用已有 url，跳过生成", flush=True)
@@ -2302,21 +2717,55 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None)
             failed.append({"label": label, "error": "素材缺少 prompt，无法生图"})
             if on_progress:
                 try:
-                    on_progress(_i + 1, _total, (label or "?") + "（缺提示词，已跳过）")
+                    on_progress(_seq + 1, _total, (label or "?") + "（缺提示词，已跳过）")
                 except Exception:
                     pass
             continue
 
 
 
+
         print(f"[lv-assets] #{_i} 构造 payload …", flush=True)
-        _payload = {"prompt": prompt, "model": _img_model}
-        if a.get("images"):
-            _payload["images"] = a.get("images")
-        if a.get("size"):
-            _payload["size"] = a.get("size")
-        if a.get("ratio"):
-            _payload["ratio"] = a.get("ratio")
+
+        _refs = []
+        _bi = _dep.get(_i)
+        if _bi is not None and _resolved.get(_bi):
+            _refs.append(_resolved[_bi])
+        for _u in (a.get("images") or []):
+            if _u and _u not in _refs:
+                _refs.append(_u)
+        if _bi is not None and not _resolved.get(_bi):
+            print(f"[lv-assets] #{_i} 「{label}」的主体图尚不可用，本项按文生图处理", flush=True)
+
+
+        _model = _img_model
+        if _refs and _caps:
+            _ed = [m for m in _psrc["models"]() if (_caps(m) or {}).get("can_edit")]
+            if _ed:
+                _model = _ed[0]
+        _payload = {"prompt": prompt, "model": _model}
+        if _refs:
+
+
+            _payload["extra_body"] = {"response_format": "url", "image": list(_refs)}
+
+
+
+
+        _kind = str(a.get("kind") or "").strip().lower()
+        _ratio = a.get("ratio") or ("1:1" if _kind == "prop" else "16:9")
+        _size = a.get("size") or "2K"
+        _payload["size"] = _size
+        _payload["ratio"] = _ratio
+
+
+
+
+
+
+        _user_payload = {k: v for k, v in _payload.items() if k != "extra_body"}
+        if _refs:
+            _user_payload["images"] = list(_refs)
         _upstream = None
 
 
@@ -2364,7 +2813,7 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None)
             failed.append({"label": a.get("label"), "error": f"生成失败：{type(e).__name__}: {e}"})
             if on_progress:
                 try:
-                    on_progress(_i + 1, _total, (label or "?") + "（失败）")
+                    on_progress(_seq + 1, _total, (label or "?") + "（失败）")
                 except Exception:
                     pass
             continue
@@ -2372,10 +2821,12 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None)
             failed.append({"label": a.get("label"), "error": err})
             if on_progress:
                 try:
-                    on_progress(_i + 1, _total, (label or "?") + "（失败）")
+                    on_progress(_seq + 1, _total, (label or "?") + "（失败）")
                 except Exception:
                     pass
             continue
+
+        _resolved[_i] = urls[0]
         nm = a.get("name") or f"lv_{uuid.uuid4().hex[:10]}_{_safe_name(a.get('label') or 'asset')}"
         norm.append({
             "name": nm,
@@ -2404,13 +2855,15 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None)
 
 
 
+
             _prov_meta = _assets_store.build_provenance(
-                payload=_assets_store.fit_payload(_payload, _prov_caps, _imgen.param_cap_map()),
+                payload=_assets_store.fit_payload(_user_payload, _prov_caps, _imgen.param_cap_map()),
                 model=(_payload or {}).get("model"),
                 ratio=a.get("ratio"))
             _assets_store.register(
                 name=nm, url=urls[0], type="image",
                 origin=_assets_store.ORIGIN_CREATED,
+                origin_view=_assets_store.ORIGIN_VIEW_LONGVIDEO,
                 label=a.get("label") or nm,
                 kind=a.get("kind") or "prop",
                 owner=a.get("owner"), posture=a.get("posture"),
@@ -2422,20 +2875,43 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None)
         print(f"[lv-assets] #{_i} 「{label}」成功 落库={nm} 耗时 {time.time() - _t0:.1f}s", flush=True)
         if on_item:
             try:
-                on_item(_i, norm[-1])
+                on_item(_i, norm[-1], _seq)
             except Exception:
                 pass
 
 
         if on_progress:
             try:
-                on_progress(_i + 1, _total, a.get("label") or nm)
+                on_progress(_seq + 1, _total, a.get("label") or nm)
             except Exception:
                 pass
     return norm, failed
 
 
-def _lv_submit_job(script, assets_with_url, job_id=None, session_id=None):
+def _lv_job_name(raw, script=""):
+    
+    nm = re.sub(r"\s+", " ", (raw or "").strip().strip("《》")).strip()
+    _placeholder = (not nm
+                    or re.match(r"^(?:任务\s*)?\d{1,2}/\d{1,2}\s+\d{1,2}:\d{2}$", nm)
+                    or nm in ("任务", "未命名", "无标题", "新任务", "剧本"))
+    if not _placeholder:
+        return nm[:60]
+
+    for line in (script or "").splitlines()[:6]:
+        s = line.strip().lstrip("#").strip()
+        if not s or s.startswith("|") or set(s) <= set("-:| "):
+            continue
+        m = re.match(r"^场景[^｜|]*[｜|]\s*([^｜|]+?)\s*[｜|]", s)
+        cand = m.group(1).strip() if m else re.sub(r"(?:剧本|故事板|分镜表)\s*$", "", s).strip()
+        cand = cand.split("(")[0].split("（")[0].strip(" —-·")
+        if cand:
+            return cand[:20]
+        break
+    t = time.gmtime(time.time() + 8 * 3600)
+    return f"任务 {t.tm_mon}/{t.tm_mday} {t.tm_hour:02d}:{t.tm_min:02d}"
+
+
+def _lv_submit_job(script, assets_with_url, job_id=None, session_id=None, name=None):
     
     con = _lv_db()
     try:
@@ -2487,11 +2963,13 @@ def _lv_submit_job(script, assets_with_url, job_id=None, session_id=None):
             _type_map = {r["name"]: r["type"] for r in _rows}
         for a in norm:
             a["type"] = a.get("type") or _type_map.get(a.get("name")) or "image"
-        t = time.gmtime(time.time() + 8 * 3600)
-        default_name = f"任务 {t.tm_mon}/{t.tm_mday} {t.tm_hour:02d}:{t.tm_min:02d}"
+        default_name = _lv_job_name(name, script)
         assets_json = json.dumps(norm, ensure_ascii=False)
-        existing = job_id and con.execute("SELECT id FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
+        existing = job_id and con.execute("SELECT id,name FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
         if existing:
+
+            if existing["name"]:
+                default_name = existing["name"]
             con.execute(
                 "UPDATE lv_jobs SET script=?, assets_json=?, stage=?, segment_count=?, updated_at=? WHERE id=?",
                 (script or "", assets_json, "素材登记", 0, time.time(), job_id),
@@ -2546,11 +3024,18 @@ def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None):
                 "label": _label,
                 "kind": "audio",
                 "owner": _owner,
+                "text": a.get("text") or "",
+                "spoken": a.get("spoken") or "",
+                "model_id": a.get("model_id") or a.get("model") or "",
+                "duration": a.get("duration"),
+                "voice_desc": a.get("voice_desc") or "",
+                "voice_name": a.get("voice_name") or "",
+                "tags": a.get("tags") or [],
                 "created_at": a.get("created_at") or time.time(),
             })
             if on_progress:
                 try:
-                    on_progress(_i + 1, _total, _label or "已有声线")
+                    on_progress(_seq + 1, _total, _label or "已有声线")
                 except Exception:
                     pass
             if on_item:
@@ -2564,7 +3049,7 @@ def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None):
             failed.append({"label": _label, "error": "声线缺少 text（要朗读的文字）"})
             if on_progress:
                 try:
-                    on_progress(_i + 1, _total, (_label or "?") + "（缺台词，已跳过）")
+                    on_progress(_seq + 1, _total, (_label or "?") + "（缺台词，已跳过）")
                 except Exception:
                     pass
             continue
@@ -2572,6 +3057,10 @@ def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None):
         _vdesc = str(a.get("voice_desc") or "").strip()
         _pvoice = str(a.get("preset_voice") or "").strip()
         _vid = str(a.get("voice_id") or "").strip()
+
+
+        if not _mid and _vdesc:
+            _mid = next((m for m in _models if str(m).endswith("voicedesign")), _mid)
         try:
             _tmid = _mid or (_models[0] if _models else "")
             _tcaps = (_ttsmodels.caps_for(_tmid, _prov) if _tmid else {}) or {}
@@ -2585,7 +3074,7 @@ def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None):
         if _tmid.endswith("voicedesign") and not _vdesc:
             failed.append({"label": _label, "error": "自定义配音（voicedesign）必须给 voice_desc"})
             continue
-        _ref_path = ""
+        _ref_path, _voice_name = "", "系统默认音色"
         if _vid:
             try:
                 _vrow = _ttsclient.get_voice_row(_vid)
@@ -2595,6 +3084,7 @@ def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None):
                 failed.append({"label": _label, "error": f"音色不存在：{_vid}"})
                 continue
             _ref_path = _vrow.get("audio_path") or ""
+            _voice_name = _vrow.get("name") or _voice_name
         _tags = [str(t).strip() for t in (a.get("tags") or []) if str(t).strip()]
         _txt_spoken = _txt
         if _tags:
@@ -2614,9 +3104,13 @@ def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None):
             continue
         try:
             _ttsclient._register_candidates_assets(
-                [_c], job={"text": _txt_spoken, "voice_name": _owner,
+                [_c], job={"text": _txt_spoken, "voice_name": _voice_name,
                            "speed": a.get("speed") or 1, "preset_voice": _pvoice,
-                           "voice_desc": _vdesc, "model_id": _mid, "tags": _tags, "count": 1})
+                           "voice_desc": _vdesc, "model_id": _mid, "tags": _tags, "count": 1,
+
+
+
+                           "origin_view": _assets_store.ORIGIN_VIEW_LONGVIDEO})
         except Exception as _e:
             print(f"[warn] 长视频音频登记失败（不影响生成）: {_e}", flush=True)
         norm.append({
@@ -2626,11 +3120,18 @@ def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None):
             "label": _label,
             "kind": "audio",
             "owner": _owner,
+            "text": _txt,
+            "spoken": _c.get("text") or "",
+            "model_id": _c.get("model_id") or _mid,
+            "duration": _c.get("duration"),
+            "voice_desc": _vdesc,
+            "voice_name": _voice_name,
+            "tags": _tags,
             "created_at": time.time(),
         })
         if on_progress:
             try:
-                on_progress(_i + 1, _total, _label or "声线")
+                on_progress(_seq + 1, _total, _label or "声线")
             except Exception:
                 pass
         if on_item:
@@ -2702,6 +3203,12 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None):
             "first_frame": args.get("first_frame"),
             "last_frame": args.get("last_frame"),
             "sessionId": session_id,
+
+
+
+            "origin_view": _assets_store.ORIGIN_VIEW_ASSISTANT,
+
+            "model": _agent_video_caps()[0],
         }
         body, code = _submit_video(payload)
         if code == 200:
@@ -2724,6 +3231,8 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None):
             "ratio": args.get("ratio"),
             "images": args.get("images") or [],
             "sessionId": session_id,
+
+            "origin_view": _assets_store.ORIGIN_VIEW_ASSISTANT,
         }
         body, code = _submit_image_task(payload)
         if code == 200:
@@ -2804,7 +3313,12 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None):
                            "voice_desc": _vdesc,
                            "model_id": _mid,
                            "tags": _tags,
-                           "count": 1})
+                           "count": 1,
+
+
+
+
+                           "origin_view": _assets_store.ORIGIN_VIEW_ASSISTANT})
         except Exception as _e:
             print(f"[warn] 音频登记失败（不影响生成）: {_e}", flush=True)
         return {"kind": "audio", "url": _c.get("url"), "name": _c.get("path"),
@@ -2856,11 +3370,17 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None):
             return {"kind": "error",
                     "error": f"{len(failed)} 条声线全部生成失败，未生成任何音频。首个原因：{first}"}, False
 
+
+
         item = {
             "kind": "longvideo_assets",
             "assets": [{"url": a.get("url"), "label": a.get("label"),
                         "name": a.get("name"), "kind": a.get("kind"),
-                        "type": a.get("type"), "owner": a.get("owner")} for a in norm],
+                        "type": a.get("type"), "owner": a.get("owner"),
+                        "text": a.get("text"), "spoken": a.get("spoken"),
+                        "model_id": a.get("model_id"), "duration": a.get("duration"),
+                        "voice_desc": a.get("voice_desc"), "voice_name": a.get("voice_name"),
+                        "tags": a.get("tags")} for a in norm],
             "failed": failed,
         }
         return item, True
@@ -2884,7 +3404,8 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None):
             return {"kind": "error",
                     "error": f"以下素材缺少 url，无法提交：{', '.join(missing)}。请先调用 generate_longvideo_assets / generate_longvideo_audio 生成它们。"}, False
         jid, jname, cnt, failed = _lv_submit_job(script, assets, args.get("job_id"),
-                                                 session_id=session_id)
+                                                 session_id=session_id,
+                                                 name=args.get("name"))
         if not jid:
             first = next((f.get("error") for f in failed if f.get("error")), "未知原因")
             return {"kind": "error",
@@ -2909,6 +3430,14 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None):
         finally:
             con.close()
         return {"kind": "longvideo_assets", "job_id": job_id, "count": len(names)}, True
+
+    if name == "read_screenplay_rules":
+
+
+        stage = str(args.get("stage") or "").strip()
+        if stage not in _SCREENPLAY_RULES:
+            return {"kind": "rules", "error": f"未知剧本阶段：{stage}"}, False
+        return {"kind": "rules", "stage": stage, "text": _screenplay_rules_text(stage)}, True
 
     return {"kind": "unknown", "error": f"未知工具：{name}"}, False
 
@@ -2988,13 +3517,15 @@ def _agent_history_asset_manifest(h):
         if not isinstance(a, dict):
             continue
         nm = str(a.get("name") or "").strip()
-        if not nm:
+        url = str(a.get("url") or "").strip()
+        if not (nm or url):
             continue
         lb = str(a.get("label") or "").strip()
-        lines.append("%d. %s → %s" % (i, lb or nm, nm))
+        lines.append("%d. %s → %s%s" % (i, lb or nm or "素材", nm or "（未命名）",
+                                        ("  URL: " + url) if url else ""))
     if not lines:
         return ""
-    out = "\n\n[本条消息附带的素材（提交长视频时可直接用这些 name）]\n" + "\n".join(lines)
+    out = "\n\n[本条消息附带的素材（URL 可直接填进工具参数）]\n" + "\n".join(lines)
     more = len(items) - len(lines)
     if more > 0:
         out += "\n…（共 %d 个，其余未列出）" % len(items)
@@ -3058,6 +3589,10 @@ def _agent_asset_manifest(assets):
         "图片填 generate_video.images 或 generate_image.images，"
         "音频填 generate_video.audios，视频填 generate_video.videos，"
         "并把 mode 设为 reference（首帧/尾帧诉求则填 first_frame / last_frame，mode=keyframe）。"
+        "长视频素材流程（第3～6步）另有专属填法：图片填 generate_longvideo_assets 的 assets[].images、"
+        "沿用原图时填该项的 url；音频参考填 generate_longvideo_audio 的 audios[].reference_audio。"
+        "长视频素材严禁改用 generate_image / generate_audio —— 那样生成的图 / 音频不进长视频素材清单，"
+        "第8步 submit_longvideo_job 会因缺 url 被打回。"
         "只准使用上面列出的 URL，不要编造素材地址。"
     )
 
@@ -3186,6 +3721,57 @@ def _run_pub(run_id, ev):
             pass
 
 
+
+
+
+
+_AGENT_TURN_STEPS = {
+    "think":  "已完成需求理解",
+    "rules":  "已读取创作规则",
+    "write":  "按规则撰写",
+    "tools":  "整理并执行工具",
+    "finish": "整理回复",
+}
+_SCREENPLAY_STEP_NO = {"story_idea": (1, "写故事大纲"), "story_script": (2, "写分场剧本"),
+                       "assets": (3, "素材清单"), "script_chunk": (4, "分镜表"),
+                       "story_ref_gen": (5, "生图提示词")}
+_SCREENPLAY_STEP_ACT = {"story_idea": "故事大纲", "story_script": "分场剧本",
+                        "assets": "素材清单", "script_chunk": "分镜表",
+                        "story_ref_gen": "生图提示词"}
+
+
+_SCREENPLAY_PHASE_RUN = {"read": "正在阅读规则...", "plan": "正在按要求规划内容..."}
+_SCREENPLAY_PHASE_DONE = {"read": "已完成阅读规则", "plan": "已完成按要求规划内容"}
+
+
+def _turn_ev(key, state, label=None, detail=""):
+    
+    return {"type": "turn_step", "key": key, "state": state,
+            "label": label or _AGENT_TURN_STEPS.get(key, key), "detail": detail}
+
+
+def _turn_pub(run_id, key, state, trace, label=None, detail=""):
+    
+    ev = _turn_ev(key, state, label, detail)
+    if trace is not None:
+        trace.append(ev)
+    _run_pub(run_id, ev)
+    return ev
+
+
+def _turn_label_rules(stage):
+    no, title = _SCREENPLAY_STEP_NO.get(stage, (0, "剧本"))
+    return "正在读取第%d步「%s」创作规则…" % (no, title)
+
+
+def _turn_label_write(stage):
+    return "完整规划，按要求撰写%s..." % _SCREENPLAY_STEP_ACT.get(stage, "内容")
+
+
+def _turn_label_write_done(stage):
+    return "已完成按要求撰写%s" % _SCREENPLAY_STEP_ACT.get(stage, "内容")
+
+
 _SSE_HEADERS = {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache",
@@ -3198,6 +3784,12 @@ def _run_snapshot_events(row):
     st = row.get("state") or {}
     status = row.get("status")
     evs = []
+
+
+    _trace = (row.get("result") or {}).get("turn") or []
+    for _e in _trace:
+        if isinstance(_e, dict) and _e.get("type") == "turn_step":
+            evs.append(dict(_e))
     if st.get("tool_running_text"):
         evs.append({"type": "tool_running", "phase": "tool", "text": st["tool_running_text"]})
 
@@ -3305,16 +3897,19 @@ def _run_tool_phase(run_id, name, args, session_id):
         _runst.merge_state(run_id, manifest_items=_manifest_items, manifest_labels=[m["label"] for m in _manifest_items])
         _run_pub(run_id, {"type": "tool_manifest", "items": _manifest_items})
 
-    def _on_item(i, it):
+    def _on_item(i, it, seq=None):
 
 
         _runst.merge_state_sub(run_id, "items_done", str(i),
                                {"name": it.get("name"), "url": it.get("url"),
                                 "label": it.get("label"), "kind": it.get("kind")})
 
-        _run_pub(run_id, {"type": "tool_progress", "done": i + 1, "total": _asset_total or (i + 1),
+
+        _done = (seq if seq is not None else i) + 1
+
+        _run_pub(run_id, {"type": "tool_progress", "done": _done, "total": _asset_total or _done,
                           "label": it.get("label") or "",
-                          "text": f"正在生成素材 {i + 1}/{_asset_total or (i + 1)}" + (f"：{it.get('label')}" if it.get("label") else ""),
+                          "text": f"正在生成素材 {_done}/{_asset_total or _done}" + (f"：{it.get('label')}" if it.get("label") else ""),
                           "items": [{"index": i, "name": it.get("name"), "url": it.get("url"),
                                      "label": it.get("label"), "kind": it.get("kind")}]})
 
@@ -3336,6 +3931,7 @@ def _agent_run_pipeline(run_id, messages, session_id):
     think_acc = ""
     tc_buf = {}
     tc_announced = False
+    trace = []
     try:
         _runst.mark(run_id, status="streaming")
 
@@ -3357,6 +3953,9 @@ def _agent_run_pipeline(run_id, messages, session_id):
             _runst.mark(run_id, status="error", error=msg)
             _run_pub(run_id, {"type": "error", "error": msg})
             return
+
+
+        _turn_pub(run_id, "think", "running", trace, label="正在理解需求并思考…")
 
 
         r = _llm.chat("assistant", messages, tools=_agent_tools(), tool_choice="auto",
@@ -3423,8 +4022,16 @@ def _agent_run_pipeline(run_id, messages, session_id):
 
                     if not tc_announced:
                         tc_announced = True
+                        _turn_pub(run_id, "think", "done", trace)
+                        if b["name"] == "read_screenplay_rules":
+                            _tool_msg = "正在读取创作规则…"
+                            _turn_pub(run_id, "rules", "running", trace, label=_tool_msg)
+                        else:
+                            _tool_msg = "正在整理生成任务…"
+                            _turn_pub(run_id, "tools", "running", trace, label=_tool_msg)
+
                         _run_pub(run_id, {"type": "tool_running", "phase": "tool",
-                                          "text": "正在整理生成清单…"})
+                                          "text": _tool_msg})
                 if fn.get("arguments"):
                     b["args"] += fn["arguments"]
 
@@ -3437,9 +4044,12 @@ def _agent_run_pipeline(run_id, messages, session_id):
 
 
         if not tc_buf:
+            _turn_pub(run_id, "think", "done", trace)
+            _turn_pub(run_id, "finish", "done", trace)
             done_ev = _agent_done_payload([], body, think)
+            done_ev["turn"] = trace
             _runst.mark(run_id, status="done", result=done_ev,
-                        state={"text": body, "think": think})
+                        state={"text": body, "think": think, "turn_trace": trace})
             _run_pub(run_id, done_ev)
             return
 
@@ -3455,6 +4065,87 @@ def _agent_run_pipeline(run_id, messages, session_id):
                                             "error": f"参数解析失败：{str(b.get('args'))[:120]}"}))
                 continue
             parsed.append((_name, _args, None))
+
+
+
+
+        _sp = next(((_n, _a) for _n, _a, _e in parsed
+                    if _n == "read_screenplay_rules" and not _e), None)
+        if _sp:
+            try:
+                _stage = str((_sp[1] or {}).get("stage") or "").strip()
+                if _stage not in _SCREENPLAY_RULES:
+                    raise ValueError("未知剧本阶段：%s" % _stage)
+                _call = {"id": "call_screenplay", "type": "function",
+                         "function": {"name": "read_screenplay_rules",
+                                      "arguments": json.dumps({"stage": _stage}, ensure_ascii=False)}}
+                _rules_file = os.path.basename(_SCREENPLAY_RULES[_stage])
+                _rules_name = os.path.splitext(_rules_file)[0]
+                _turn_pub(run_id, "rules", "running", trace,
+                          label=_turn_label_rules(_stage), detail=_rules_name)
+
+
+
+                _phase = {"reasoning": False, "delta": False}
+
+                def _on_rules_loaded(st):
+                    _turn_pub(run_id, "rules", "done", trace,
+                              detail="已读取 %s" % _rules_name)
+                    _turn_pub(run_id, "read", "running", trace,
+                              label=_SCREENPLAY_PHASE_RUN["read"])
+
+                def _on_phase_reasoning(inc):
+                    if not _phase["reasoning"]:
+                        _phase["reasoning"] = True
+                        _turn_pub(run_id, "read", "done", trace,
+                                  label=_SCREENPLAY_PHASE_DONE["read"])
+                        _turn_pub(run_id, "plan", "running", trace,
+                                  label=_SCREENPLAY_PHASE_RUN["plan"])
+                    _run_pub(run_id, {"type": "reasoning", "text": inc})
+
+                def _on_phase_delta(inc):
+                    if not _phase["delta"]:
+                        _phase["delta"] = True
+                        if _phase["reasoning"]:
+                            _turn_pub(run_id, "plan", "done", trace,
+                                      label=_SCREENPLAY_PHASE_DONE["plan"])
+                        else:
+                            _turn_pub(run_id, "read", "done", trace,
+                                      label=_SCREENPLAY_PHASE_DONE["read"])
+                        _turn_pub(run_id, "write", "running", trace,
+                                  label=_turn_label_write(_stage))
+                    _run_pub(run_id, {"type": "delta", "text": inc})
+
+                _say, _think2 = _screenplay_second_pass(
+                    messages, _call, _stage, _on_rules_loaded,
+
+                    on_reasoning=_on_phase_reasoning,
+                    on_delta=_on_phase_delta)
+            except Exception as e:
+                err = "读取剧本规则失败：%s" % e
+                _runst.mark(run_id, status="error", error=err)
+                _run_pub(run_id, {"type": "error", "error": err})
+                return
+
+            if _phase["delta"]:
+                _turn_pub(run_id, "write", "done", trace,
+                          label=_turn_label_write_done(_stage))
+            elif _phase["reasoning"]:
+                _turn_pub(run_id, "plan", "done", trace,
+                          label=_SCREENPLAY_PHASE_DONE["plan"])
+            else:
+                _turn_pub(run_id, "read", "done", trace,
+                          label=_SCREENPLAY_PHASE_DONE["read"])
+
+
+            done_ev = _agent_done_payload([], _say, _think2)
+            done_ev["stage"] = _stage
+            done_ev["turn"] = trace
+            _runst.mark(run_id, status="done", result=done_ev,
+                        state={"text": _say, "think": _think2, "turn_trace": trace})
+            _run_pub(run_id, done_ev)
+            return
+
         _tool_names = sorted({n for n, _a, _e in parsed if n})
         if "generate_longvideo_assets" in _tool_names:
             _tool_msg = "正在生成长视频素材图…"
@@ -3463,9 +4154,13 @@ def _agent_run_pipeline(run_id, messages, session_id):
         else:
             _tool_msg = "正在调用工具执行任务…"
         _resumable = next(((n, a) for n, a, _e in parsed if n == "generate_longvideo_assets"), None)
+
+        _turn_pub(run_id, "tools", "running", trace, label=_tool_msg,
+                  detail=", ".join(_tool_names))
         _runst.mark(run_id, status="tooling", tool_name=",".join(_tool_names),
                     args=(_resumable[1] if _resumable else None),
-                    state={"text": body, "think": think, "tool_running_text": _tool_msg})
+                    state={"text": body, "think": think, "tool_running_text": _tool_msg,
+                           "turn_trace": trace})
         _run_pub(run_id, {"type": "tool_running", "text": _tool_msg,
                           "tools": _tool_names, "phase": "tool"})
         items = []
@@ -3474,7 +4169,28 @@ def _agent_run_pipeline(run_id, messages, session_id):
                 items.append(_pre_err)
                 continue
             items.extend(_run_tool_phase(run_id, _name, _args, session_id))
-        done_ev = _agent_done_payload(items, body, think)
+        _turn_pub(run_id, "tools", "done", trace, detail="已执行 %d 个工具" % len(_tool_names))
+
+
+        _second_text = ""
+        if _agent_need_tool_second_pass(_tool_names):
+            _calls = [{"id": tc_buf[i].get("id") or ("call_%d" % i),
+                       "name": tc_buf[i].get("name") or "",
+                       "arguments": tc_buf[i].get("args") or "{}"}
+                      for i in sorted(tc_buf.keys())]
+            _turn_pub(run_id, "finish", "running", trace)
+            try:
+                _second_text, _ = _agent_tool_second_pass(
+                    messages, _calls, items, first_content=body,
+                    on_reasoning=lambda inc: _run_pub(run_id, {"type": "reasoning", "text": inc}),
+                    on_delta=lambda inc: _run_pub(run_id, {"type": "delta", "text": inc}))
+            except Exception as e:
+
+                _second_text = ""
+                print(f"[agent] 工具轮第二跳失败，回退 summary：{e}", flush=True)
+        _turn_pub(run_id, "finish", "done", trace)
+        done_ev = _agent_done_payload(items, _second_text or body, think)
+        done_ev["turn"] = trace
         _runst.mark(run_id, status="done", result=done_ev)
         _run_pub(run_id, done_ev)
     except Exception as e:
@@ -3495,6 +4211,7 @@ def _agent_run_resume(run_id):
         return
     st = row.get("state") or {}
     body, think = st.get("text") or "", st.get("think") or ""
+    trace = list(st.get("turn_trace") or [])
     name = (row.get("tool_name") or "").split(",")[0].strip()
     args = row.get("args") or {}
     session_id = row.get("session_id")
@@ -3514,10 +4231,14 @@ def _agent_run_resume(run_id):
                 resumed += 1
         print(f"[agent-runs] 续跑 {run_id}：{resumed}/{len(args['assets'])} 张已完成，跳过重复生成",
               flush=True)
-        _run_pub(run_id, {"type": "tool_running", "phase": "tool",
-                          "text": st.get("tool_running_text") or "正在生成长视频素材图…"})
+        _tool_msg2 = st.get("tool_running_text") or "正在生成长视频素材图…"
+        _turn_pub(run_id, "tools", "running", trace, label=_tool_msg2, detail="断点续跑")
+        _run_pub(run_id, {"type": "tool_running", "phase": "tool", "text": _tool_msg2})
         items = _run_tool_phase(run_id, name, args, session_id)
+        _turn_pub(run_id, "tools", "done", trace, detail="续跑完成")
+        _turn_pub(run_id, "finish", "done", trace)
         done_ev = _agent_done_payload(items, body, think)
+        done_ev["turn"] = trace
         _runst.mark(run_id, status="done", result=done_ev)
         _run_pub(run_id, done_ev)
     except Exception as e:
@@ -3661,6 +4382,8 @@ def api_agent():
     assets = _agent_normalize_assets(data.get("assets"))
 
 
+
+
     messages = [{"role": "system", "content": AGENT_SYSTEM_PROMPT}]
     manifest = _agent_asset_manifest(assets)
     if manifest:
@@ -3668,12 +4391,18 @@ def api_agent():
     _agent_history_messages(messages, data.get("history"))
     messages.append({"role": "user", "content": _agent_user_message(text, assets)})
 
+    trace = [_turn_ev("think", "running", label="正在理解需求并思考…")]
 
 
 
 
+    _allow_tools = data.get("tools") is not False
 
-    body, err = _llm_chat_completions(messages, tools=_agent_tools(), tool_choice="auto",
+
+
+
+    body, err = _llm_chat_completions(messages, tools=_agent_tools() if _allow_tools else None,
+                                      tool_choice="auto" if _allow_tools else None,
                                       max_tokens=_llm.max_output_for("assistant", AGENT_MAX_TOKENS),
                                       timeout=(10, 900))
     if err:
@@ -3689,17 +4418,57 @@ def api_agent():
         think, content = _agent_split_think(content)
 
 
+
+    _sp = next((tc for tc in tool_calls
+                if (tc.get("function") or {}).get("name") == "read_screenplay_rules"), None)
+    if _sp:
+        try:
+            _raw = (_sp.get("function") or {}).get("arguments") or "{}"
+            _args = json.loads(_raw) if isinstance(_raw, str) else (_raw or {})
+            _stage = str(_args.get("stage") or "").strip()
+            if _stage not in _SCREENPLAY_RULES:
+                raise ValueError("未知剧本阶段：%s" % _stage)
+            _rules_file = os.path.basename(_SCREENPLAY_RULES[_stage])
+            _rules_name = os.path.splitext(_rules_file)[0]
+            trace.append(_turn_ev("think", "done"))
+            trace.append(_turn_ev("rules", "running", label=_turn_label_rules(_stage),
+                                  detail=_rules_name))
+
+            def _on_rules_loaded_nonstream(st):
+                trace.append(_turn_ev("rules", "done",
+                                      detail="已读取 %s" % _rules_name))
+                trace.append(_turn_ev("write", "running", label=_turn_label_write(st)))
+
+            _say, _think2 = _screenplay_second_pass(messages, _sp, _stage, _on_rules_loaded_nonstream)
+        except Exception as e:
+            return jsonify({"error": "读取剧本规则失败：%s" % e}), 502
+
+
+        trace.append(_turn_ev("write", "done", label=_turn_label_write_done(_stage)))
+        return jsonify({"ok": True, "kind": "text", "text": _say,
+                        "think": _think2, "summary": "", "items": [], "stage": _stage,
+                        "turn": trace,
+                        "backend": _llm.route("assistant"),
+                        "model": _llm.default_model("assistant")})
+
+
     if not tool_calls:
+        trace.append(_turn_ev("think", "done"))
+        trace.append(_turn_ev("finish", "done"))
         return jsonify({
             "ok": True, "kind": "text",
             "text": content or "（模型没有返回内容。若想生成，可把需求说得更具体，或切到手动模式。）",
             "think": think,
-            "summary": "", "items": [],
+            "summary": "", "items": [], "turn": trace,
             "backend": _llm.route("assistant"),
             "model": _llm.default_model("assistant"),
         })
 
 
+    _names = [((tc.get("function") or {}).get("name") or "") for tc in tool_calls]
+    trace.append(_turn_ev("think", "done"))
+    trace.append(_turn_ev("tools", "running", label="正在执行 %d 个工具…" % len(tool_calls),
+                          detail=", ".join(n for n in _names if n)))
     items = []
     for tc in tool_calls:
         fn = tc.get("function") or {}
@@ -3712,6 +4481,22 @@ def api_agent():
             continue
         item, _ok = _agent_run_tool(name, args, session_id)
         items.append(item)
+    trace.append(_turn_ev("tools", "done", detail="已执行 %d 个工具" % len(items)))
+
+    _second_text = ""
+    if _agent_need_tool_second_pass(_names):
+        _calls = [{"id": tc.get("id") or ("call_%d" % i),
+                   "name": ((tc.get("function") or {}).get("name") or ""),
+                   "arguments": ((tc.get("function") or {}).get("arguments") or "{}")}
+                  for i, tc in enumerate(tool_calls)]
+        trace.append(_turn_ev("finish", "running"))
+        try:
+            _second_text, _ = _agent_tool_second_pass(messages, _calls, items,
+                                                      first_content=content)
+        except Exception as e:
+            _second_text = ""
+            print(f"[agent] 非流式工具轮第二跳失败，回退 summary：{e}", flush=True)
+    trace.append(_turn_ev("finish", "done"))
 
     ok_items = [i for i in items if i.get("kind") in ("video", "image", "longvideo_job", "longvideo_assets")]
     if len(ok_items) == 1 and len(items) == 1:
@@ -3738,8 +4523,8 @@ def api_agent():
         first_err = next((i.get("error") for i in items if i.get("error")), "工具执行失败")
         summary = f"生成失败：{first_err}"
 
-    return jsonify({"ok": True, "kind": kind, "text": content, "think": think,
-                    "summary": summary, "items": items,
+    return jsonify({"ok": True, "kind": kind, "text": _second_text or content, "think": think,
+                    "summary": summary, "items": items, "turn": trace,
                     "backend": _llm.route("assistant"),
                     "model": _llm.default_model("assistant")})
 @app.route("/api/agent_sessions", methods=["GET"])
@@ -4017,7 +4802,10 @@ def _finalize_video_result(video_id, video_url, model_name, prefix="vid"):
 
     _register_generated_video(local,
                               payload=_video_provenance(matched, model_name),
-                              session_id=(matched or {}).get("sessionId"))
+                              session_id=(matched or {}).get("sessionId"),
+
+
+                              origin_view=(matched or {}).get("origin_view"))
     _backfill_video_history(video_id, local, model_name)
     return local
 
@@ -5215,7 +6003,13 @@ def api_media_concat():
             if _reg_origin == _assets_store.ORIGIN_UPLOADED else "时间线成片"
         try:
             _assets_store.register(name=out_name, url=url, type=kind_out,
-                                   origin=_reg_origin, label=_reg_label)
+                                   origin=_reg_origin,
+
+
+
+
+                                   origin_view=_assets_store.ORIGIN_VIEW_CANVAS,
+                                   label=_reg_label)
         except Exception as e:
             print("[WARN] 时间线成片入库失败（不影响成片）:", e, flush=True)
         return jsonify({"url": url, "name": out_name, "kind": kind_out})
@@ -5286,7 +6080,9 @@ def api_media_trim_range():
         if _reg_origin == _assets_store.ORIGIN_UPLOADED else "续拍参考片段"
     try:
         _assets_store.register(name=out_name, url=out_url, type="video",
-                               origin=_reg_origin, label=_reg_label)
+                               origin=_reg_origin,
+                               origin_view=_assets_store.ORIGIN_VIEW_CANVAS,
+                               label=_reg_label)
     except Exception as e:
         print("[WARN] 续拍参考片段入库失败（不影响截取）:", e, flush=True)
     return jsonify({"url": out_url, "name": out_name, "kind": "video"})
@@ -5663,7 +6459,10 @@ def api_tts_generate():
         job = _ttsclient.create_job(text, speed=speed, voice_name=voice_name,
                                     ref_path=ref_path, count=count, model_id=_mid,
                                     voice_desc=(data.get("voice_desc") or "").strip(),
-                                    preset_voice=preset_voice)
+                                    preset_voice=preset_voice,
+
+
+                                    origin_view=_clean_origin_view(data) or "")
 
         _ttsclient.start_job(job["id"], count=count, optimize_text_preview=opt_val,
                              caps={"caps": _caps_mid, "param_cap": _ttsmodels.param_cap_map()})

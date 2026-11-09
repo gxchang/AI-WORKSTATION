@@ -183,11 +183,11 @@ VIDEO_MODEL_LIMITS = {
 
         "instance_tiers": [
             {"v": "default", "label": "Default", "vram": "24G",
-             "coins_per_sec": 0.73, "yuan_per_hour": 6, "tip": "使用24G显存生成"},
+             "point_per_sec": 0.17, "yuan_per_hour": 6, "tip": "使用24G显存生成"},
             {"v": "plus",    "label": "Plus",    "vram": "48G",
-             "coins_per_sec": 0.97, "yuan_per_hour": 8, "tip": "使用48G显存生成"},
+             "point_per_sec": 0.23, "yuan_per_hour": 8, "tip": "使用48G显存生成"},
             {"v": "ultra",   "label": "Ultra",   "vram": "84G",
-             "coins_per_sec": 1.94, "yuan_per_hour": 16, "tip": "使用84G显存生成"},
+             "point_per_sec": 0.45, "yuan_per_hour": 16, "tip": "使用84G显存生成"},
         ],
 
         "account_api": {
@@ -195,6 +195,7 @@ VIDEO_MODEL_LIMITS = {
             "fields": {
                 "api_type": "apiType",
                 "coins": "remainCoins",
+                "point": "remainPoint",
                 "money": "remainMoney",
                 "currency": "currency",
                 "running": "currentTaskCounts",
@@ -206,7 +207,14 @@ VIDEO_MODEL_LIMITS = {
         },
         "usage": {
             "source": "task/openapi/outputs",
-            "fields": {"coins": "consumeCoins", "seconds": "taskCostTime", "money": "consumeMoney"},
+
+
+
+
+            "fields": {"settle": "settleMode", "point": "chargedPoint",
+                       "coins": "consumeCoins", "seconds": "taskCostTime",
+                       "money": "consumeMoney"},
+            "point_unit": "积分",
             "coins_unit": "RH币",
             "money_unit": "¥",
             "show_in_meta": True,
@@ -627,6 +635,14 @@ def build_timeline_data(data, file_names=None):
 
 
 
+
+
+
+
+
+
+
+
 _WF_TEMPLATE_JSON = r"""
 {
  "1": {
@@ -676,7 +692,8 @@ _WF_TEMPLATE_JSON = r"""
    ],
    "bit_depth": 8,
    "color_space": "sRGB",
-   "codec": "none",
+   "chroma_subsampling": "auto",
+   "codec": "auto",
    "images": [
     "12",
     0
@@ -1475,38 +1492,81 @@ def parse_status(body):
 
 def parse_usage(body):
     
+    def _num(v):
+        if v in (None, ""):
+            return None
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return v
+
+        return int(f) if f == int(f) else round(f, 3)
+
+    def _int(v):
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return None
+
     def _from_node(it):
         if not isinstance(it, dict):
             return None
 
         node = it.get("output") if isinstance(it.get("output"), dict) else it
+        settle = node.get("settleMode")
+        point = node.get("chargedPoint")
         coins = node.get("consumeCoins")
         secs = node.get("taskCostTime")
         money = node.get("consumeMoney")
-        if coins not in (None, "", "0") or secs not in (None, ""):
-            try:
-                return {"coins": int(float(coins)) if coins not in (None, "") else None,
-                        "seconds": int(float(secs)) if secs not in (None, "") else None,
-                        "money": money}
-            except (TypeError, ValueError):
-                return {"coins": coins, "seconds": secs, "money": money}
+        has_point = point not in (None, "", 0)
+        has_coins = coins not in (None, "", 0, "0")
+        if has_point or has_coins or secs not in (None, "") or money not in (None, ""):
+            p = _num(point) if has_point else None
+
+            c = _int(coins) if has_coins else None
+            return {"settle": (str(settle).upper() if settle not in (None, "") else
+                               ("POINT" if has_point else None)),
+                    "point": p,
+                    "coins": c,
+                    "seconds": _num(secs),
+                    "money": money}
         return None
+
+
+
+
+
     items = []
     if isinstance(body, list):
-        items = body
+        items = list(body)
     elif isinstance(body, dict):
         data = body.get("data")
-        items = data if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
+        if isinstance(data, list):
+            items = list(data)
+        elif isinstance(data, dict):
+            items = [data]
+        if isinstance(body.get("usage"), dict):
+            items.append(body["usage"])
+        items.append(body)
+    best, best_rank = None, -1
     for it in items:
         c = _from_node(it)
-        if c:
-            return c
+        if not c:
+            continue
 
-    if isinstance(body, dict):
-        c = _from_node(body)
-        if c:
-            return c
-    return None
+        if c.get("point") is not None:
+            rank = 3
+        elif c.get("coins") is not None:
+            rank = 2
+        elif c.get("money") not in (None, ""):
+            rank = 1
+        else:
+            rank = 0
+        if rank > best_rank:
+            best, best_rank = c, rank
+        elif best is not None and best.get("seconds") is None and c.get("seconds") is not None:
+            best["seconds"] = c["seconds"]
+    return best
 
 
 def parse_outputs(body):
@@ -1777,7 +1837,8 @@ def fetch_account(key=None, base_url=None, timeout=20):
         return None, str(body.get("msg") or "账户接口返回错误")
     d = body.get("data") or {}
     return {"api_type": d.get("apiType"), "coins": d.get("remainCoins"),
-            "money": d.get("remainMoney"), "currency": d.get("currency"),
+            "point": d.get("remainPoint"), "money": d.get("remainMoney"),
+            "currency": d.get("currency"),
             "running": d.get("currentTaskCounts")}, None
 
 

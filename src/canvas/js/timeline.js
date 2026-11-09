@@ -297,8 +297,8 @@ function openFull(n){if(FS)return;var d=tlData(n);var el=document.createElement(
 +'</div></div>'
 +addColHtml(n)
 +'</div>'
-+'</div>';document.body.appendChild(el);FS={id:n.id,el:el,tab:"lib",k:"",libSig:null};syncLibChrome();fillLib(n);syncHead(n);render();mount(el);}
-function closeFull(){if(!FS)return;var n=HOST.nodeById(FS.id);if(n)pause(n);if(FS.el)FS.el.remove();FS=null;HOST.render();}
++'</div>';document.body.appendChild(el);FS={id:n.id,el:el,tab:"lib",k:"",libSig:null};syncLibChrome();fillLib(n);syncHead(n);render();mount(el);if(window.Views&&Views._ovPush)Views._ovPush("timelineFull",closeFull);}
+function closeFull(){if(!FS)return;var n=HOST.nodeById(FS.id);if(n)pause(n);if(FS.el)FS.el.remove();FS=null;HOST.render();if(window.Views&&Views._ovDrop)Views._ovDrop("timelineFull");}
 function libItems(all){return(all||[]).filter(function(x){return x&&!x.gen;});}
 function usedSig(n){var ks=Object.keys(usedUrls(n));ks.sort();return ks.join("|")+"#"+(FS?FS.tab:"")+"#"+(FS?FS.k:"");}
 function syncLibIfStale(n){if(!FS||FS.id!==n.id)return;if(FS.libSig===usedSig(n))return;fillLib(n);}
@@ -382,9 +382,9 @@ if(st.audio)st.audio.pause();var n=HOST.nodeById(k);if(n)uiOf(n).playing=false;}
 if(FS)closeFull();}
 function label(nodes,id){var k=0;(nodes||[]).forEach(function(x){if(x.type!=="timeline")return;k++;if(x.id===id)throw{__tlSeq:k};});return"视频合成";}
 function seqOf(nodes,id){var k=0,hit=0;(nodes||[]).forEach(function(x){if(x.type!=="timeline")return;k++;if(x.id===id)hit=k;});return hit||k;}
-var SA_ACTIVE=false;function openStandalone(srcUrl,onDone,onCancel){return openTimelineModal({mode:"pick",srcUrl:srcUrl,title:"挑选续拍参考镜头",onDone:onDone||function(){},onCancel:onCancel||function(){}});}
+var SA_ACTIVE=false;function openStandalone(srcUrl,onDone,onCancel,title){return openTimelineModal({mode:"pick",srcUrl:srcUrl,title:title||"挑选续拍参考镜头",onDone:onDone||function(){},onCancel:onCancel||function(){}});}
 function openFramePicker(srcUrl,onPick,onCancel){return openTimelineModal({mode:"frame",srcUrl:srcUrl,title:"自定义取帧",onPick:onPick||function(){},onCancel:onCancel||function(){}});}
-function openSlicePlan(srcUrl,onPlan,onCancel){return openTimelineModal({mode:"pick",collect:true,srcUrl:srcUrl,title:"挑选续拍参考镜头",onPlan:onPlan||function(){},onCancel:onCancel||function(){}});}
+function openSlicePlan(srcUrl,onPlan,onCancel,title){return openTimelineModal({mode:"pick",collect:true,srcUrl:srcUrl,title:title||"视频切片",onPlan:onPlan||function(){},onCancel:onCancel||function(){}});}
 function commitSlicePlan(srcUrl,plan,onBusy){plan=plan||{};var v=plan.v||[];var a=plan.a||[];if(plan.untouched||(!v.length&&!a.length))return Promise.resolve(srcUrl);var busy=typeof onBusy==="function"?onBusy:function(){};busy();var singleSub=v.length===1&&a.length===0;if(singleSub){return fetch(API+"/api/media/trim_range",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:v[0].url,start:v[0].start,end:v[0].start+v[0].dur,origin:"uploaded"})}).then(function(r){return r.json();}).then(function(j){return(j&&!j.error)?j.url:srcUrl;}).catch(function(){return srcUrl;});}
 return fetch(API+"/api/media/concat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({video:v,audio:a,origin:"uploaded"})}).then(function(r){return r.json();}).then(function(j){return(j&&!j.error)?j.url:srcUrl;}).catch(function(){return srcUrl;});}
 function openTimelineModal(o){var srcUrl=o.srcUrl;var isFrame=o.mode==="frame";var onDone=o.onDone||function(){};var onCancel=o.onCancel||function(){};var onPick=o.onPick||function(){};var onPlan=o.onPlan||function(){};wireDocListeners();var realHost=HOST;var pseudoId="__standalone__"+Math.random().toString(36).slice(2,8);var pseudo={id:pseudoId,type:"timeline",data:{tl:{segs:{video:[],audio:[]},ui:{T:0,pps:28,snap:true,playing:false,muted:{video:false,audio:false},sel:{track:"",id:""}}}}};var adapter={save:function(){},render:function(){},renderPanels:function(){},renderEdges:function(){},push:function(){},undo:function(){},redo:function(){},canUndo:function(){return false;},canRedo:function(){return false;},nodeById:function(id){return id===pseudoId?pseudo:null;},selected:function(){return pseudo;},canvasAssets:function(){return[];},snapshot:function(){return{nodes:[],edges:[]};},toast:function(){},addAssetNode:function(){return"";},linkEdge:function(){}};var overlay=null;var busy=false;function restore(){SA_ACTIVE=false;busy=false;try{document.removeEventListener("keydown",onEsc);}catch(e){}

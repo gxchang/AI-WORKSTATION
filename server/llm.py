@@ -184,6 +184,8 @@ def configured(use_case):
 
 def _thinking_params(backend, thinking, use_case=None):
     
+    if thinking is None:
+        thinking = True
     if backend == "ms":
 
 
@@ -215,6 +217,19 @@ def _thinking_params(backend, thinking, use_case=None):
         return {"reasoning_effort": effort} if effort else {}
 
     return {"chat_template_kwargs": {"enable_thinking": bool(thinking)}}
+
+
+def thinking_params(use_case, backend=None):
+    
+    be = backend or route(use_case)
+    host = _host(be)
+    if be == "agnes":
+        on = bool(_provider().chat_thinking(use_case))
+    elif host is not None and hasattr(host, "chat_thinking"):
+        on = bool(host.chat_thinking(use_case))
+    else:
+        on = bool(_provider().chat_thinking(use_case))
+    return _thinking_params(be, on, use_case)
 
 
 
@@ -253,7 +268,7 @@ def max_output_for(use_case, default=None):
 
 
 def chat(use_case, messages, model=None, tools=None, tool_choice=None,
-         stream=False, thinking=None, max_tokens=None, temperature=0.2,
+         stream=False, max_tokens=None, temperature=0.2,
          timeout=(10, 300)):
     
     if use_case not in _USE_CASES:
@@ -289,9 +304,11 @@ def chat(use_case, messages, model=None, tools=None, tool_choice=None,
         payload["tools"] = tools
         payload["tool_choice"] = tool_choice or "auto"
 
-    if thinking is None and host is not None and hasattr(host, "chat_thinking"):
-        thinking = bool(host.chat_thinking(use_case))
-    payload.update(_thinking_params(be, thinking, use_case))
+
+
+
+
+    payload.update(thinking_params(use_case, backend=be))
     if stream:
         payload["stream"] = True
 

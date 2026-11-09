@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0" data-page-node-id="eHaf3KuCAKCdvpKdQUGKmW" />
 <title>视频生成工作台</title>
 
-<link rel="stylesheet" href="/api/base_style.css?v=20261104f">
+<link rel="stylesheet" href="/api/base_style.css?v=20261109a">
 <script>
 
 try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "session") document.documentElement.classList.add("boot-defer"); } catch (e) {}
@@ -281,12 +281,14 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
               <span style="margin:0 6px;color:var(--line)">|</span>
               剩余RH币：<b id="rhAcctCoins" style="color:var(--vio)">—</b>
               <span style="margin:0 6px;color:var(--line)">|</span>
+              积分：<b id="rhAcctPoint" style="color:var(--vio)">—</b>
+              <span style="margin:0 6px;color:var(--line)">|</span>
               钱包余额：<b id="rhAcctMoney" style="color:var(--vio)">—</b>
               <span style="margin:0 6px;color:var(--line)">|</span>
               当前运行：<b id="rhAcctRun" style="color:var(--vio)">—</b>
             </div>
             <a class="prov-key-link" href="https://www.runninghub.cn?inviteCode=zbnyr3sw"
-               target="_blank" rel="noopener noreferrer" title="你我各得500RH币"
+               target="_blank" rel="noopener noreferrer"
                style="margin-left:auto;white-space:nowrap">获取密钥</a>
           </div>
         </div>
@@ -679,7 +681,7 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
 
 <script src="/api/waveform.js?v=20261010a"></script>
 
-<script src="/api/longvideo_ui.js?v=20261104a"></script>
+<script src="/api/longvideo_ui.js?v=20261108b"></script>
 <div class="at-pop" id="atpop" data-page-node-id="RouEFDOwMOhgyF1Ngo2Ym9">
   <div class="at-hd" id="atHead" data-page-node-id="i0vFw3jzxFqIJpw8v6A4QP">选择素材插入</div>
   <div id="atList" data-page-node-id="l2hwoVK4rSw6pEqG2URnEL"></div>
@@ -723,7 +725,7 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
   <div class="agent-body">
     <aside class="agent-side" id="agentSide">
       <div class="agent-side-hd">
-        <button class="agent-new" id="agentNewSess">+ 新会话</button>
+        <button class="side-entry" id="agentNewSess"><span class="ic ic-plus" aria-hidden="true"></span><span class="side-txt">新会话</span></button>
         
       </div>
       <div class="agent-sess-list" id="agentSessList"></div>
@@ -751,19 +753,21 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
       </div>
       <div class="agent-stream" id="agentStream">
         <div class="agent-hello" id="agentHello">
-          <div class="agent-hello-t">说一句话，我来出片</div>
-          <div class="agent-hello-s">例如：「生成一段 5 秒的猫在雪地里的视频」「画一张雨夜便利店的图」「用低沉老年男声念这段台词」</div>
+          <span class="cat-orb agent-hello-orb" aria-hidden="true"><i class="cat-spin"></i><i class="cat-spin2"></i><i class="cat-core"></i></span>
+          <div class="agent-hello-t">你好，今天有什么可以帮到你？</div>
+          <div class="agent-hello-s">我可以帮你「生成一段 5-<span id="agentHelloMaxSec">…</span> 秒的猫在雪地里的视频」「画一张雨夜便利店的图」「用低沉老年男声念这段台词」，还可以帮你生成短剧剧本，只要你对我说【创作模式】，咱们就开始吧！</div>
         </div>
       </div>
       <div class="agent-input">
         <div class="upload-strip" id="agentUstrip"></div>
         <div class="editable" id="agentPrompt" contenteditable="true"
-             data-ph="说一句话…（Enter 发送，Shift+Enter 换行）"></div>
+             data-ph="你想对我说什么？"></div>
         <div class="agent-bar">
-          <button class="agent-ic-btn" id="agentUpIcon" title="上传素材：从本地上传 / 从资产库上传（图片 / 音频 / 视频）">＋</button>
-          <button class="agent-ic-btn" id="agentAtChip" title="引用素材（会话内已上传或已生成的图）">@</button>
+          <button class="icon-btn" id="agentUpIcon" title="上传素材：从本地上传 / 从资产库上传（图片 / 音频 / 视频）"><span>＋</span></button>
+          <button class="icon-btn" id="agentAtChip" title="引用素材"><span>@</span></button>
+          <button class="agent-topic-btn" id="agentTopicBtn" title="从选题开始"><span>选题</span><span class="atp-ar seg-ar ic ic-chevron-down"></span></button>
           <span class="agent-up-tip" id="agentUpTip"></span>
-          <button class="agent-send" id="agentSend">发送</button>
+          <button class="agent-send" id="agentSend" title="发送" aria-label="发送"><span class="ic ic-arrow-up"></span></button>
         </div>
         <input type="file" id="agentFile" accept="image/*,audio/*,video/*" multiple style="display:none">
       </div>
@@ -778,19 +782,25 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
   <div class="at-empty" id="agentAtEmpty"><span id="agentAtEmptyText"></span></div>
 </div>
 
-<script src="/api/base_ui.js?v=20261104g"></script>
+
+<div class="agent-topic-pop" id="agentTopicPop">
+  <div class="atp-tabs" id="agentTopicTabs"></div>
+  <div class="atp-list" id="agentTopicList"></div>
+</div>
+
+<script src="/api/base_ui.js?v=20261109b"></script>
 
   <script src="/api/assets_ui.js?v=20260930g"></script>
-  <script src="/api/assets_picker.js?v=20260922b"></script>
-  <script src="/api/imageedit_ui.js?v=20261026c"></script>
+  <script src="/api/assets_picker.js?v=20261104a"></script>
+  <script src="/api/imageedit_ui.js?v=20261104a"></script>
   <link rel="stylesheet" href="/api/canvas_style.css?v=20261103o6">
   <script src="/api/canvas_dagre.js?v=20260930i"></script>
   <script src="/api/canvas_manager.js?v=20261104a"></script>
   
-  <script src="/api/canvas_timeline.js?v=20261104a"></script>
-  <script src="/api/canvas_stage.js?v=20261104g"></script>
+  <script src="/api/canvas_timeline.js?v=20261104c"></script>
+  <script src="/api/canvas_stage.js?v=20261104k"></script>
 <script src="/api/tts_upload.js?v=20260918d"></script>
-<script src="/api/audio_ui.js?v=20261104a"></script>
+<script src="/api/audio_ui.js?v=20261104c"></script>
 
 </body>
 </html>

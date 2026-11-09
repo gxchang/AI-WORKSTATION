@@ -55,6 +55,33 @@ _BUDGET_KEYS = ("chat_budget_assistant", "chat_budget_storyboard")
 _BUDGET_LEVELS = {"auto": None, "low": "low", "medium": "medium", "high": "high"}
 _INT_LLM_KEYS = ("chat_max_output_assistant", "chat_max_output_storyboard", "chat_ctx_assistant", "chat_ctx_storyboard")
 
+
+
+
+
+
+_INT_SEPS = ",，_ \t\u00a0"
+_INT_LABELS = {
+    "chat_max_output_assistant": "助手·输出上限",
+    "chat_ctx_assistant": "助手·上下文上限",
+    "chat_max_output_storyboard": "分镜·输出上限",
+    "chat_ctx_storyboard": "分镜·上下文上限",
+}
+
+
+def _norm_int_token(v):
+    
+    if v is None:
+        return ""
+    s = "".join(ch for ch in str(v).strip() if ch not in _INT_SEPS)
+    if not s:
+        return ""
+    try:
+        n = int(s)
+    except (TypeError, ValueError):
+        return None
+    return str(n) if n > 0 else None
+
 _LOCK_OBJ = threading.RLock()
 
 
@@ -323,6 +350,15 @@ def save(patch, keep_old_key=True):
     for k in patch:
         if k not in WRITABLE_KEYS:
             raise ValueError(f"不支持的配置项：{k}")
+
+    _int_patch = {}
+    for k in _INT_LLM_KEYS:
+        if k in patch:
+            s = _norm_int_token(patch[k])
+            if s is None:
+                raise ValueError(
+                    f"{_INT_LABELS.get(k, k)} 只能填正整数（如 8192），不要带单位或字母：{patch[k]!r}")
+            _int_patch[k] = s
     if "base_url" in patch:
         u = _norm_url(patch["base_url"])
         if u:
@@ -360,13 +396,8 @@ def save(patch, keep_old_key=True):
         if k in patch:
             v = str(patch[k] or "auto").strip()
             _meta_set(k, v if v in _BUDGET_LEVELS else "auto")
-    for k in _INT_LLM_KEYS:
-        if k in patch:
-            s = str(patch[k]).strip() if patch[k] is not None else ""
-            try:
-                _meta_set(k, str(int(s))) if s else _meta_del(k)
-            except (TypeError, ValueError):
-                _meta_del(k)
+    for k, s in _int_patch.items():
+        _meta_set(k, s) if s else _meta_del(k)
     return config_snapshot(masked=True)
 
 

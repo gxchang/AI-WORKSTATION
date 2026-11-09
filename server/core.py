@@ -125,7 +125,7 @@ _NO_RETRY_SESSION = _build_no_retry_session()
 def _llm_chat_completions(messages, tools=None, tool_choice="auto",
                           model=None, temperature=0.2,
                           max_tokens=4096, timeout=(10, 300), extra=None,
-                          use_case="assistant", thinking=True):
+                          use_case="assistant"):
     
     try:
         import server.llm as _llm
@@ -133,7 +133,7 @@ def _llm_chat_completions(messages, tools=None, tool_choice="auto",
         return None, f"LLM 分发层不可用：{e}"
     try:
         r = _llm.chat(use_case, messages, model=model, tools=tools,
-                      tool_choice=tool_choice, stream=False, thinking=thinking,
+                      tool_choice=tool_choice, stream=False,
                       max_tokens=max_tokens, temperature=temperature, timeout=timeout)
     except Exception as e:
         return None, f"请求 LLM 失败：{type(e).__name__}: {e}"
@@ -497,7 +497,7 @@ def _save_tasks(data):
 
 
 def _create_task(kind, model, payload, video_id=None, media_hint=None, session_id=None, upstream=None,
-                 ratio=None, user_params=None, patch_mask=False):
+                 ratio=None, user_params=None, patch_mask=False, origin_view=None):
     
 
 
@@ -531,6 +531,10 @@ def _create_task(kind, model, payload, video_id=None, media_hint=None, session_i
 
 
         **({"patch_mask": True} if patch_mask else {}),
+
+
+
+        **({"origin_view": origin_view} if origin_view else {}),
         "created_at": time.time(),
 
 
@@ -1151,7 +1155,7 @@ def _video_caps_for(model):
     return MODEL_LIMITS.get(m) or getattr(_arkprov, "VIDEO_MODEL_LIMITS", {}).get(m) or {}
 
 
-def _register_generated_video(url, payload, session_id=None):
+def _register_generated_video(url, payload, session_id=None, origin_view=None):
     
     if not payload:
         print("[warn] 视频入库**没有来历**（payload 为空）—— 预览窗将永远没有生成信息；"
@@ -1165,6 +1169,7 @@ def _register_generated_video(url, payload, session_id=None):
             name=n, url=url, type="video",
             origin=_assets_store.ORIGIN_CREATED,
             origin_session=session_id,
+            origin_view=origin_view,
             meta=_assets_store.build_provenance(
                               payload=_assets_store.fit_payload(
                                   payload, _video_caps_for((payload or {}).get("model")),
@@ -1232,6 +1237,10 @@ def _register_derived_asset(url, src_url, type_, kind, session_id=None, payload=
         return _assets_store.register(
             name=name, url=url, type=type_,
             origin=_assets_store.ORIGIN_UPLOADED,
+
+
+
+            origin_view=_assets_store.ORIGIN_VIEW_CANVAS,
             label=label,
             origin_session=session_id,
             meta=meta,
@@ -1388,7 +1397,8 @@ def _stamp_actual_resolution(meta, name):
     return _out
 
 
-def _register_generated_images(urls, session_id=None, payload=None, ratio=None, upstream=None):
+def _register_generated_images(urls, session_id=None, payload=None, ratio=None, upstream=None,
+                               origin_view=None):
     
     items = []
 
@@ -1404,6 +1414,7 @@ def _register_generated_images(urls, session_id=None, payload=None, ratio=None, 
         items.append({"name": n, "url": u, "type": "image",
                       "origin": _assets_store.ORIGIN_CREATED,
                       "origin_session": session_id,
+                      "origin_view": origin_view,
                       "meta": _meta})
     return _assets_store.register_many(items) if items else []
 
@@ -1567,7 +1578,8 @@ def _progress_one(tid, rec):
 
 
                 _register_generated_video(_vurl, session_id=rec.get("session_id"),
-                                          payload=rec.get("payload"))
+                                          payload=rec.get("payload"),
+                                          origin_view=rec.get("origin_view"))
             elif st in ("failed", "error", "cancelled"):
                 err_msg = eobj if isinstance(eobj, str) else (eobj.get("message") if isinstance(eobj, dict) else None) or f"视频任务失败（{st}）"
                 _update_task(tid, status="failed", error=err_msg)
@@ -1672,7 +1684,8 @@ def _progress_one(tid, rec):
                 _register_generated_images(image_urls, session_id=rec.get("session_id"),
                                            payload=rec.get("user_params") or rec.get("payload"),
                                            ratio=rec.get("ratio"),
-                                           upstream=rec.get("upstream"))
+                                           upstream=rec.get("upstream"),
+                                           origin_view=rec.get("origin_view"))
             else:
                 suffix = f"（已重试 {attempts} 次）" if attempts > 1 else ""
                 _update_task(tid, status="failed", error=(err_msg or "生图失败") + suffix)

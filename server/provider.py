@@ -54,6 +54,34 @@ _INT_PROV_KEYS = ("agent_ctx_limit", "llm_ctx_limit", "llm_max_output", "agent_m
 
 
 
+
+
+
+
+_INT_SEPS = ",，_ \t\u00a0"
+_INT_LABELS = {
+    "agent_ctx_limit": "助手·上下文上限",
+    "agent_max_output": "助手·输出上限",
+    "llm_ctx_limit": "分镜·上下文上限",
+    "llm_max_output": "分镜·输出上限",
+}
+
+
+def _norm_int_token(v):
+    
+    if v is None:
+        return ""
+    s = "".join(ch for ch in str(v).strip() if ch not in _INT_SEPS)
+    if not s:
+        return ""
+    try:
+        n = int(s)
+    except (TypeError, ValueError):
+        return None
+    return str(n) if n > 0 else None
+
+
+
 def _load_env_once():
     
     p = os.path.join(_ROOT, ".env")
@@ -318,6 +346,15 @@ def save(patch, keep_old_key=True):
     for k in patch:
         if k not in WRITABLE_KEYS:
             raise ValueError(f"不支持的配置项：{k}")
+
+    _int_patch = {}
+    for k in _INT_PROV_KEYS:
+        if k in patch:
+            s = _norm_int_token(patch[k])
+            if s is None:
+                raise ValueError(
+                    f"{_INT_LABELS.get(k, k)} 只能填正整数（如 8192），不要带单位或字母：{patch[k]!r}")
+            _int_patch[k] = s
     if "base_url" in patch:
         u = _norm_url(patch["base_url"])
         if u:
@@ -347,13 +384,8 @@ def save(patch, keep_old_key=True):
     for k in _BOOL_PROV_KEYS:
         if k in patch:
             _meta_set(k, "1" if _truthy(patch[k]) else "0")
-    for k in _INT_PROV_KEYS:
-        if k in patch:
-            s = str(patch[k]).strip() if patch[k] is not None else ""
-            try:
-                _meta_set(k, str(int(s))) if s else _meta_del(k)
-            except (TypeError, ValueError):
-                _meta_del(k)
+    for k, s in _int_patch.items():
+        _meta_set(k, s) if s else _meta_del(k)
     return config_snapshot(masked=True)
 
 
@@ -399,13 +431,23 @@ def test_connection(base_url=None, api_key=None, poll_endpoint=None):
         return out
 
 
+
+
+
+
+    try:
+        import server.llm as _llm
+        _think = _llm.thinking_params("storyboard", backend="agnes")
+    except Exception as _e:
+        print(f"[provider.test_connection] 思考参数读取失败，按无附加参数探活：{_e}", flush=True)
+        _think = {}
     try:
         r2 = _rq.post(
             f"{base}/chat/completions",
             headers={"Authorization": f"Bearer {key}"} if key else {},
             json={"model": (get("llm_models") or ["agnes-2.5-flash"])[0],
                   "messages": [{"role": "user", "content": "ping"}],
-                  "max_tokens": 1},
+                  "max_tokens": 1, **_think},
             timeout=(5, 30),
         )
     except Exception as e:

@@ -131,6 +131,11 @@ def init_audio_db():
 
 
                 "ALTER TABLE jobs ADD COLUMN preset_voice TEXT DEFAULT ''",
+
+
+
+
+                "ALTER TABLE jobs ADD COLUMN origin_view TEXT DEFAULT ''",
             ):
                 try:
                     conn.execute(_sql)
@@ -449,6 +454,8 @@ def _job_to_dict(row):
         "voice_desc": (row["voice_desc"] if "voice_desc" in row.keys() else "") or "",
 
         "preset_voice": (row["preset_voice"] if "preset_voice" in row.keys() else "") or "",
+
+        "origin_view": (row["origin_view"] if "origin_view" in row.keys() else "") or "",
         "status": row["status"] or "processing",
         "candidates": cands,
         "errors": _load(row["errors"]),
@@ -481,7 +488,7 @@ def _register_reference_asset(rel):
 
 
 def create_job(text, speed=SPEED_DEFAULT, voice_name="", ref_path="", count=2, model_id="", voice_desc="",
-               preset_voice=""):
+               preset_voice="", origin_view=""):
     
     init_audio_db()
     jid = uuid.uuid4().hex[:12]
@@ -490,12 +497,12 @@ def create_job(text, speed=SPEED_DEFAULT, voice_name="", ref_path="", count=2, m
         conn = _conn()
         try:
             conn.execute(
-                "INSERT INTO jobs(id,text,speed,voice_name,ref_path,model_id,count,status,candidates,errors,created_at,updated_at,voice_desc,preset_voice) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO jobs(id,text,speed,voice_name,ref_path,model_id,count,status,candidates,errors,created_at,updated_at,voice_desc,preset_voice,origin_view) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (jid, text, _norm_speed(speed), voice_name or "", ref_path or "",
                  (model_id or "").strip(), int(count),
                  "processing", "[]", "[]", now, now, (voice_desc or "").strip(),
-                 (preset_voice or "").strip()),
+                 (preset_voice or "").strip(), (origin_view or "").strip()),
             )
 
             conn.execute(
@@ -655,6 +662,11 @@ def _register_candidates_assets(cands, job=None, caps=None):
             raw = {k: v for k, v in raw.items() if v not in (None, "")}
             items.append({"name": rel, "url": url, "type": "audio",
                           "origin": _store.ORIGIN_CREATED, "kind": "voice",
+
+
+
+
+                          "origin_view": (job.get("origin_view") or None),
                           "meta": _store.build_provenance(
                               payload=raw, model=job.get("model_id") or c.get("model_id"))})
         if items:

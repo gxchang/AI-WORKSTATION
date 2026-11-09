@@ -78,7 +78,8 @@ updateSel();}else{S.sel.clear();S.sel.set(a.name,a);gridEl.querySelectorAll(".ap
 function updateSel(){const n=S.sel.size;selInfo.textContent=n?`已选 ${n} 个`:"未选择";okBtn.disabled=n===0;}
 async function load(){gridEl.innerHTML='<div class="ap-loading">加载中…</div>';emptyEl.hidden=true;try{let url;if(S.source==="library")url=API+"/api/assets/registry";else{const q=new URLSearchParams({tab:S.tab||"uploaded",page:"1",size:"500"});url=API+"/api/assets/list?"+q.toString();}
 const r=await fetch(url);const j=await r.json();S.items=j.items||[];renderGrid();}catch(e){gridEl.innerHTML=`<div class="ap-loading">加载失败：${_esc(e.message || e)}</div>`;}}
-function open(opts){ensureDom();S.source=opts.source||"library";S.tab=opts.tab||"uploaded";S.sub=opts.sub||"";S.multi=opts.multi!==false;S.items=[];S.sel.clear();S.onPick=opts.onPick||null;S.onCancel=opts.onCancel||null;titleEl.textContent=opts.title||"选择素材";selInfo.textContent="未选择";okBtn.disabled=true;root.classList.add("open");renderFilters();load();}
-function cancel(){if(!root||!root.classList.contains("open"))return;root.classList.remove("open");const c=S.onCancel;S.onCancel=null;S.onPick=null;if(typeof c==="function")c();}
-function confirmPick(){const items=[...S.sel.values()];if(!items.length)return;root.classList.remove("open");const p=S.onPick;S.onPick=null;S.onCancel=null;if(typeof p==="function")p(items);}
+function open(opts){ensureDom();S.source=opts.source||"library";S.tab=opts.tab||"uploaded";S.sub=opts.sub||"";S.multi=opts.multi!==false;S.items=[];S.sel.clear();S.onPick=opts.onPick||null;S.onCancel=opts.onCancel||null;titleEl.textContent=opts.title||"选择素材";selInfo.textContent="未选择";okBtn.disabled=true;root.classList.add("open");renderFilters();load();if(window.Views&&Views._ovPush)Views._ovPush("picker",cancel);}
+function closePick(){if(window.Views&&Views._ovDrop)Views._ovDrop("picker");}
+function cancel(){if(!root||!root.classList.contains("open"))return;root.classList.remove("open");const c=S.onCancel;S.onCancel=null;S.onPick=null;closePick();if(typeof c==="function")c();}
+function confirmPick(){const items=[...S.sel.values()];if(!items.length)return;root.classList.remove("open");const p=S.onPick;S.onPick=null;S.onCancel=null;closePick();if(typeof p==="function")p(items);}
 window.AssetPicker={open,close:cancel};})();

@@ -156,9 +156,11 @@ class RhSubmitter(SegmentSubmitter):
 
 
 
+
                     cost = _rh.parse_usage(outs or {}) or _rh.parse_usage(body or {})
                     if cost:
                         _u = (_rh.limits(self.model) or {}).get("usage") or {}
+                        cost["point_unit"] = _u.get("point_unit") or ""
                         cost["coins_unit"] = _u.get("coins_unit") or ""
                         cost["money_unit"] = _u.get("money_unit") or ""
                         self.last_cost = cost

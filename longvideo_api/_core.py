@@ -883,10 +883,11 @@ def _recognize_visual(url: str, label: str = "", kind: str = "character", llm_mo
 
 
 
+
     for _attempt in range(3):
         try:
             r = _llm.chat("storyboard", messages=payload["messages"], model=llm_model,
-                          thinking=False, temperature=0.2, timeout=120)
+                          temperature=0.2, timeout=120)
             if r.status_code == 200:
                 data = r.json()
                 return _spec_to_appearance(_appearance_to_spec(
@@ -1235,20 +1236,72 @@ def _build_registry_text(rows) -> str:
 
 
 import os
-_PROMPT_PATH = os.path.join(_ROOT, "prompts", "storyboard_llm", "system_prompt.txt")
-def _load_system_prompt():
-    with open(_PROMPT_PATH, "r", encoding="utf-8") as _f:
+_PROMPT_DIR = os.path.join(_ROOT, "prompts", "storyboard_llm")
+_PROMPT_PATH = os.path.join(_PROMPT_DIR, "system_prompt.txt")
+
+
+
+
+
+
+
+_WORKBENCH_PROMPT_FILES = ("trans-prompt-workbench.txt", "trans-prompt-workbench.md")
+_SIX_COL_HEADERS = ("镜号", "景别角度", "画面描述", "声音", "运镜", "时长")
+_SIX_COL_DATA_RE = re.compile(r"^\|?\s*\d+\s*[-–—]\s*\d+\s*\|")
+
+
+def _workbench_prompt_path():
+    
+    for _n in _WORKBENCH_PROMPT_FILES:
+        _p = os.path.join(_PROMPT_DIR, _n)
+        if os.path.isfile(_p):
+            return _p
+    return None
+
+
+def _looks_like_six_col_table(script: str) -> bool:
+    
+    _head_hit, _row_hit = False, False
+    for _raw in (script or "").splitlines():
+        _line = _raw.strip().strip("`").strip().replace("｜", "|")
+        if not _line:
+            continue
+        if "|" in _line and sum(1 for _h in _SIX_COL_HEADERS if _h in _line) >= 5:
+            _head_hit = True
+        if _SIX_COL_DATA_RE.match(_line):
+            _row_hit = True
+    return _head_hit and _row_hit
+
+
+def _select_prompt_variant(script: str):
+    
+    if _looks_like_six_col_table(script):
+        _p = _workbench_prompt_path()
+        if _p:
+            return "workbench", _p
+    return "legacy", _PROMPT_PATH
+
+
+def _load_system_prompt(path=None):
+    with open(path or _PROMPT_PATH, "r", encoding="utf-8") as _f:
         return _f.read()
 SYSTEM_PROMPT = _load_system_prompt()
 
 
-def _render_system_prompt(video_model=None):
+def _render_system_prompt(video_model=None, path=None):
     
     lo, hi = _seg_bounds(video_model)
-    return (_load_system_prompt()
+    img_cap, aud_cap = _ref_caps(video_model)
+    aud_note = "" if aud_cap > 0 else (
+        '> 本次视频模型不支持参考音频：所有段的 `audio` 必须留空，'
+        '台词直接写「角色名："台词"」，禁止出现「音频N」或「（音频N）」占位。')
+    return (_load_system_prompt(path)
             .replace("{{VIDEO_MODEL}}", video_model or _cfg_video_model())
             .replace("{{SEC_MIN}}", str(lo))
-            .replace("{{SEC_MAX}}", str(hi)))
+            .replace("{{SEC_MAX}}", str(hi))
+            .replace("{{IMG_MAX}}", str(img_cap))
+            .replace("{{AUD_MAX}}", str(aud_cap))
+            .replace("{{AUD_NOTE}}", aud_note))
 
 
 def _optimize(script: str, rows, llm_model: str = LLM_MODEL, video_model: str = None) -> dict:
@@ -1258,7 +1311,12 @@ def _optimize(script: str, rows, llm_model: str = LLM_MODEL, video_model: str = 
 
     rows = [dict(r) for r in rows]
 
-    sys_prompt = _render_system_prompt(video_model)
+
+
+    prompt_variant, prompt_path = _select_prompt_variant(script)
+    sys_prompt = _render_system_prompt(video_model, prompt_path)
+    print(f"[OPT-诊断] 分镜规约={prompt_variant} 文件={os.path.basename(prompt_path)} "
+          f"长度={len(sys_prompt)}字", flush=True)
     img_rows = [r for r in rows if r.get("type") == "image" and r.get("url")]
 
     def _need_rec(r):
@@ -1294,6 +1352,9 @@ def _optimize(script: str, rows, llm_model: str = LLM_MODEL, video_model: str = 
         with ThreadPoolExecutor(max_workers=min(2, len(missing))) as ex:
             list(ex.map(_rec, missing))
     registry_text = _build_registry_text(rows)
+
+
+    _img_cap, _aud_cap = _ref_caps(video_model)
     tool_schema = {
         "type": "function",
         "function": {
@@ -1322,8 +1383,8 @@ def _optimize(script: str, rows, llm_model: str = LLM_MODEL, video_model: str = 
                                 }}},
                                 "sfx": {"type": "array", "items": {"type": "string"}},
                                 "scene": {"type": "object", "properties": {"text": {"type": "string", "description": "本镜场景/位置描述（场所+方位+陈设+光线与氛围），只写场景本身（场所+方位+陈设+光线与氛围），禁止抄入角色动作/神态/对白——那些统一在 prompt 文本里自然写，由视频模型直接读取"}, "style_anchor": {"type": "string"}}},
-                                "images": {"type": "array", "items": {"type": "string"}, "description": "续接段 images[0]='tail'；其余填 registry 的 name 键值，按『角色 > 场景 > 道具』优先级排列，≤5（超出截断）；场景/道具图也在此列出，便于后端按 name 反查并绑定图N。图N 严格对应 images 数组下标（图1=images[0]）。"},
-                                "audio": {"type": "array", "items": {"type": "string"}, "description": "本镜『实际有台词』角色的 label 列表（与硬规则7一致：只有 dialogue 里 line 非空的角色才配声）。按对话出现顺序填写，audio[0] 即『音频1』，≤3（Flash 硬上限，超出静默截断）。无台词的角色（纯动作/空镜/画外音）一律不得写入。不得写声线 label（如『三花猫声音』），也不得写声线 name（lv_xxx）。"},
+                                "images": {"type": "array", "items": {"type": "string"}, "description": f"续接段 images[0]='tail'；其余填 registry 的 name 键值，按『角色 > 场景 > 道具』优先级排列，≤{_img_cap}（超出截断）；场景/道具图也在此列出，便于后端按 name 反查并绑定图N。图N 严格对应 images 数组下标（图1=images[0]）。"},
+                                "audio": {"type": "array", "items": {"type": "string"}, "description": f"本镜『实际有台词』角色的 label 列表（与硬规则7一致：只有 dialogue 里 line 非空的角色才配声）。按对话出现顺序填写，audio[0] 即『音频1』，≤{_aud_cap}（当前视频模型上限，超出静默截断）。无台词的角色（纯动作/空镜/画外音）一律不得写入。不得写声线 label（如『三花猫声音』），也不得写声线 name（lv_xxx）。"},
                                 "prompt": {"type": "string", "description": "按硬规则3/5/10/11 写：自然语言叙事一段话（禁『图1=』等号式与『SFX：/风格：』标签段）。已登记且有图角色/场景/道具不强制写文字外貌（靠图N 锚定），仅未登记/无图实体在首现处写一行精简外观签名；每处提及都重挂其图N（图N=images 下标）；已登记 posture 角色姿态由后端确定性注入（见硬规则11），LLM 不写姿态前缀。对白格式：『说话动词（音频N）：\"台词\"』（N = 该角色在 audio 数组中的序号：audio[0]→音频1…；无配声角色直接『角色：\"台词\"』）。禁止写声线真名或『老年女声』之类描述——声线由音频N 绑定（audio[0]→音频1…）。动作/微表情/光线/音效/禁止 等镜头级指令直接在 prompt 文本里写足。"}
                             },
                             "required": ["shot_no", "estimated_seconds", "mode", "prompt", "is_continuation", "images"]
@@ -1368,7 +1429,7 @@ def _optimize(script: str, rows, llm_model: str = LLM_MODEL, video_model: str = 
 
 
     print(f"[OPT-诊断] 输入体量: SYSTEM_PROMPT={len(sys_prompt)}字 user_text={len(user_text)}字 "
-          f"(合计约{len(SYSTEM_PROMPT)+len(user_text)}字)", flush=True)
+          f"(合计约{len(sys_prompt)+len(user_text)}字)", flush=True)
 
 
 
@@ -1378,7 +1439,7 @@ def _optimize(script: str, rows, llm_model: str = LLM_MODEL, video_model: str = 
             "当前分镜引擎模型未声明支持工具调用 —— 分镜依赖强制工具调用（save_shots）"
             "产出结构化结果。请在「服务商设置」更换支持工具调用的模型。")
     _ctx_limit = _llm.ctx_limit("storyboard")
-    _est_chars = len(SYSTEM_PROMPT) + len(user_text)
+    _est_chars = len(sys_prompt) + len(user_text)
     if _ctx_limit and _est_chars > int(_ctx_limit):
         raise RuntimeError(
             f"脚本体量约 {_est_chars} 字符，超出当前分镜模型的上下文声明（{_ctx_limit} token）—— "
@@ -1524,7 +1585,9 @@ def _optimize(script: str, rows, llm_model: str = LLM_MODEL, video_model: str = 
             "优化器未产出任何分镜（LLM 返回 shots=[]）。"
             "请直接重试；若反复出现可缩短脚本或拆成更少的逻辑段再提交。"
         )
-    return {"shots": shots}
+
+
+    return {"shots": shots, "prompt_variant": prompt_variant}
 
 
 def _split_script_by_shot(script: str):
@@ -1736,12 +1799,15 @@ def _appearance_span(prompt, lbl):
     return best
 
 
-def _inject_appearance(prompt, lbl, sig):
+def _inject_appearance(prompt, lbl, sig, dialogue=None):
     
     if not sig:
         return prompt
+    spans = _dialogue_spans(prompt, dialogue)
     for m in re.finditer(re.escape(lbl), prompt):
         pos = m.end()
+        if _overlaps_spans(m.start(), pos, spans):
+            continue
         if prompt.count('『', 0, pos) - prompt.count('』', 0, pos) > 0:
             continue
         if pos < len(prompt) and prompt[pos] in '（(':
@@ -1851,7 +1917,7 @@ def _enforce_visual_lock(shots, rows, script=None, video_model=None):
                 continue
             sig = _concise_signature(label_ap[lbl]) or (label_ap[lbl] or "")[:40]
             if sig:
-                new_p = _inject_appearance(prompt, lbl, sig)
+                new_p = _inject_appearance(prompt, lbl, sig, sh.get("dialogue"))
                 if new_p != prompt:
                     prompt = new_p
                     c["appearance"] = sig
@@ -1862,7 +1928,7 @@ def _enforce_visual_lock(shots, rows, script=None, video_model=None):
             _pos = label_posture.get(_pl)
             if not _pos:
                 continue
-            _np = _inject_posture_everywhere(prompt, _pl, _pos)
+            _np = _inject_posture_everywhere(prompt, _pl, _pos, sh.get("dialogue"))
             if _np != prompt:
                 prompt = _np
                 changed = True
@@ -1928,6 +1994,11 @@ def _enforce_visual_lock(shots, rows, script=None, video_model=None):
                 changed = True
 
 
+
+
+
+        _prompt_spans = _dialogue_spans(prompt, sh.get("dialogue"))
+        _prompt_scan = _mask_spans(prompt, _prompt_spans)
         _img_cap = _ref_caps(video_model)[0]
         _imgs_cur = list(sh.get("images") or [])
         _mentioned_names = []
@@ -1938,7 +2009,7 @@ def _enforce_visual_lock(shots, rows, script=None, video_model=None):
             _allc = set(_cset)
             _allc.add(_nm)
             for _cs in _allc:
-                if _cs and re.search(re.escape(_cs), prompt):
+                if _cs and re.search(re.escape(_cs), _prompt_scan):
                     _mentioned_names.append(_nm)
                     _seen_n.add(_nm)
                     break
@@ -1956,7 +2027,7 @@ def _enforce_visual_lock(shots, rows, script=None, video_model=None):
 
 
                 for _i, _e in enumerate(_new_imgs):
-                    if _name_kind.get(_e) == "scene" and not _explicitly_anchored(prompt, _e, _name_labels):
+                    if _name_kind.get(_e) == "scene" and not _explicitly_anchored(_prompt_scan, _e, _name_labels):
                         _new_imgs[_i] = _nm
                         _new_urls[_i] = _name_url.get(_nm)
                         print(f"[INFO] 方案B场景换绑 shot#{sh.get('shot_no')}: 图{_i+1} 由[{_e}]换为[{_nm}]", flush=True)
@@ -2026,12 +2097,15 @@ def _enforce_visual_lock(shots, rows, script=None, video_model=None):
     return shots
 
 
-def _inject_posture_everywhere(prompt, lbl, pos):
+def _inject_posture_everywhere(prompt, lbl, pos, dialogue=None):
     
     pre = pos
+    spans = _dialogue_spans(prompt, dialogue)
 
     pat = re.compile(r'(?<!' + re.escape(pos) + r')' + re.escape(lbl))
     def _cb(m):
+        if _overlaps_spans(m.start(), m.end(), spans):
+            return m.group(0)
         return pre + m.group(0)
     return pat.sub(_cb, prompt)
 
@@ -2050,6 +2124,105 @@ _REF_MOUTH_RE = re.compile(r'[，、；]?\s*(?:嘴形与台词同步|口型随�
 
 _REF_VOICE_PAREN_RE = re.compile(r'[（(][^）)]*(?:声线|嗓音)[^）)]*[）)]')
 _REF_VOICE_BARE_RE = re.compile(r'[^\s，。、；：（）()]{0,14}(?:声线|嗓音)地')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+_QUOTE_CHARS = '"“”「」『』'
+
+
+def _merge_spans(spans):
+    
+    if not spans:
+        return []
+    ss = sorted(spans)
+    out = [list(ss[0])]
+    for a, b in ss[1:]:
+        if a <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return [(a, b) for a, b in out]
+
+
+def _quoted_spans(text):
+    
+    text = text or ""
+    marks = [i for i, ch in enumerate(text) if ch in _QUOTE_CHARS]
+    return _merge_spans([(marks[k], marks[k + 1] + 1)
+                         for k in range(0, len(marks) - 1, 2)])
+
+
+def _dialogue_spans(text, dialogue=None):
+    
+    text = text or ""
+    spans = list(_quoted_spans(text))
+    _prefix = "[脚本片段中未找到具体台词] "
+    for d in (dialogue or []):
+        line = (d.get("line") or "").strip() if isinstance(d, dict) else ""
+        if line.startswith(_prefix):
+            line = line[len(_prefix):].strip()
+        if len(line) < 4:
+            continue
+        start = 0
+        while True:
+            k = text.find(line, start)
+            if k < 0:
+                break
+            spans.append((k, k + len(line)))
+            start = k + 1
+    return _merge_spans(spans)
+
+
+def _overlaps_spans(s, e, spans):
+    
+    return any(a < e and s < b for a, b in spans)
+
+
+def _mask_spans(text, spans):
+    
+    if not spans:
+        return text
+    out, last = [], 0
+    for a, b in spans:
+        out.append(text[last:a])
+        out.append(" " * (b - a))
+        last = b
+    out.append(text[last:])
+    return "".join(out)
+
+
+def _strip_quoted_img_tokens(prompt, max_ref=None):
+    
+    prompt = prompt or ""
+    spans = _quoted_spans(prompt)
+    if not spans:
+        return prompt
+
+    def _cb(m):
+        if max_ref is not None and int(m.group(1)) > max_ref:
+            return m.group(0)
+        return ""
+
+    out, last = [], 0
+    for a, b in spans:
+        out.append(prompt[last:a])
+        out.append(re.sub(r"图\s*(\d+)的", _cb, prompt[a:b]))
+        last = b
+    out.append(prompt[last:])
+    return "".join(out)
 
 
 def _strip_ref_tokens(prompt):
@@ -2099,6 +2272,7 @@ def _normalize_images(sh, rows):
 def _inject_ref_tokens(prompt, images, audio, name_labels, dialogue=None, label_posture=None):
     
     text = _strip_ref_tokens(prompt)
+    spans = _dialogue_spans(text, dialogue)
 
 
     occ = []
@@ -2107,6 +2281,8 @@ def _inject_ref_tokens(prompt, images, audio, name_labels, dialogue=None, label_
             continue
         for lb in sorted(name_labels.get(nm) or {nm}, key=len, reverse=True):
             for m in re.finditer(re.escape(lb), text):
+                if _overlaps_spans(m.start(), m.end(), spans):
+                    continue
                 occ.append((m.start(), m.end(), lb, i))
     occ.sort(key=lambda t: (t[0], -(t[1] - t[0])))
     kept, last_end = [], -1
@@ -2636,6 +2812,7 @@ def _register_segment_asset(job_id, seg_no, local_path, extra_meta=None):
             url="/api/jobs/%s/segment/%d.mp4" % (job_id, seg_no),
             type="video",
             origin=_assets_store.ORIGIN_CREATED,
+            origin_view=_assets_store.ORIGIN_VIEW_LONGVIDEO,
             job_id=job_id,
             origin_session=session_id or None,
             meta=meta,
@@ -2656,6 +2833,7 @@ def _register_final_asset(job_id):
             url="/api/jobs/%s/final.mp4" % job_id,
             type="video",
             origin=_assets_store.ORIGIN_CREATED,
+            origin_view=_assets_store.ORIGIN_VIEW_LONGVIDEO,
             job_id=job_id,
             origin_session=session_id or None,
             meta=meta,
@@ -2844,6 +3022,11 @@ def _gen_segment(job_id, seg, prev_tail_b64):
 
 
     prompt = re.sub(r"[​‌‍⁠﻿]", "", prompt)
+
+
+
+
+    prompt = _strip_quoted_img_tokens(prompt, len(images_urls))
 
 
 
@@ -3121,6 +3304,9 @@ def _translate_group_prompt(prompt, local_imgs, local_auds, global_imgs, global_
                             slot0_is_tail=False):
     
     prompt = re.sub(r"[\u200b\u200c\u200d\u2060\ufeff]", "", prompt or "")
+
+
+    prompt = _strip_quoted_img_tokens(prompt, len(local_imgs or []))
     if slot0_is_tail:
         prompt = _neutralize_tail_lead(prompt)
         prompt = _shift_img_refs_down(prompt)
@@ -3702,6 +3888,7 @@ def api_optimizer():
         import traceback as _tb
         return jsonify(error=f"优化失败：{e}", trace=_tb.format_exc(limit=4)), 500
 
+
     if isinstance(result, dict):
         result["llm_model"] = llm_model
 
@@ -4245,6 +4432,38 @@ def api_reedit_job(job_id):
     finally:
         con.close()
     return jsonify(ok=True, job_id=job_id, status="draft")
+
+
+@lv_bp.route("/jobs/<job_id>/shots", methods=["POST"])
+def api_save_shots(job_id):
+    
+    data = request.get_json(silent=True) or {}
+    shots = data.get("shots")
+    script = data.get("script")
+    if not isinstance(shots, list) or not shots:
+        return jsonify(error="shots 必须为非空数组"), 400
+    con = _db()
+    try:
+        job = con.execute("SELECT id, status FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
+        if not job:
+            return jsonify(error="not found"), 404
+
+        if job["status"] not in (None, "", "draft"):
+            return jsonify(error="原任务已进入生成，迟到分镜不予写入"), 409
+        if isinstance(script, str) and script:
+            con.execute(
+                "UPDATE lv_jobs SET shots_json=?, segment_count=?, stage=?, script=?, updated_at=? WHERE id=?",
+                (json.dumps(shots, ensure_ascii=False), len(shots), "分镜预览", script, time.time(), job_id),
+            )
+        else:
+            con.execute(
+                "UPDATE lv_jobs SET shots_json=?, segment_count=?, stage=?, updated_at=? WHERE id=?",
+                (json.dumps(shots, ensure_ascii=False), len(shots), "分镜预览", time.time(), job_id),
+            )
+        con.commit()
+    finally:
+        con.close()
+    return jsonify(ok=True, job_id=job_id, shots=len(shots))
 
 
 @lv_bp.route("/jobs/<job_id>/shots/archive", methods=["POST"])
