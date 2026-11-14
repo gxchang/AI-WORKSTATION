@@ -62,7 +62,7 @@ from server.core import (
 
 import uuid, time
 import queue as _queue, threading as _threading
-from longvideo_api._core import _db as _lv_db
+from longvideo_api._core import _db as _lv_db, _h3_optimize_core, _h3_optimize_stream
 
 @app.errorhandler(Exception)
 def _api_json_error(e):
@@ -346,6 +346,12 @@ def api_config():
 
     _tts_labels = {m: _ttsmodels.model_label(m, _tts_prov) for m in _tts_models}
 
+
+    try:
+        _llm_winner = _llm.route()
+    except Exception:
+        _llm_winner = "agnes"
+
     def _tts_prov_block(key):
         return {
             "enabled": bool(_TTS_ENABLED_SRC[key]()),
@@ -381,18 +387,21 @@ def api_config():
             "hasKey": bool(_cfg_key()),
             "videoModels": _vm_out,
             "imageModels": _img_models,
-            "llmModels": _provider.get("llm_models"),
-            "agentModels": _provider.get("agent_models"),
-
-            "assistantLlmModels": _llm.models_for("assistant"),
-            "storyboardLlmModels": _llm.models_for("storyboard"),
 
 
-            "assistantReady": bool(_llm.configured("assistant")[0]),
-            "assistantVision": bool(_llm.caps("assistant", "vision")),
 
 
-            "assistantModel": _llm.default_model("assistant"),
+
+
+            "llmProvider": _llm_winner,
+
+            "choice": {k: _provider.get_choice(k) for k in ("video", "image", "tts", "llm")},
+            "llmModels": _llm.models_for(),
+            "assistantLlmModels": _llm.models_for(),
+            "storyboardLlmModels": _llm.models_for(),
+            "assistantReady": bool(_llm.configured()[0]),
+            "assistantVision": bool(_llm.caps(None, "vision")),
+            "assistantModel": _llm.default_model(),
 
             "imageProvider": _img_prov,
             "imageProviderLabel": _img_label,
@@ -467,16 +476,16 @@ def api_debug_llm_route():
     from flask import request
     use_case = request.args.get("use_case", "assistant")
     try:
-        be = _llm.route(use_case)
-        ok, reason = _llm.configured(use_case)
-        res = _llm._resolve_now(use_case)
+        be = _llm.route()
+        ok, reason = _llm.configured()
+        res = _llm._resolve_now()
         return jsonify({
             "use_case": use_case,
             "backend": be,
             "configured": ok,
             "reason": reason,
-            "models": _llm.models_for(use_case),
-            "default_model": _llm.default_model(use_case),
+            "models": _llm.models_for(),
+            "default_model": _llm.default_model(),
             "resolve": res,
         })
     except Exception as e:
@@ -542,8 +551,13 @@ def _submit_video(data):
     
     model = str(data.get("model") or "").strip()
     if not model:
-        model = (_arkprov.video_models()[0] if _arkprov.video_ready()
-                 else (_provider.get("video_models") or ["agnes-video-2.5-flash"])[0])
+        model = (_video_provider_models()[0] or ["agnes-video-2.5-flash"])[0]
+
+        _w = _video_provider_state()["winner"]
+        _k = {"runninghub": _rhprov.api_key(), "ark": _arkprov.get("api_key"),
+              "agnes": _cfg_key()}.get(_w)
+        if not _k:
+            return {"error": "尚未配置访问密钥。请点击左侧「服务商设置」填入密钥（或 .env 配置 AGNES_API_KEY 后重启）。"}, 500
     if _rhprov.is_video_model(model):
         _out = _submit_video_to_runninghub(data)
     elif _arkprov.is_video_model(model):
@@ -641,11 +655,30 @@ def _rh_upload_one(path_or_url, kind="image"):
 
 
 
+
+
     _MIME_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp",
                  "image/gif": "gif", "video/mp4": "mp4", "video/quicktime": "mov",
                  "audio/mpeg": "mp3", "audio/wav": "wav", "audio/x-wav": "wav"}
     inline = _to_b64_if_local(src)
-    if isinstance(inline, str) and inline.startswith("data:"):
+
+
+
+
+
+
+    if src.startswith("/api/tts/file/"):
+        rel = unquote(src[len("/api/tts/file/"):].split("?")[0]).replace("\\", "/").lstrip("/")
+        if not _ttsclient.is_public_rel(rel):
+            raise RuntimeError(f"音频地址不在站内白名单目录内：{src}")
+        p = _ttsclient.abs_path(rel)
+        if not p or not os.path.isfile(p) or not os.path.realpath(p).startswith(
+                os.path.realpath(_ttsclient._STORAGE)):
+            raise RuntimeError(f"音频文件不存在：{src}")
+        with open(p, "rb") as f:
+            blob = f.read()
+        name = os.path.basename(p)
+    elif isinstance(inline, str) and inline.startswith("data:"):
         head, _, data = inline.partition(",")
         blob = _b64.b64decode(data)
         mime = head[5:].split(";")[0].strip() or "application/octet-stream"
@@ -712,9 +745,9 @@ def _rh_upload_materials(data):
 
 def _submit_video_to_runninghub(data):
     
-    if not _rhprov.ready():
-        return {"error": "RunningHub 未启用或未配置 API Key。"
-                         "请到「服务商设置 → RunningHub」打开开关并填入 Key（或 .env 配置 RUNNINGHUB_API_KEY）。"}, 400
+
+    if not _rhprov.api_key():
+        return {"error": "尚未配置访问密钥。请点击左侧「服务商设置」填入密钥（或 .env 配置 AGNES_API_KEY 后重启）。"}, 400
     model = str(data.get("model") or "").strip() or _rhprov.RH_ID
 
 
@@ -948,6 +981,9 @@ def runninghub_provider_cfg():
         except Exception as e:
             return jsonify(error=f"保存失败：{e}"), 500
         if patch.get("video_enabled"):
+
+
+            _provider.set_choice("video", "runninghub")
             _arkprov.save({"video_enabled": False})
         return jsonify(ok=True, **_runninghub_cfg_payload())
     return jsonify(**_runninghub_cfg_payload())
@@ -1286,15 +1322,12 @@ def _submit_image_task(data):
     use_ark = (_prov == "ark")
     use_ms = (_prov == "ms")
 
-    if not use_ark and not use_ms and not _cfg_key():
-        tip = "尚未配置访问密钥。请点击左侧「服务商设置」填入密钥（或 .env 配置 AGNES_API_KEY 后重启）。"
-        if _arkprov.get("enabled") and not _arkprov.get("api_key"):
-            tip = ("「火山方舟」的**生图**开关已开启但未填 ARK 访问密钥，已回落 Agnes —— 而 Agnes 也未配密钥。"
-                   "请在「服务商设置」里补齐其中任意一个（Agnes 页或火山方舟页）。")
-        elif _msprov.get("enabled") and not _msprov.get("api_key"):
-            tip = ("「魔搭」的**生图**开关已开启但未填 ModelScope 访问令牌，已回落 Agnes —— 而 Agnes 也未配密钥。"
-                   "请在「服务商设置」里补齐其中任意一个（Agnes 页或魔搭页）。")
-        return {"error": tip}, 500
+
+    _key_of = {"ark": lambda: _arkprov.get("api_key"),
+               "ms": lambda: _msprov.get("api_key"),
+               "agnes": lambda: _cfg_key()}
+    if not (_key_of.get(_prov) or _key_of["agnes"])():
+        return {"error": "尚未配置访问密钥。请点击左侧「服务商设置」填入密钥（或 .env 配置 AGNES_API_KEY 后重启）。"}, 500
 
 
 
@@ -1540,8 +1573,7 @@ def api_image_generate():
 
 
 def _agent_llm_model():
-    am = _provider.get("agent_models") or ["agnes-3.0-flash"]
-    return am[0]
+    return _llm.default_model()
 
 
 
@@ -1789,17 +1821,122 @@ def _agent_tool_second_pass(messages, calls, items, first_content="",
 
 
 
+
+
+AGENT_CONFIRM_TOOLS = frozenset({
+    "generate_video", "generate_image", "generate_audio", "generate_multi_angle",
+    "generate_longvideo_assets", "generate_longvideo_audio", "submit_longvideo_job",
+})
+AGENT_PLAN_HEAD = "先跟你对一下，还没开始跑："
+AGENT_PLAN_ASK = "要改吗，确认就开始"
+
+
+def _agent_plan_armed(hist):
+    
+    if not isinstance(hist, list):
+        return False
+    for h in reversed(hist):
+        if not isinstance(h, dict) or h.get("role") != "assistant":
+            continue
+        if str(h.get("content") or "").strip():
+            return True
+    return False
+
+
+_AGENT_PLAN_LABEL = {
+    "generate_video": "生成视频",
+    "generate_image": "生成图片",
+    "generate_audio": "生成音频",
+    "generate_multi_angle": "换机位重拍",
+    "generate_longvideo_assets": "生成长视频素材图",
+    "generate_longvideo_audio": "生成长视频角色声线",
+    "submit_longvideo_job": "提交长视频任务",
+
+
+    "optimize_h3_prompt": "优化 H3 提示词",
+    "read_screenplay_rules": "读取剧本规则",
+    "register_assets": "登记素材",
+}
+_AGENT_PLAN_FIELDS = {
+    "generate_video": (("prompt", "提示词"), ("seconds", "时长"),
+                       ("aspect_ratio", "画幅"), ("size", "分辨率"), ("mode", "模式")),
+    "generate_image": (("prompt", "提示词"), ("size", "分辨率"),
+                       ("ratio", "比例"), ("n", "张数")),
+    "generate_audio": (("text", "配音文本"), ("model", "模型"),
+                       ("preset_voice", "音色"), ("speed", "语速")),
+    "generate_multi_angle": (("image", "原图"), ("horizontal", "水平角"),
+                             ("vertical", "垂直角"), ("shot", "景别"),
+                             ("ratio", "比例"), ("extra", "附加要求")),
+    "generate_longvideo_assets": (("assets", "素材清单"),),
+    "generate_longvideo_audio": (("audios", "声线清单"),),
+    "submit_longvideo_job": (("name", "任务名"), ("script", "分镜表")),
+    "optimize_h3_prompt": (("prompt", "待优化提示词"),),
+    "read_screenplay_rules": (("stage", "阶段"),),
+    "register_assets": (("assets", "素材清单"),),
+}
+
+
+def _agent_plan_short(v):
+    s = re.sub(r"\s+", " ", str(v)).strip()
+    return s if len(s) <= 110 else s[:110] + "…"
+
+
+def _agent_plan_text(parsed):
+    
+    calls = [p for p in (parsed or []) if p and p[0]]
+    lines = [AGENT_PLAN_HEAD, ""]
+    for i, p in enumerate(calls, 1):
+        name, args = p[0], (p[1] if isinstance(p[1], dict) else {})
+        label = _AGENT_PLAN_LABEL.get(name, name or "未知工具")
+        lines.append("%d. %s" % (i, label))
+        for key, disp in _AGENT_PLAN_FIELDS.get(name, ()):
+            v = args.get(key)
+            if v in (None, "", [], {}):
+                continue
+            if isinstance(v, list):
+                lines.append("   · %s：共 %d 项" % (disp, len(v)))
+                for a in v[:6]:
+                    if not isinstance(a, dict):
+                        lines.append("      - %s" % _agent_plan_short(a))
+                        continue
+                    nm = a.get("label") or a.get("owner") or a.get("name") or a.get("kind") or "未命名"
+                    extra = "（沿用原图）" if a.get("url") else ""
+                    lines.append("      - %s%s" % (_agent_plan_short(nm), extra))
+                if len(v) > 6:
+                    lines.append("      - …其余 %d 项" % (len(v) - 6))
+            elif isinstance(v, dict):
+                lines.append("   · %s：%s" % (disp, _agent_plan_short(v)))
+            else:
+                lines.append("   · %s：%s" % (disp, _agent_plan_short(v)))
+    lines += ["", AGENT_PLAN_ASK + "。"]
+    return "\n".join(lines)
+
+
+
+
 AGENT_SYSTEM_PROMPT = (
     "你是工具调用层，根据用户自然语言意图选择合适的接口去调用。\n"
     "\n"
     "【通用约定】\n"
-    "1. 意图能用工具完成就调用工具，不要只回文字。\n"
-    "2. 生成类任务：参数缺失时按常识补全（未说时长用 5 秒、未说画幅用 16:9），不要反问用户。\n"
+    "1. 意图能用工具完成就调用工具，不要只回文字（生成类工具例外：见下方）。\n"
+    "2. 生成类任务：参数缺失时按常识补全（未说时长用 5 秒、未说画幅用 16:9），不要反问用户；"
+    "补全后的参数要写进计划让用户核对。\n"
     "3. 生成提示词扩写成具体、可拍摄的画面描述，不要照抄用户口语。\n"
     "4. 模式选择：默认 text；用户提供了参考图/音频/视频用 reference；用户明确要求首帧或尾帧用 keyframe。\n"
     "5. 不要编造素材 URL，只能使用用户提供的素材。\n"
     "6. 用户只是闲聊、询问或做与接口无关的事，直接回文字，不要强行调用工具。\n"
     "7. 排版：正文按语义分段，段与段之间空一行；作文/文案/脚本等多段内容严禁挤成一大段。\n"
+    "\n"
+    "【生成类工具：先给方案，点头了再动手】\n"
+    "· generate_video / generate_image / generate_audio / generate_multi_angle / "
+    "generate_longvideo_assets / generate_longvideo_audio / submit_longvideo_job 会真实调用接口、产生计费，"
+    "调用前必须先让用户过目。\n"
+    "· 用户第一次提需求，或说要改 / 重新设计 / 补充 / 只是问一句：本轮只给一份方案，"
+    "写清用哪个工具、关键参数（提示词 / 时长 / 画幅 / 素材条数等），末尾问一句"
+    "「要改吗，确认就开始」。这些轮次绝对不要输出上面 7 个工具的调用。\n"
+    "· 只有用户明确点头了，才照上一轮方案原样调用，参数别改、别追加；拿不准就当没点头，再给一份方案。\n"
+    "· 纯文本与只读工具（optimize_h3_prompt、read_screenplay_rules、register_assets）随时可调。\n"
+    "· 长视频八步里第 5/6/7 步用户对生图表 / 素材图 / 声线说过可以的，按原八步规则继续即可。\n"
     "\n"
     "【长视频草稿任务：分八步，每一步都要等用户确认，严禁一步完成】\n"
     "8. 用户要「做长视频 / 生成短剧 / 开长视频任务 / 提供题材」时，按下面八步走，且每步之间必须停下来等用户确认，"
@@ -1913,7 +2050,10 @@ _IMG_PROV_SRC = {
 }
 
 _IMG_ENABLED_SRC = {"ark": lambda: bool(_arkprov.get("enabled")), "ms": lambda: bool(_msprov.get("enabled"))}
-_IMG_READY_SRC = {"ark": lambda: _arkprov.active(), "ms": lambda: _msprov.active()}
+
+_IMG_READY_SRC = {"ark": lambda: bool(_arkprov.get("api_key")),
+                  "ms": lambda: bool(_msprov.get("api_key")),
+                  "agnes": lambda: bool(_cfg_key())}
 
 _IMG_SAVE_MODS = (("ark", _arkprov), ("ms", _msprov))
 
@@ -1932,17 +2072,15 @@ def _img_enabled_hosts():
 
 def _img_provider_state():
     
-    st = _imgen.resolve_image_provider(
-        _img_enabled_hosts(),
-        {k: f() for k, f in _IMG_READY_SRC.items()},
-    )
+    _sel = _provider.get_choice("image", _img_enabled_hosts())
+    _rd = lambda: {k: f() for k, f in _IMG_READY_SRC.items()}
+    st = _imgen.resolve_image_provider(_img_enabled_hosts(), _rd(), _sel)
 
     if st["conflict"] and not _IMG_EXCLUSIVE_DONE["done"]:
         try:
             _img_apply_exclusive(st["winner"])
-            st = _imgen.resolve_image_provider(_img_enabled_hosts(),
-                                               {k: f() for k, f in _IMG_READY_SRC.items()})
-            print("[img-provider] 检测到多家生图服务商同时开启 → 已按优先级收敛为「%s」"
+            st = _imgen.resolve_image_provider(_img_enabled_hosts(), _rd(), _sel)
+            print("[img-provider] 检测到多家生图服务商同时开启 → 已收敛为「%s」"
                   % _imgen.IMAGE_PROVIDER_LABELS.get(st["winner"], st["winner"]))
         except Exception as e:
             print("[img-provider] 互斥收敛失败（忽略）：%s" % e)
@@ -1960,6 +2098,7 @@ def _img_apply_exclusive(chosen):
     key = str(chosen or "").strip().lower()
     if key not in _imgen.IMAGE_PROVIDER_ORDER:
         raise ValueError("未知的生图服务商：%r" % chosen)
+    _provider.set_choice("image", key)
     for k, mod in _IMG_SAVE_MODS:
         if k in _imgen.IMAGE_PROVIDER_HOSTS:
             mod.save({"enabled": key == k})
@@ -1975,6 +2114,9 @@ def _img_apply_exclusive(chosen):
 def _video_apply_exclusive(chosen):
     
     key = str(chosen or "").strip().lower()
+    if key not in ("agnes", "ark", "runninghub"):
+        raise ValueError("未知的视频服务商：%r" % chosen)
+    _provider.set_choice("video", key)
     _rhprov.save({"video_enabled": key == "runninghub"})
     _arkprov.save({"video_enabled": key == "ark"})
     return key
@@ -2026,6 +2168,7 @@ def _tts_apply_exclusive(chosen):
     if key not in _ttsmodels.TTS_PROVIDER_ORDER:
         raise ValueError("未知的音频服务商：%r（可选：%s）"
                          % (chosen, " / ".join(_ttsmodels.TTS_PROVIDER_ORDER)))
+    _provider.set_choice("tts", key)
     for k, mod in _TTS_SAVE_MODS:
         if k in _ttsmodels.TTS_PROVIDER_HOSTS:
             mod.save({"enabled": key == k}, provider=k)
@@ -2188,6 +2331,11 @@ def _agent_tools():
         if isinstance(_maprops.get("ratio"), dict):
             _maprops["ratio"]["enum"] = ratios
         tools.append(_ma)
+
+
+    if _video_provider_state().get("winner") != "runninghub":
+        tools = [t for t in tools
+                 if (t.get("function") or {}).get("name") != "optimize_h3_prompt"]
     return tools
 
 
@@ -2378,6 +2526,25 @@ AGENT_TOOLS = [
                     "videos": {"type": "array", "items": {"type": "string"}, "description": "参考视频 URL"},
                     "first_frame": {"type": "string", "description": "首帧图 URL（keyframe 模式）"},
                     "last_frame": {"type": "string", "description": "尾帧图 URL（keyframe 模式）"}
+                },
+                "required": ["prompt"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "optimize_h3_prompt",
+            "description": "（仅当当前视频模型是 MiniMax H3 / RunningHub 时调用）把用户的需求提示词优化为 H3 官方「六段全参考」格式。"
+                           "在调用 generate_video 之前必须先调用本工具：把用户原始需求（可含 <Picture N>/<Audio N>/<Video N> 编号）传进 prompt，"
+                           "本工具返回优化后的六段提示词。**返回结果会自动用于随后的 generate_video**（无需你再手工回填）；"
+                           "若当前视频模型不是 H3（Agnes / 方舟），不要调用本工具。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "待优化的提示词（用户原始需求，尽量具体；可含素材编号）"},
+                    "materials": {"type": "array", "items": {"type": "object"},
+                                  "description": "可选：参考素材清单（每项含 kind/image/idx/label/url），用于附真图优化；助手通常留空"}
                 },
                 "required": ["prompt"]
             }
@@ -3145,11 +3312,14 @@ def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None):
 def _agent_tool_events(name, args, session_id, holder, on_item=None):
     
     q = _queue.Queue()
+
+
     _idle_hint = {
-        "generate_longvideo_assets": "仍在执行中…（长视频素材逐张生成，请稍候）",
-        "generate_audio": "仍在执行中…（正在生成音频，请稍候）",
-        "submit_longvideo_job": "仍在执行中…（正在创建长视频任务，请稍候）",
-    }.get(name, "仍在执行中…（工具执行中，请稍候）")
+        "generate_longvideo_assets": "已提交长视频素材生成，等待上游返回…",
+        "generate_audio": "已提交音频生成，等待上游返回…",
+        "submit_longvideo_job": "已提交长视频任务，等待上游返回…",
+        "optimize_h3_prompt": "已提交 H3 提示词优化，等待上游返回…",
+    }.get(name, "已提交工具调用，等待上游返回…")
 
     def _work():
         try:
@@ -3157,6 +3327,7 @@ def _agent_tool_events(name, args, session_id, holder, on_item=None):
                 name, args, session_id,
                 on_progress=lambda done, total, label: q.put(("p", (done, total, label))),
                 on_item=on_item,
+                on_delta=lambda inc: q.put(("d", inc)),
             )
             q.put(("r", item))
         except Exception as e:
@@ -3173,13 +3344,18 @@ def _agent_tool_events(name, args, session_id, holder, on_item=None):
         except _queue.Empty:
 
 
-            yield {"type": "tool_progress", "text": _idle_hint}
+
+            yield {"type": "tool_progress", "text": _idle_hint, "keepalive": True}
             continue
         if kind == "p":
             done, total, label = payload
             txt = f"正在生成素材 {done}/{total}" + (f"：{label}" if label else "")
             yield {"type": "tool_progress", "done": done, "total": total,
                    "label": label, "text": txt}
+            continue
+        if kind == "d":
+
+            yield {"type": "h3_delta", "text": payload}
             continue
         if kind == "e":
             holder["error"] = f"工具 {name} 执行失败：{payload}"
@@ -3188,7 +3364,7 @@ def _agent_tool_events(name, args, session_id, holder, on_item=None):
         return
 
 
-def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None):
+def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None, on_delta=None):
     
     if name == "generate_video":
         payload = {
@@ -3223,6 +3399,26 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None):
                 "size": payload.get("size"),
             }, True
         return {"kind": "video", "error": body.get("error"), "code": code}, False
+
+    if name == "optimize_h3_prompt":
+
+
+        _op = str(args.get("prompt") or "").strip()
+        _om = args.get("materials") or []
+        if not _op:
+            return {"kind": "error", "error": "optimize_h3_prompt 需要 prompt（待优化的提示词）"}, False
+        try:
+
+
+
+            _ocontent, _oerr = (_h3_optimize_stream(_op, _om, on_delta)
+                                if on_delta is not None
+                                else _h3_optimize_core(_op, _om))
+        except Exception as _e:
+            return {"kind": "error", "error": "H3 提示词优化失败：%s" % _e}, False
+        if _oerr:
+            return {"kind": "error", "error": _oerr}, False
+        return {"kind": "h3_optimize", "text": _ocontent, "prompt": _op}, True
 
     if name == "generate_image":
         payload = {
@@ -3816,7 +4012,9 @@ def _run_snapshot_events(row):
                     "label": _lbl,
                     "text": f"正在生成素材 {prog.get('done')}/{total}" + (f"：{_lbl}" if _lbl else "")})
     if status == "done":
-        evs.append({"type": "done", **(row.get("result") or {})})
+
+
+        evs.append({"type": "done", "replayed": True, **(row.get("result") or {})})
     elif status == "error":
         evs.append({"type": "error", "error": row.get("error") or "任务失败"})
     elif status == "interrupted":
@@ -3826,7 +4024,7 @@ def _run_snapshot_events(row):
 
 def _agent_done_payload(items, body, think):
     
-    ok_items = [i for i in items if i.get("kind") in ("video", "image", "audio", "longvideo_job", "longvideo_assets")]
+    ok_items = [i for i in items if i.get("kind") in ("video", "image", "audio", "longvideo_job", "longvideo_assets", "h3_optimize")]
     if len(ok_items) == 1 and len(items) == 1:
         kind = ok_items[0]["kind"]
     elif ok_items:
@@ -3851,7 +4049,11 @@ def _agent_done_payload(items, body, think):
     elif kind == "longvideo_assets":
         summary = f"已登记 {len(ok_items)} 批素材到长视频任务。"
     elif kind == "multi":
-        summary = f"已提交 {len(ok_items)} 个生成任务。"
+
+        _n = sum(1 for i in ok_items if i.get("kind") != "h3_optimize")
+        summary = f"已提交 {_n} 个生成任务。" if _n else ""
+    elif kind == "h3_optimize":
+        summary = ""
     elif kind == "error":
         first_err = next((i.get("error") for i in items if i.get("error")), "工具执行失败")
         summary = f"生成失败：{first_err}"
@@ -3922,10 +4124,15 @@ def _run_tool_phase(run_id, name, args, session_id):
     item = _holder.get("item")
     if item is None:
         item = {"kind": "error", "error": _holder.get("error") or f"工具 {name} 未返回结果"}
+
+
+    item = dict(item)
+    item.setdefault("item_id", uuid.uuid4().hex[:12])
+    _run_pub(run_id, {"type": "tool_result", "item": item})
     return [item]
 
 
-def _agent_run_pipeline(run_id, messages, session_id):
+def _agent_run_pipeline(run_id, messages, session_id, plan_armed=False):
     
     acc = ""
     think_acc = ""
@@ -4146,6 +4353,20 @@ def _agent_run_pipeline(run_id, messages, session_id):
             _run_pub(run_id, done_ev)
             return
 
+
+
+
+        if any(n in AGENT_CONFIRM_TOOLS for n, _a, _e in parsed) and not plan_armed:
+            _plan = _agent_plan_text(parsed)
+            _turn_pub(run_id, "tools", "done", trace, label="等你点头")
+            _turn_pub(run_id, "finish", "done", trace)
+            done_ev = _agent_done_payload([], _plan, think)
+            done_ev["turn"] = trace
+            _runst.mark(run_id, status="done", result=done_ev,
+                        state={"text": _plan, "think": think, "turn_trace": trace})
+            _run_pub(run_id, done_ev)
+            return
+
         _tool_names = sorted({n for n, _a, _e in parsed if n})
         if "generate_longvideo_assets" in _tool_names:
             _tool_msg = "正在生成长视频素材图…"
@@ -4164,7 +4385,21 @@ def _agent_run_pipeline(run_id, messages, session_id):
         _run_pub(run_id, {"type": "tool_running", "text": _tool_msg,
                           "tools": _tool_names, "phase": "tool"})
         items = []
+        _opt_text = None
+
         for _name, _args, _pre_err in parsed:
+            if _name == "optimize_h3_prompt" and not _pre_err:
+                items.extend(_run_tool_phase(run_id, _name, _args, session_id))
+                _it = next((i for i in items if i.get("kind") == "h3_optimize"), None)
+                if _it and _it.get("text"):
+                    _opt_text = _it["text"]
+
+        for _name, _args, _pre_err in parsed:
+            if _name == "optimize_h3_prompt":
+                continue
+            if _name == "generate_video" and _opt_text:
+                _args = dict(_args)
+                _args["prompt"] = _opt_text
             if _pre_err:
                 items.append(_pre_err)
                 continue
@@ -4296,9 +4531,13 @@ def api_agent_stream():
     _agent_history_messages(messages, data.get("history"))
     messages.append({"role": "user", "content": _agent_user_message(text, assets)})
 
+
+    _plan_armed = _agent_plan_armed(data.get("history"))
+
     run_id = _runst.create(session_id)
     q = _run_sub(run_id)
-    _threading.Thread(target=_agent_run_pipeline, args=(run_id, messages, session_id),
+    _threading.Thread(target=_agent_run_pipeline,
+                      args=(run_id, messages, session_id, _plan_armed),
                       daemon=True, name=f"agent-run-{run_id}").start()
 
     def gen():
@@ -4469,7 +4708,8 @@ def api_agent():
     trace.append(_turn_ev("think", "done"))
     trace.append(_turn_ev("tools", "running", label="正在执行 %d 个工具…" % len(tool_calls),
                           detail=", ".join(n for n in _names if n)))
-    items = []
+
+    parsed = []
     for tc in tool_calls:
         fn = tc.get("function") or {}
         name = fn.get("name") or ""
@@ -4477,10 +4717,41 @@ def api_agent():
         try:
             args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
         except Exception:
-            items.append({"kind": "error", "error": f"参数解析失败：{str(raw_args)[:120]}"})
+            parsed.append((None, None, {"kind": "error",
+                                        "error": f"参数解析失败：{str(raw_args)[:120]}"}))
             continue
-        item, _ok = _agent_run_tool(name, args, session_id)
-        items.append(item)
+        parsed.append((name, args, None))
+
+
+
+    if any(n in AGENT_CONFIRM_TOOLS for n, _a, _e in parsed) \
+            and not _agent_plan_armed(data.get("history")):
+        _plan = _agent_plan_text(parsed)
+        trace.append(_turn_ev("tools", "done", label="等你点头"))
+        trace.append(_turn_ev("finish", "done"))
+        return jsonify({"ok": True, "kind": "text", "text": _plan, "think": think,
+                        "summary": "", "items": [], "turn": trace,
+                        "backend": _llm.route("assistant"),
+                        "model": _llm.default_model("assistant")})
+    items = []
+    _opt_text = None
+    for _name, _args, _pre_err in parsed:
+        if _name == "optimize_h3_prompt" and not _pre_err:
+            _it, _ok = _agent_run_tool(_name, _args, session_id)
+            if _it and _it.get("kind") == "h3_optimize" and _it.get("text"):
+                _opt_text = _it["text"]
+            items.append(_it)
+    for _name, _args, _pre_err in parsed:
+        if _name == "optimize_h3_prompt":
+            continue
+        if _name == "generate_video" and _opt_text:
+            _args = dict(_args)
+            _args["prompt"] = _opt_text
+        if _pre_err:
+            items.append(_pre_err)
+            continue
+        _it, _ok = _agent_run_tool(_name, _args, session_id)
+        items.append(_it)
     trace.append(_turn_ev("tools", "done", detail="已执行 %d 个工具" % len(items)))
 
     _second_text = ""
@@ -4498,7 +4769,7 @@ def api_agent():
             print(f"[agent] 非流式工具轮第二跳失败，回退 summary：{e}", flush=True)
     trace.append(_turn_ev("finish", "done"))
 
-    ok_items = [i for i in items if i.get("kind") in ("video", "image", "longvideo_job", "longvideo_assets")]
+    ok_items = [i for i in items if i.get("kind") in ("video", "image", "audio", "longvideo_job", "longvideo_assets", "h3_optimize")]
     if len(ok_items) == 1 and len(items) == 1:
         kind = ok_items[0]["kind"]
     elif ok_items:
@@ -4518,7 +4789,11 @@ def api_agent():
     elif kind == "longvideo_assets":
         summary = f"已登记 {len(ok_items)} 批素材到长视频任务。"
     elif kind == "multi":
-        summary = f"已提交 {len(ok_items)} 个生成任务。"
+
+        _n = sum(1 for i in ok_items if i.get("kind") != "h3_optimize")
+        summary = f"已提交 {_n} 个生成任务。" if _n else ""
+    elif kind == "h3_optimize":
+        summary = ""
     else:
         first_err = next((i.get("error") for i in items if i.get("error")), "工具执行失败")
         summary = f"生成失败：{first_err}"
@@ -6190,6 +6465,7 @@ def api_ark_provider_save():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     if data.get("video_enabled"):
+        _provider.set_choice("video", "ark")
         _rhprov.save({"video_enabled": False})
         snap = _arkprov.config_snapshot(masked=True)
     return jsonify({"ok": True, "config": snap})
@@ -6215,6 +6491,35 @@ def api_ark_provider_test():
 @app.route("/api/ms/provider", methods=["GET"])
 def api_ms_provider_get():
     return jsonify(_msprov.config_snapshot(masked=True))
+
+
+
+
+
+@app.route("/api/provider/select", methods=["POST"])
+def api_provider_select():
+    data = request.get_json(silent=True) or {}
+    kind = str(data.get("kind") or "").strip().lower()
+    key = str(data.get("provider") or "").strip().lower()
+    if kind not in _provider.CHOICE_ALLOWED:
+        return jsonify({"error": "未知的生成类型：%r" % kind}), 400
+    try:
+        _provider.set_choice(kind, key)
+        if kind == "image":
+            _img_apply_exclusive(key)
+        elif kind == "video":
+            _video_apply_exclusive(key)
+        elif kind == "tts":
+            _tts_apply_exclusive(key)
+        elif kind == "llm":
+            _msprov.save({"chat_models_enabled": key == "ms"})
+            _customprov.save({"chat_models_enabled": key == "custom"})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    st = {"video": _video_provider_state(), "image": _img_provider_state(),
+          "tts": _tts_provider_state(), "llm": _llm._resolve_now()}[kind]
+    return jsonify({"ok": True, "kind": kind, "provider": key, "state": st,
+                    "warning": st.get("note") or ""})
 
 
 
@@ -6255,10 +6560,9 @@ def api_ms_provider_save():
         return jsonify({"error": str(e)}), 400
 
 
-    if data.get("chat_models_assistant_enabled"):
-        _customprov.save({"chat_models_assistant_enabled": False})
-    if data.get("chat_models_storyboard_enabled"):
-        _customprov.save({"chat_models_storyboard_enabled": False})
+    if data.get("chat_models_enabled"):
+        _provider.set_choice("llm", "ms")
+        _customprov.save({"chat_models_enabled": False})
     return jsonify({"ok": True, "config": snap})
 
 
@@ -6299,6 +6603,9 @@ def api_custom_provider_save():
         snap = _customprov.save(data)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+    if data.get("chat_models_enabled"):
+        _provider.set_choice("llm", "custom")
+        _msprov.save({"chat_models_enabled": False})
     return jsonify({"ok": True, "config": snap})
 
 
@@ -6320,17 +6627,15 @@ def api_llm_provider_set():
     data = request.get_json(silent=True) or {}
     uc = str(data.get("use_case") or "").strip()
     key = str(data.get("provider") or "").strip().lower()
-    if uc not in _llm._USE_CASES:
-        return jsonify({"error": "未知 LLM 用例：%r" % data.get("use_case")}), 400
     if key not in _llm.LLM_PROVIDER_ORDER:
         return jsonify({"error": "未知的 LLM 后端：%r（可选：%s）"
                                  % (data.get("provider"), " / ".join(_llm.LLM_PROVIDER_ORDER))}), 400
-    en_key = "chat_models_%s_enabled" % uc
+    en_key = "chat_models_enabled"
+    _provider.set_choice("llm", key)
 
-    _msprov.save({en_key: False} if key != "ms" else {en_key: True})
-    if key != "ms":
-        _customprov.save({en_key: key == "custom"})
-    st = _llm._resolve_now(uc)
+    _msprov.save({en_key: key == "ms"})
+    _customprov.save({en_key: key == "custom"})
+    st = _llm._resolve_now()
     warn = st.get("note") or ""
     if st["fallback"]:
         warn = st["note"]
@@ -6360,6 +6665,9 @@ def api_tts_generate():
     model_id = (data.get("model_id") or "").strip()
     _st = _tts_provider_state()
     _prov = _st["winner"]
+
+    if not _ttsprov.get("api_key", _prov):
+        return jsonify({"error": "尚未配置访问密钥。请点击左侧「服务商设置」填入密钥（或 .env 配置 AGNES_API_KEY 后重启）。"}), 500
     _allowed = _ttsprov.models(_prov)
     if model_id and _allowed and model_id not in _allowed:
         return jsonify({"error": "模型「%s」不在当前音频服务商（%s）的模型清单里，"

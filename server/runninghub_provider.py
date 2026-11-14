@@ -9,14 +9,15 @@ import threading
 
 RH_ID = "minimax-h3"
 RH_LABEL = "MiniMax H3"
-WORKFLOW_ID = "2084788947984666625"
+WORKFLOW_ID = "2114605659261071361"
 API_TYPE = 5
 BASE_URL = "https://www.runninghub.cn"
 
 
 N_MAIN_UNET = "1"
 N_MAIN_DIRECTOR = "12"
-N_SAGE_MAIN = "17"
+N_SIGMAS_MAIN = "28"
+N_ATTN_MAIN = "29"
 N_SAGE_REFINE = "22"
 N_LORA_MAIN = "25"
 N_LORA_REFINE = "24"
@@ -39,11 +40,17 @@ UNET_MAIN_FL2VA = "minimax_h3_fl2va_bf16.safetensors"
 
 
 
+LORA_ACCEL_REF2VA = "Pika_h3_flex_Ref2va_v1_bf16_S.safetensors"
+LORA_ACCEL_FL2VA = "Pika_h3_flex_Fl2va_v1_bf16.safetensors"
+LORA_ACCEL_BY_MODE = {
+    "reference": LORA_ACCEL_REF2VA,
+    "keyframe":  LORA_ACCEL_FL2VA,
+    "text":      LORA_ACCEL_FL2VA,
+}
 
 
 
-
-DEFAULT_NODE_ALLOWLIST = ("1", "12", "17", "25")
+DEFAULT_NODE_ALLOWLIST = ("1", "12", "25", "28", "29")
 POST_SAMPLE_NODES = ("18", "20", "27")
 
 
@@ -134,9 +141,10 @@ VIDEO_MODEL_LIMITS = {
 
 
         "default_accel_off": True,
+        "accel_sampler": "lcm",
         "default_allow_compile": False,
         "default_steps": 20,
-        "steps_with_accel": 8,
+        "steps_with_accel": 6,
         "shift_video_with_accel": 12,
         "shift_audio_with_accel": 3,
         "shift_travels_with_steps": True,
@@ -145,7 +153,7 @@ VIDEO_MODEL_LIMITS = {
         "sampler": "res_multistep",
         "scheduler": "simple",
 
-        "steps_by_tier": {"hq": 20, "hq25": 25, "fast": 8},
+        "steps_by_tier": {"hq": 20, "hq25": 25, "fast": 6},
 
         "selflift": {
             "via": "workflow",
@@ -739,7 +747,7 @@ _WF_TEMPLATE_JSON = r"""
    "total_frames": 384,
    "timeline_data": "{}",
    "bd_grp_advanced": "高级采样",
-   "steps": 8,
+   "steps": 6,
    "sampler": "res_multistep",
    "scheduler": "simple",
    "shift_video": 12,
@@ -754,7 +762,11 @@ _WF_TEMPLATE_JSON = r"""
    "cache_name": "",
    "minimax_director_ui": "",
    "model": [
-    "16",
+    "29",
+    0
+   ],
+   "sigmas": [
+    "28",
     0
    ],
    "video_vae": [
@@ -785,32 +797,6 @@ _WF_TEMPLATE_JSON = r"""
   "class_type": "MiniMaxH3Director",
   "_meta": {
    "title": "MiniMaxH3Director"
-  }
- },
- "16": {
-  "inputs": {
-   "model": [
-    "17",
-    0
-   ]
-  },
-  "class_type": "MiniMaxH3MemoryEfficientSageAttentionPatch",
-  "_meta": {
-   "title": "MiniMax H3 Memory Efficient Sage Attention Patch"
-  }
- },
- "17": {
-  "inputs": {
-   "sage_attention": "disabled",
-   "allow_compile": false,
-   "model": [
-    "25",
-    0
-   ]
-  },
-  "class_type": "PathchSageAttentionKJ",
-  "_meta": {
-   "title": "Patch Sage Attention KJ"
   }
  },
  "18": {
@@ -926,7 +912,7 @@ _WF_TEMPLATE_JSON = r"""
  },
  "25": {
   "inputs": {
-   "lora_name": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+   "lora_name": "Pika_h3_flex_Ref2va_v1_bf16_S.safetensors",
    "strength_model": 1,
    "model": [
     "1",
@@ -990,6 +976,28 @@ _WF_TEMPLATE_JSON = r"""
   "class_type": "MiniMaxH3DirectorFaceRefine",
   "_meta": {
    "title": "MiniMax H3 Director FaceRefine"
+  }
+ },
+ "28": {
+  "inputs": {
+   "sigmas": "1.0, 0.972973, 0.923077, 0.8, 0.571429, 0.333333, 0.0"
+  },
+  "class_type": "ManualSigmas",
+  "_meta": {
+   "title": "ManualSigmas"
+  }
+ },
+ "29": {
+  "inputs": {
+   "attention": "comfy kitchen attention",
+   "model": [
+    "25",
+    0
+   ]
+  },
+  "class_type": "ModelAttentionBackend",
+  "_meta": {
+   "title": "ModelAttentionBackend"
   }
  }
 }"""
@@ -1135,7 +1143,17 @@ def build_workflow(data, timeline, file_names=None, accel=None, quality=None,
 
 
 
-    inputs(25)["strength_model"] = 1 if accel else 0
+
+    if accel:
+        inputs(25)["lora_name"] = LORA_ACCEL_BY_MODE.get(mode, LORA_ACCEL_REF2VA)
+        inputs(25)["strength_model"] = 1
+        inputs(12)["model"] = ["29", 0]
+        inputs(12)["sigmas"] = ["28", 0]
+    else:
+        for _n in ("25", "28", "29"):
+            wf.pop(_n, None)
+        inputs(12)["model"] = ["1", 0]
+        inputs(12).pop("sigmas", None)
 
 
     i12 = inputs(12)
@@ -1192,8 +1210,8 @@ def build_workflow(data, timeline, file_names=None, accel=None, quality=None,
     if sl.get("enabled") and "26" in wf:
         _t = str(data.get("quality_tier") or "hq")
         tier = _t if _t in ("hq", "hq25", "fast") else ("fast" if accel else "hq")
-        _steps_map = lim.get("steps_by_tier") or {"hq": 20, "hq25": 25, "fast": 8}
-        total = int(_steps_map.get(tier) or (8 if accel else 20))
+        _steps_map = lim.get("steps_by_tier") or {"hq": 20, "hq25": 25, "fast": 6}
+        total = int(_steps_map.get(tier) or (6 if accel else 20))
         _sl_lim = lim.get("selflift") or {}
         _sl_def = _sl_lim.get("default") or {}
         _sl_params = {p["key"]: p for p in (_sl_lim.get("params") or [])}
@@ -1280,8 +1298,8 @@ def _sampler_defaults(data, accel, sampler=None):
     out = dict(sampler or {})
     if not out.get("steps"):
         tier = str(data.get("quality_tier") or ("fast" if accel else "hq"))
-        m = lim.get("steps_by_tier") or {"hq": 20, "hq25": 25, "fast": 8}
-        out["steps"] = int(m.get(tier) or (lim.get("steps_with_accel") if accel else lim.get("default_steps")) or (8 if accel else 20))
+        m = lim.get("steps_by_tier") or {"hq": 20, "hq25": 25, "fast": 6}
+        out["steps"] = int(m.get(tier) or (lim.get("steps_with_accel") if accel else lim.get("default_steps")) or (6 if accel else 20))
     out.setdefault("shift_video", 12)
     out.setdefault("shift_audio", 3)
     return out
@@ -1297,7 +1315,7 @@ def build_node_info(data, timeline, accel=None, quality=None, sampler=None,
 
     steps = sampler.get("steps")
     if steps is None:
-        steps = int(lim.get("steps_with_accel") or 8) if accel else int(lim.get("default_steps") or 20)
+        steps = int(lim.get("steps_with_accel") or 6) if accel else int(lim.get("default_steps") or 20)
     shift_v = sampler.get("shift_video")
     shift_a = sampler.get("shift_audio")
     if shift_v is None or shift_a is None:
@@ -1317,7 +1335,7 @@ def build_node_info(data, timeline, accel=None, quality=None, sampler=None,
          "fieldValue": task_type_for_mode(data.get("mode"))},
         {"nodeId": N_MAIN_DIRECTOR, "fieldName": "steps", "fieldValue": int(steps)},
         {"nodeId": N_MAIN_DIRECTOR, "fieldName": "sampler",
-         "fieldValue": sampler.get("sampler") or limits(data.get("model")).get("sampler") or "res_multistep"},
+         "fieldValue": sampler.get("sampler") or (lim.get("accel_sampler") if accel else None) or lim.get("sampler") or "res_multistep"},
         {"nodeId": N_MAIN_DIRECTOR, "fieldName": "scheduler",
          "fieldValue": sampler.get("scheduler") or limits(data.get("model")).get("scheduler") or "simple"},
         {"nodeId": N_MAIN_DIRECTOR, "fieldName": "cfg", "fieldValue": int(sampler.get("cfg") or 1)},
@@ -1334,12 +1352,14 @@ def build_node_info(data, timeline, accel=None, quality=None, sampler=None,
          "fieldValue": json.dumps(timeline, ensure_ascii=False)},
 
 
-
-
-
-
-        {"nodeId": N_LORA_MAIN, "fieldName": "strength_model", "fieldValue": 1 if accel else 0},
     ]
+    if accel:
+
+        nodes += [
+            {"nodeId": N_LORA_MAIN, "fieldName": "lora_name",
+             "fieldValue": LORA_ACCEL_BY_MODE.get(_mode, LORA_ACCEL_REF2VA)},
+            {"nodeId": N_LORA_MAIN, "fieldName": "strength_model", "fieldValue": 1},
+        ]
 
 
     if not include_post_sample:

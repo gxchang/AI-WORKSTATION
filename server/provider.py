@@ -23,34 +23,25 @@ DEFAULTS = {
 
     "video_models": ["agnes-video-2.5-flash", "agnes-video-2.5"],
     "image_models": ["agnes-image-2.1-flash", "agnes-image-2.5-flash"],
-    "llm_models": ["agnes-2.5-flash", "agnes-3.0-flash"],
-
-    "agent_models": ["agnes-3.0-flash"],
 
 
+    "chat_models": ["agnes-3.0-flash", "agnes-2.5-flash"],
 
-    "agent_caps_tools": True,
-    "agent_caps_vision": True,
-    "llm_caps_tools": True,
-    "llm_caps_vision": True,
-    "agent_thinking": True,
-    "llm_thinking": False,
-    "agent_ctx_limit": 512000,
-    "llm_ctx_limit": 512000,
-    "llm_max_output": "",
-    "agent_max_output": "",
+    "chat_caps_tools": True,
+    "chat_caps_vision": True,
+    "chat_thinking": True,
+    "chat_ctx": 512000,
+    "chat_max_output": "",
 }
 
 
 WRITABLE_KEYS = ("base_url", "api_key", "poll_endpoint",
-                 "video_models", "image_models", "llm_models", "agent_models",
-                 "agent_caps_tools", "agent_caps_vision", "llm_caps_tools", "llm_caps_vision",
-                 "agent_thinking", "llm_thinking",
-                 "agent_ctx_limit", "llm_ctx_limit", "llm_max_output", "agent_max_output")
+                 "video_models", "image_models", "chat_models",
+                 "chat_caps_tools", "chat_caps_vision", "chat_thinking",
+                 "chat_ctx", "chat_max_output")
 
-_BOOL_PROV_KEYS = ("agent_caps_tools", "agent_caps_vision", "llm_caps_tools", "llm_caps_vision",
-                   "agent_thinking", "llm_thinking")
-_INT_PROV_KEYS = ("agent_ctx_limit", "llm_ctx_limit", "llm_max_output", "agent_max_output")
+_BOOL_PROV_KEYS = ("chat_caps_tools", "chat_caps_vision", "chat_thinking")
+_INT_PROV_KEYS = ("chat_ctx", "chat_max_output")
 
 
 
@@ -60,10 +51,8 @@ _INT_PROV_KEYS = ("agent_ctx_limit", "llm_ctx_limit", "llm_max_output", "agent_m
 
 _INT_SEPS = ",，_ \t\u00a0"
 _INT_LABELS = {
-    "agent_ctx_limit": "助手·上下文上限",
-    "agent_max_output": "助手·输出上限",
-    "llm_ctx_limit": "分镜·上下文上限",
-    "llm_max_output": "分镜·输出上限",
+    "chat_ctx": "上下文上限",
+    "chat_max_output": "输出上限",
 }
 
 
@@ -162,6 +151,54 @@ def _meta_del(key):
 
 
 
+
+
+
+
+
+
+CHOICE_ALLOWED = {
+    "video": ("agnes", "ark", "runninghub"),
+    "image": ("agnes", "ark", "ms"),
+    "tts":   ("openrouter", "mimo"),
+    "llm":   ("agnes", "ms", "custom"),
+}
+CHOICE_DEFAULTS = {"video": "runninghub", "image": "ms", "tts": "mimo", "llm": "agnes"}
+
+
+def get_choice(kind, legacy=None):
+    
+    allowed = CHOICE_ALLOWED.get(kind) or ()
+    v = str(_meta_get("choice_" + kind) or "").strip().lower()
+    if v in allowed:
+        return v
+    v = ""
+    for k in (legacy or ()):
+        k = str(k).strip().lower()
+        if k in allowed:
+            v = k
+            break
+    if not v:
+        v = CHOICE_DEFAULTS.get(kind, "")
+    if v:
+        try:
+            _meta_set("choice_" + kind, v)
+        except Exception:
+            pass
+    return v
+
+
+def set_choice(kind, key):
+    
+    allowed = CHOICE_ALLOWED.get(kind) or ()
+    k = str(key or "").strip().lower()
+    if k not in allowed:
+        raise ValueError("未知的 %s 生成家：%r（可选：%s）" % (kind, key, " / ".join(allowed)))
+    _meta_set("choice_" + kind, k)
+    return k
+
+
+
 def _truthy(v):
     
     return str(v or "").strip().lower() in ("1", "true", "yes", "on")
@@ -173,24 +210,30 @@ def _truthy(v):
 
 
 
-def chat_thinking(use_case):
+
+def chat_thinking(use_case=None):
     
-    return bool(get("agent_thinking" if use_case == "assistant" else "llm_thinking"))
+    return bool(get("chat_thinking"))
 
 
-def chat_caps(use_case, kind):
+def chat_caps(kind, use_case=None):
     
-    return bool(get(("agent_caps_" if use_case == "assistant" else "llm_caps_") + kind))
+    return bool(get("chat_caps_" + kind))
 
 
-def chat_ctx_limit(use_case):
+def chat_ctx_limit(use_case=None):
     
-    return get("agent_ctx_limit" if use_case == "assistant" else "llm_ctx_limit")
+    return get("chat_ctx")
 
 
-def chat_max_output(use_case):
+def chat_max_output(use_case=None):
     
-    return get("agent_max_output" if use_case == "assistant" else "llm_max_output")
+    return get("chat_max_output")
+
+
+def chat_model(use_case=None):
+    
+    return list(get("chat_models") or [])
 
 
 def _parse_models(raw):
@@ -251,7 +294,7 @@ def get(key):
         if env_v:
             return env_v.rstrip("/")
         return DEFAULTS["poll_endpoint"]
-    if key in ("video_models", "image_models", "llm_models", "agent_models"):
+    if key in ("video_models", "image_models", "chat_models"):
         v = _meta_get(key, "")
         if v:
             parsed = _parse_models(v)
@@ -294,19 +337,14 @@ def config_snapshot(masked=True):
         "poll_endpoint": get("poll_endpoint"),
         "video_models": get("video_models"),
         "image_models": get("image_models"),
-        "llm_models": get("llm_models"),
-        "agent_models": get("agent_models"),
 
-        "agent_caps_tools": get("agent_caps_tools"),
-        "agent_caps_vision": get("agent_caps_vision"),
-        "llm_caps_tools": get("llm_caps_tools"),
-        "llm_caps_vision": get("llm_caps_vision"),
-        "agent_thinking": get("agent_thinking"),
-        "llm_thinking": get("llm_thinking"),
-        "agent_ctx_limit": get("agent_ctx_limit"),
-        "llm_ctx_limit": get("llm_ctx_limit"),
-        "llm_max_output": get("llm_max_output") or "",
-        "agent_max_output": get("agent_max_output") or "",
+        "chat_models": get("chat_models"),
+        "chat_models_text": ", ".join(get("chat_models") or []),
+        "chat_caps_tools": get("chat_caps_tools"),
+        "chat_caps_vision": get("chat_caps_vision"),
+        "chat_thinking": get("chat_thinking"),
+        "chat_ctx": get("chat_ctx") or "",
+        "chat_max_output": get("chat_max_output") or "",
         "defaults": DEFAULTS,
         "source": _source_map(),
     }
@@ -330,7 +368,7 @@ def _source_map():
         src["api_key"] = "env"
     else:
         src["api_key"] = "default"
-    for k in ("video_models", "image_models", "llm_models", "agent_models"):
+    for k in ("video_models", "image_models", "chat_models"):
         if _meta_get(k, ""):
             src[k] = "ui"
         else:
@@ -373,7 +411,7 @@ def save(patch, keep_old_key=True):
             _meta_set("api_key", k)
         else:
             _meta_del("api_key")
-    for mk in ("video_models", "image_models", "llm_models", "agent_models"):
+    for mk in ("video_models", "image_models", "chat_models"):
         if mk in patch:
             parsed = _parse_models(patch[mk])
             if parsed:
@@ -394,7 +432,10 @@ def reset():
     for k in WRITABLE_KEYS:
         _meta_del(k)
 
-    for k in ("assistant_llm_backend", "storyboard_llm_backend"):
+    for k in ("llm_models", "agent_models", "agent_caps_tools", "agent_caps_vision",
+              "llm_caps_tools", "llm_caps_vision", "agent_thinking", "llm_thinking",
+              "agent_ctx_limit", "llm_ctx_limit", "llm_max_output", "agent_max_output",
+              "assistant_llm_backend", "storyboard_llm_backend"):
         _meta_del(k)
     return config_snapshot(masked=True)
 
@@ -437,7 +478,7 @@ def test_connection(base_url=None, api_key=None, poll_endpoint=None):
 
     try:
         import server.llm as _llm
-        _think = _llm.thinking_params("storyboard", backend="agnes")
+        _think = _llm.thinking_params(backend="agnes")
     except Exception as _e:
         print(f"[provider.test_connection] 思考参数读取失败，按无附加参数探活：{_e}", flush=True)
         _think = {}
@@ -445,7 +486,7 @@ def test_connection(base_url=None, api_key=None, poll_endpoint=None):
         r2 = _rq.post(
             f"{base}/chat/completions",
             headers={"Authorization": f"Bearer {key}"} if key else {},
-            json={"model": (get("llm_models") or ["agnes-2.5-flash"])[0],
+            json={"model": (get("chat_models") or ["agnes-3.0-flash"])[0],
                   "messages": [{"role": "user", "content": "ping"}],
                   "max_tokens": 1, **_think},
             timeout=(5, 30),

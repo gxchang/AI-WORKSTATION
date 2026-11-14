@@ -41,68 +41,38 @@ DEFAULTS = {
 
 
 
+    "chat_models": [],
+    "chat_models_enabled": False,
+    "chat_caps_tools": True,
+    "chat_caps_vision": True,
+    "chat_thinking": True,
 
+    "chat_budget": "auto",
+    "chat_max_output": "",
+    "chat_ctx": "",
 
-
-
-
-    "chat_models_assistant": [],
-    "chat_models_storyboard": [],
-    "chat_models_assistant_enabled": False,
-    "chat_models_storyboard_enabled": False,
-
-
-    "chat_caps_assistant_tools": True,
-    "chat_caps_assistant_vision": True,
-    "chat_caps_storyboard_tools": True,
-    "chat_caps_storyboard_vision": True,
-
-    "chat_thinking_assistant": True,
-    "chat_thinking_storyboard": False,
-
-    "chat_budget_assistant": "auto",
-    "chat_budget_storyboard": "auto",
-
-    "chat_max_output_assistant": "",
-    "chat_max_output_storyboard": 32768,
-
-    "chat_ctx_assistant": "",
-    "chat_ctx_storyboard": "",
 }
 
 
 WRITABLE_KEYS = ("enabled", "base_url", "api_key", "image_models", "loras",
-                  "chat_models_assistant", "chat_models_storyboard",
-                  "chat_models_assistant_enabled", "chat_models_storyboard_enabled",
-                  "chat_caps_assistant_tools", "chat_caps_assistant_vision",
-                  "chat_caps_storyboard_tools", "chat_caps_storyboard_vision",
-                  "chat_thinking_assistant", "chat_thinking_storyboard",
-                  "chat_budget_assistant", "chat_budget_storyboard",
-                  "chat_max_output_assistant", "chat_max_output_storyboard",
-                  "chat_ctx_assistant", "chat_ctx_storyboard")
+                  "chat_models", "chat_models_enabled",
+                  "chat_caps_tools", "chat_caps_vision", "chat_thinking", "chat_budget",
+                  "chat_max_output", "chat_ctx")
 
 
-_BOOL_LLM_KEYS = ("chat_caps_assistant_tools", "chat_caps_assistant_vision",
-                  "chat_caps_storyboard_tools", "chat_caps_storyboard_vision",
-                  "chat_thinking_assistant", "chat_thinking_storyboard",
-                  "chat_models_assistant_enabled", "chat_models_storyboard_enabled")
-_BUDGET_KEYS = ("chat_budget_assistant", "chat_budget_storyboard")
+_BOOL_LLM_KEYS = ("chat_caps_tools", "chat_caps_vision", "chat_thinking", "chat_models_enabled")
+_BUDGET_KEYS = ("chat_budget",)
 _BUDGET_LEVELS = {"auto": None, "low": 1024, "medium": 4096, "high": 16384}
-_INT_LLM_KEYS = ("chat_max_output_assistant", "chat_max_output_storyboard", "chat_ctx_assistant", "chat_ctx_storyboard")
-
-
+_INT_LLM_KEYS = ("chat_max_output", "chat_ctx")
 
 
 
 
 _INT_SEPS = ",，_ \t\u00a0"
 _INT_LABELS = {
-    "chat_max_output_assistant": "助手·输出上限",
-    "chat_ctx_assistant": "助手·上下文上限",
-    "chat_max_output_storyboard": "分镜·输出上限",
-    "chat_ctx_storyboard": "分镜·上下文上限",
+    "chat_max_output": "输出上限",
+    "chat_ctx": "上下文上限",
 }
-
 
 def _norm_int_token(v):
     
@@ -298,12 +268,11 @@ def get(key):
         if v != "":
             return _truthy(v)
         return _truthy(os.environ.get("MS_IMAGE_ENABLED"))
-    if key in ("chat_models_assistant_enabled", "chat_models_storyboard_enabled"):
+    if key == "chat_models_enabled":
         v = _meta_get(key, "")
         if v != "":
             return _truthy(v)
-        env_key = "MS_CHAT_MODELS_ASSISTANT_ENABLED" if key == "chat_models_assistant_enabled" else "MS_CHAT_MODELS_STORYBOARD_ENABLED"
-        return _truthy(os.environ.get(env_key))
+        return _truthy(os.environ.get("MS_CHAT_MODELS_ENABLED"))
     if key == "api_key":
         v = _meta_get("api_key", "")
         if v:
@@ -336,18 +305,14 @@ def get(key):
             except ValueError:
                 return []
         return []
-    if key == "chat_models_assistant":
-        return _chat_models_for("chat_models_assistant", "MS_CHAT_MODELS_ASSISTANT")
-    if key == "chat_models_storyboard":
-        return _chat_models_for("chat_models_storyboard", "MS_CHAT_MODELS_STORYBOARD")
+    if key == "chat_models":
+        return _chat_models_for("chat_models", "MS_CHAT_MODELS")
     if key in _BOOL_LLM_KEYS:
         v = _meta_get(key, "")
         if v != "":
             return _truthy(v)
-        if key == "chat_models_assistant_enabled":
-            return _truthy(os.environ.get("MS_CHAT_MODELS_ASSISTANT_ENABLED"))
-        if key == "chat_models_storyboard_enabled":
-            return _truthy(os.environ.get("MS_CHAT_MODELS_STORYBOARD_ENABLED"))
+        if key == "chat_models_enabled":
+            return _truthy(os.environ.get("MS_CHAT_MODELS_ENABLED"))
         return _truthy(DEFAULTS.get(key))
     if key in _BUDGET_KEYS:
         v = _meta_get(key, "")
@@ -361,34 +326,34 @@ def get(key):
     return None
 
 
-def chat_caps(use_case, kind):
+def chat_caps(kind, use_case=None):
     
-    return bool(get(f"chat_caps_{use_case}_{kind}"))
+    return bool(get("chat_caps_" + kind))
 
 
-def chat_thinking(use_case):
+def chat_thinking(use_case=None):
     
-    return bool(get(f"chat_thinking_{use_case}"))
+    return bool(get("chat_thinking"))
 
 
-def chat_budget(use_case):
+def chat_budget(use_case=None):
     
-    return get(f"chat_budget_{use_case}")
+    return get("chat_budget")
 
 
-def chat_budget_tokens(use_case):
+def chat_budget_tokens(use_case=None):
     
-    return _BUDGET_LEVELS.get(chat_budget(use_case))
+    return _BUDGET_LEVELS.get(chat_budget())
 
 
-def chat_max_output(use_case):
+def chat_max_output(use_case=None):
     
-    return get(f"chat_max_output_{use_case}")
+    return get("chat_max_output")
 
 
-def chat_ctx_limit(use_case):
+def chat_ctx_limit(use_case=None):
     
-    return get(f"chat_ctx_{use_case}")
+    return get("chat_ctx")
 
 
 def _chat_models_for(meta_key, env_key):
@@ -398,8 +363,7 @@ def _chat_models_for(meta_key, env_key):
         lst = _split_models(v)
         if lst:
             return lst
-    lst = _split_models(os.environ.get(env_key))
-    return lst or []
+    return _split_models(os.environ.get(env_key)) or []
 
 
 def image_models():
@@ -407,18 +371,14 @@ def image_models():
     return list(get("image_models") or DEFAULTS["image_models"])
 
 
-def chat_model(use_case):
+def chat_model(use_case=None):
     
-    if use_case == "storyboard":
-        return list(get("chat_models_storyboard") or [])
-    return list(get("chat_models_assistant") or [])
+    return list(get("chat_models") or [])
 
 
-def chat_model_enabled(use_case):
+def chat_model_enabled(use_case=None):
     
-    if use_case == "storyboard":
-        return bool(get("chat_models_storyboard_enabled"))
-    return bool(get("chat_models_assistant_enabled"))
+    return bool(get("chat_models_enabled"))
 
 
 def active_state():
@@ -427,7 +387,7 @@ def active_state():
     if en and key:
         return True, ""
     if en and not key:
-        return False, "已开启魔搭生图，但未配置 ModelScope 访问令牌 —— 已回落 Agnes 生图"
+        return False, "尚未配置访问密钥。请点击左侧「服务商设置」填入密钥（或 .env 配置 AGNES_API_KEY 后重启）。"
     return False, ""
 
 
@@ -454,26 +414,15 @@ def config_snapshot(masked=True):
 
         "loras": get("loras"),
 
-
-        "chat_models_assistant": chat_model("assistant"),
-        "chat_models_assistant_text": ", ".join(chat_model("assistant")),
-        "chat_models_assistant_enabled": chat_model_enabled("assistant"),
-        "chat_models_storyboard": chat_model("storyboard"),
-        "chat_models_storyboard_text": ", ".join(chat_model("storyboard")),
-        "chat_models_storyboard_enabled": chat_model_enabled("storyboard"),
-
-        "chat_caps_assistant_tools": chat_caps("assistant", "tools"),
-        "chat_caps_assistant_vision": chat_caps("assistant", "vision"),
-        "chat_caps_storyboard_tools": chat_caps("storyboard", "tools"),
-        "chat_caps_storyboard_vision": chat_caps("storyboard", "vision"),
-        "chat_thinking_assistant": chat_thinking("assistant"),
-        "chat_thinking_storyboard": chat_thinking("storyboard"),
-        "chat_budget_assistant": chat_budget("assistant"),
-        "chat_budget_storyboard": chat_budget("storyboard"),
-        "chat_max_output_assistant": chat_max_output("assistant") or "",
-        "chat_max_output_storyboard": chat_max_output("storyboard"),
-        "chat_ctx_assistant": chat_ctx_limit("assistant") or "",
-        "chat_ctx_storyboard": chat_ctx_limit("storyboard") or "",
+        "chat_models": chat_model(),
+        "chat_models_text": ", ".join(chat_model()),
+        "chat_models_enabled": chat_model_enabled(),
+        "chat_caps_tools": chat_caps("tools"),
+        "chat_caps_vision": chat_caps("vision"),
+        "chat_thinking": chat_thinking(),
+        "chat_budget": chat_budget(),
+        "chat_max_output": chat_max_output() or "",
+        "chat_ctx": chat_ctx_limit() or "",
         "model_limits": model_limits_map(),
         "defaults": DEFAULTS,
         "source": _source_map(),
@@ -486,10 +435,8 @@ def _source_map():
     src["enabled"] = "ui" if _meta_get("enabled", "") != "" else ("env" if os.environ.get("MS_IMAGE_ENABLED") else "default")
     for k, env in (("base_url", "MS_BASE_URL"), ("image_models", "MS_IMAGE_MODELS"),
                    ("loras", "MS_LORAS"),
-                   ("chat_models_assistant", "MS_CHAT_MODELS_ASSISTANT"),
-                   ("chat_models_storyboard", "MS_CHAT_MODELS_STORYBOARD"),
-                   ("chat_models_assistant_enabled", "MS_CHAT_MODELS_ASSISTANT_ENABLED"),
-                   ("chat_models_storyboard_enabled", "MS_CHAT_MODELS_STORYBOARD_ENABLED")):
+                   ("chat_models", "MS_CHAT_MODELS"),
+                   ("chat_models_enabled", "MS_CHAT_MODELS_ENABLED")):
         src[k] = "ui" if _meta_get(k, "") else ("env" if os.environ.get(env) else "default")
     if _meta_get("api_key", ""):
         src["api_key"] = "ui"
@@ -539,34 +486,24 @@ def save(patch, keep_old_key=True):
             _meta_set("loras", json.dumps(lst, ensure_ascii=False))
         else:
             _meta_del("loras")
-    if "chat_models_assistant" in patch:
-        lst = _split_models(patch["chat_models_assistant"])
+    if "chat_models" in patch:
+        lst = _split_models(patch["chat_models"])
         if lst:
-            _meta_set("chat_models_assistant", ", ".join(lst))
+            _meta_set("chat_models", ", ".join(lst))
         else:
-            _meta_del("chat_models_assistant")
-    if "chat_models_storyboard" in patch:
-        lst = _split_models(patch["chat_models_storyboard"])
-        if lst:
-            _meta_set("chat_models_storyboard", ", ".join(lst))
-        else:
-            _meta_del("chat_models_storyboard")
-    if "chat_models_assistant_enabled" in patch:
-        _meta_set("chat_models_assistant_enabled", "1" if _truthy(patch["chat_models_assistant_enabled"]) else "0")
-    if "chat_models_storyboard_enabled" in patch:
-        _meta_set("chat_models_storyboard_enabled", "1" if _truthy(patch["chat_models_storyboard_enabled"]) else "0")
+            _meta_del("chat_models")
+    if "chat_models_enabled" in patch:
+        _meta_set("chat_models_enabled", "1" if _truthy(patch["chat_models_enabled"]) else "0")
 
     for k in _BOOL_LLM_KEYS:
-        if k in patch and not k.endswith("_enabled"):
+        if k in patch and k != "chat_models_enabled":
             _meta_set(k, "1" if _truthy(patch[k]) else "0")
     for k in _BUDGET_KEYS:
         if k in patch:
             v = str(patch[k] or "auto").strip()
             _meta_set(k, v if v in _BUDGET_LEVELS else "auto")
-    for k, s in _int_patch.items():
-        _meta_set(k, s) if s else _meta_del(k)
-
-    _meta_del("chat_models")
+    for k, s2 in _int_patch.items():
+        _meta_set(k, s2) if s2 else _meta_del(k)
     if "api_key" in patch:
         k = (patch["api_key"] or "").strip()
         if k:

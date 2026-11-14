@@ -15,27 +15,25 @@ TTS_PROVIDER_HOSTS = tuple(k for k in TTS_PROVIDER_ORDER if k != "openrouter")
 TTS_BASE_PROVIDER = "openrouter"
 
 
-def resolve_tts_provider(enabled, ready):
+def resolve_tts_provider(enabled, ready, selected=None):
     
     en = [k for k in TTS_PROVIDER_ORDER
           if k in TTS_PROVIDER_HOSTS and k in set(enabled or ())]
-    selected = en[0] if en else TTS_BASE_PROVIDER
+    sel = str(selected or "").strip().lower()
+    if sel not in TTS_PROVIDER_LABELS:
+        sel = en[0] if en else "mimo"
     rd = {k: bool((ready or {}).get(k)) for k in TTS_PROVIDER_ORDER}
-    rd[TTS_BASE_PROVIDER] = True
-    winner = selected if rd.get(selected) else TTS_BASE_PROVIDER
+    winner = sel
     conflict = len(en) > 1
-    fallback = winner != selected
-    if fallback:
-        note = ("已选定「%s」，但它尚未就绪（未开启或未配置密钥）→ 音频生成实际仍走「%s」。"
-                % (TTS_PROVIDER_LABELS[selected], TTS_PROVIDER_LABELS[winner]))
+    if not rd.get(sel, False):
+        note = "尚未配置访问密钥。请点击左侧「服务商设置」填入密钥（或 .env 配置 AGNES_API_KEY 后重启）。"
     elif conflict:
-        note = ("检测到多家同时开启（%s），已按优先级取「%s」；"
-                "保存一次「音频服务商」即可收敛为一家。"
-                % ("、".join(TTS_PROVIDER_LABELS[k] for k in en), TTS_PROVIDER_LABELS[winner]))
+        note = ("检测到多家同时开启（%s），当前按选中的「%s」生效；重新勾选一家即可收敛。"
+                % ("、".join(TTS_PROVIDER_LABELS[k] for k in en), TTS_PROVIDER_LABELS[sel]))
     else:
         note = ""
-    return {"winner": winner, "selected": selected, "enabled": en,
-            "conflict": conflict, "fallback": fallback, "ready": rd, "note": note}
+    return {"winner": winner, "selected": sel, "enabled": en,
+            "conflict": conflict, "fallback": False, "ready": rd, "note": note}
 
 
 

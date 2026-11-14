@@ -7,28 +7,29 @@ from . import runninghub_provider as _rhprov
 
 def video_provider_state():
     
-    rh_on = _rhprov.video_ready()
-    ark_on = _arkprov.video_ready()
-    if rh_on and ark_on:
-        winner, conflict = "ark", True
-    elif rh_on:
-        winner, conflict = "runninghub", False
-    elif ark_on:
-        winner, conflict = "ark", False
-    else:
-        winner, conflict = "agnes", False
+
+    legacy = []
+    if bool(_arkprov.get("video_enabled")):
+        legacy.append("ark")
+    if _rhprov.video_enabled():
+        legacy.append("runninghub")
+    winner = _provider.get_choice("video", legacy)
     labels = {"agnes": "Agnes", "ark": "火山方舟", "runninghub": "RunningHub"}
+    keys = {
+        "agnes": bool(_provider.get("api_key")),
+        "ark": bool(_arkprov.get("api_key")),
+        "runninghub": _rhprov.api_key(),
+    }
+    conflict = len(legacy) > 1
     return {
         "winner": winner,
         "conflict": conflict,
-        "label": labels[winner],
-        "providers": {
-            "agnes": {"selected": winner == "agnes", "ready": True},
-            "ark": {"selected": winner == "ark", "ready": ark_on},
-            "runninghub": {"selected": winner == "runninghub", "ready": rh_on},
-        },
-        "note": ("方舟与 RunningHub 的视频开关同时打开 → 当前按方舟生效；"
-                 "到设置页重新勾选一家即可" if conflict else ""),
+        "label": labels.get(winner, winner),
+        "providers": {k: {"selected": winner == k, "ready": bool(keys[k])}
+                      for k in labels},
+        "note": ("尚未配置访问密钥。请点击左侧「服务商设置」填入密钥（或 .env 配置 AGNES_API_KEY 后重启）。" if not keys.get(winner)
+                 else ("方舟与 RunningHub 的视频开关同时打开 → 重新勾选一家即可收敛。"
+                       if conflict else "")),
     }
 
 

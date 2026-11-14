@@ -246,24 +246,27 @@ def default_model(provider=BASE_PROVIDER):
 def ready(provider):
     
     p = pname(provider)
-    if p == BASE_PROVIDER:
-        return True
-    return bool(get("enabled", p)) and bool(get("api_key", p))
+    return bool(get("api_key", p))
+
+
+def _choice_tts():
+    
+    try:
+        from . import provider as _pcfg
+    except ImportError:
+        import provider as _pcfg
+    legacy = [k for k in _tmodels.TTS_PROVIDER_HOSTS if bool(get("enabled", k))]
+    return _pcfg.get_choice("tts", legacy)
 
 
 def active_state(provider):
     
     p = pname(provider)
-    if p == BASE_PROVIDER:
-        return True, ""
-    en, key = bool(get("enabled", p)), bool(get("api_key", p))
-    if en and key:
-        return True, ""
-    if en and not key:
-        return False, ("已勾选「%s」作为音频服务商，但未配置密钥 —— 音频实际仍走「%s」"
-                       % (_tmodels.TTS_PROVIDER_LABELS[p],
-                          _tmodels.TTS_PROVIDER_LABELS[BASE_PROVIDER]))
-    return False, ""
+    if p != _choice_tts():
+        return False, ""
+    if not bool(get("api_key", p)):
+        return True, "尚未配置访问密钥。请点击左侧「服务商设置」填入密钥（或 .env 配置 AGNES_API_KEY 后重启）。"
+    return True, ""
 
 
 def active(provider):
@@ -276,6 +279,7 @@ def provider_state():
     return _tmodels.resolve_tts_provider(
         [k for k in _tmodels.TTS_PROVIDER_HOSTS if bool(get("enabled", k))],
         {k: ready(k) for k in PROVIDERS},
+        _choice_tts(),
     )
 
 

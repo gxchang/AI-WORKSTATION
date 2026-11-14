@@ -11,6 +11,7 @@ from requests.adapters import HTTPAdapter
 
 
 
+
 _USE_CASES = ("assistant", "storyboard")
 
 
@@ -25,14 +26,8 @@ LLM_PROVIDER_LABELS = {p["key"]: p["label"] for p in LLM_PROVIDERS}
 LLM_PROVIDER_HOSTS = tuple(k for k in LLM_PROVIDER_ORDER if k != "agnes")
 
 
-_AGNES_MODEL_KEY = {
-    "assistant": "agent_models",
-    "storyboard": "llm_models",
-}
-_AGNES_DEFAULT_MODEL = {
-    "assistant": ["agnes-3.0-flash"],
-    "storyboard": ["agnes-2.5-flash", "agnes-3.0-flash"],
-}
+_AGNES_MODEL_KEY = "chat_models"
+_AGNES_DEFAULT_MODEL = ["agnes-3.0-flash", "agnes-2.5-flash"]
 
 
 DEFAULT_MS_CHAT_MODEL = "ZhipuAI/GLM-5.3-Flash"
@@ -93,89 +88,82 @@ _LLM_SESSION = _build_llm_session()
 
 
 
-def resolve_llm_provider(use_case, enabled, ready):
+def resolve_llm_provider(use_case, enabled, ready, selected=None):
     
     en = [k for k in LLM_PROVIDER_ORDER
           if k in LLM_PROVIDER_HOSTS and k in set(enabled or ())]
-    selected = en[0] if en else "agnes"
+    sel = str(selected or "").strip().lower()
+    if sel not in LLM_PROVIDER_LABELS:
+        sel = en[0] if en else "agnes"
     rd = {k: bool((ready or {}).get(k)) for k in LLM_PROVIDER_ORDER}
-    rd["agnes"] = True
-    winner = selected if rd.get(selected) else "agnes"
+    winner = sel
     conflict = len(en) > 1
-    fallback = winner != selected
-    note = ""
-    if fallback:
-        note = ("已勾选「%s」，但它尚未就绪（缺地址/令牌/模型）→ LLM 实际仍走「%s」。"
-                % (LLM_PROVIDER_LABELS[selected], LLM_PROVIDER_LABELS[winner]))
+    if not rd.get(sel, False):
+        note = "尚未配置访问密钥。请点击左侧「服务商设置」填入密钥（或 .env 配置 AGNES_API_KEY 后重启）。"
     elif conflict:
-        note = ("检测到多家同时勾选（%s），已按优先级取「%s」；保存一次设置即可收敛。"
-                % ("、".join(LLM_PROVIDER_LABELS[k] for k in en), LLM_PROVIDER_LABELS[selected]))
-    return {"winner": winner, "selected": selected, "enabled": en, "conflict": conflict,
-            "fallback": fallback, "ready": rd, "note": note}
+        note = ("检测到多家同时勾选（%s），当前按选中的「%s」生效；重新勾选一家即可收敛。"
+                % ("、".join(LLM_PROVIDER_LABELS[k] for k in en), LLM_PROVIDER_LABELS[sel]))
+    else:
+        note = ""
+    return {"winner": winner, "selected": sel, "enabled": en, "conflict": conflict,
+            "fallback": False, "ready": rd, "note": note}
 
 
-def _resolve_now(use_case):
+def _resolve_now(use_case=None):
     
-    en = [k for k in LLM_PROVIDER_HOSTS if _host(k).chat_model_enabled(use_case)]
+    en = [k for k in LLM_PROVIDER_HOSTS if _host(k).chat_model_enabled()]
     ready = {}
     for k in LLM_PROVIDER_HOSTS:
         h = _host(k)
         ok = True
         if hasattr(h, "ready_state"):
-            ok, _why = h.ready_state(use_case)
-        ready[k] = bool(ok) and bool(h.chat_model(use_case))
-    return resolve_llm_provider(use_case, en, ready)
+            ok, _why = h.ready_state()
+        ready[k] = bool(ok) and bool(h.chat_model())
+    ready["agnes"] = bool(_provider().get("api_key"))
+    return resolve_llm_provider(None, en, ready, _provider().get_choice("llm", en))
 
 
-def route(use_case):
+def route(use_case=None):
     
-    if use_case not in _USE_CASES:
-        raise ValueError(f"未知 LLM 用例：{use_case!r}（应为 assistant / storyboard）")
-    return _resolve_now(use_case)["winner"]
+    if use_case is not None and use_case not in _USE_CASES:
+        raise ValueError(f"未知 LLM 用例：{use_case!r}（应为 assistant / storyboard，合并后仅作兼容）")
+    return _resolve_now()["winner"]
 
 
-def models_for(use_case):
+def models_for(use_case=None):
     
-    if use_case not in _USE_CASES:
-        raise ValueError(f"未知 LLM 用例：{use_case!r}")
-    be = route(use_case)
+    be = route()
     if be == "ms":
-        return list(_ms().chat_model(use_case) or [DEFAULT_MS_CHAT_MODEL])
+        return list(_ms().chat_model() or [DEFAULT_MS_CHAT_MODEL])
     if be == "custom":
-        return list(_custom().chat_model(use_case) or [])
+        return list(_custom().chat_model() or [])
+    lst = _provider().get(_AGNES_MODEL_KEY) or []
+    return list(lst) if lst else list(_AGNES_DEFAULT_MODEL)
 
-    lst = _provider().get(_AGNES_MODEL_KEY[use_case]) or []
-    return list(lst) if lst else list(_AGNES_DEFAULT_MODEL[use_case])
 
-
-def default_model(use_case):
+def default_model(use_case=None):
     
-    m = models_for(use_case)
+    m = models_for()
     if m:
         return m[0]
-    return DEFAULT_MS_CHAT_MODEL if route(use_case) == "ms" else _AGNES_DEFAULT_MODEL[use_case][0]
+    return DEFAULT_MS_CHAT_MODEL if route() == "ms" else _AGNES_DEFAULT_MODEL[0]
 
 
 
-def configured(use_case):
+def configured(use_case=None):
     
-    if use_case not in _USE_CASES:
-        return False, f"未知 LLM 用例：{use_case!r}"
-    be = route(use_case)
+    be = route()
     if be == "ms":
-
-        if not _ms().chat_model_enabled(use_case):
-            return False, "已路由到魔搭，但本用例未勾选「切换到魔搭接口」"
-        if not _ms().chat_model(use_case):
-            return False, "已路由到魔搭，但本用例在「魔搭」标签页未填对话/推理模型（留空 = 回落 Agnes）"
+        if not _ms().chat_model_enabled():
+            return False, "已路由到魔搭，但未勾选「切换到魔搭接口」"
+        if not _ms().chat_model():
+            return False, "已路由到魔搭，但「魔搭」标签页未填模型（2026-11-14 起缺项只报错、不换家）"
         return True, ""
     if be == "custom":
-        h = _custom()
-        ok, why = h.ready_state(use_case)
+        ok, why = _custom().ready_state()
         if not ok:
             return False, f"已路由到「自定义 OpenAI」，但{why}"
         return True, ""
-
     if not _provider().get("api_key"):
         return False, "尚未配置 Agnes 访问密钥（在「Agnes」标签页填写接口地址与密钥，或配置 .env）"
     return True, ""
@@ -189,21 +177,19 @@ def _thinking_params(backend, thinking, use_case=None):
     if backend == "ms":
 
 
-
         m = ""
-        if use_case:
-            try:
-                lst = _ms().chat_model(use_case) or []
-                m = (lst[0] if lst else "")
-            except Exception:
-                m = ""
+        try:
+            lst = _ms().chat_model() or []
+            m = (lst[0] if lst else "")
+        except Exception:
+            m = ""
         if "qwen" in m.lower():
             return {"chat_template_kwargs": {"enable_thinking": bool(thinking)}}
         if not thinking:
             return {"thinking": {"type": "disabled"}}
         budget = None
-        if use_case and hasattr(_ms(), "chat_budget_tokens"):
-            budget = _ms().chat_budget_tokens(use_case)
+        if hasattr(_ms(), "chat_budget_tokens"):
+            budget = _ms().chat_budget_tokens()
         p = {"thinking": {"type": "enabled"}}
         if budget:
             p["thinking"]["budget_tokens"] = budget
@@ -212,68 +198,62 @@ def _thinking_params(backend, thinking, use_case=None):
         if not thinking:
             return {}
         effort = None
-        if use_case and hasattr(_custom(), "chat_budget_effort"):
-            effort = _custom().chat_budget_effort(use_case)
+        if hasattr(_custom(), "chat_budget_effort"):
+            effort = _custom().chat_budget_effort()
         return {"reasoning_effort": effort} if effort else {}
 
     return {"chat_template_kwargs": {"enable_thinking": bool(thinking)}}
 
 
-def thinking_params(use_case, backend=None):
+def thinking_params(use_case=None, backend=None):
     
-    be = backend or route(use_case)
+    be = backend or route()
     host = _host(be)
-    if be == "agnes":
-        on = bool(_provider().chat_thinking(use_case))
-    elif host is not None and hasattr(host, "chat_thinking"):
-        on = bool(host.chat_thinking(use_case))
+    if be == "agnes" or host is None or not hasattr(host, "chat_thinking"):
+        on = bool(_provider().chat_thinking())
     else:
-        on = bool(_provider().chat_thinking(use_case))
-    return _thinking_params(be, on, use_case)
-
+        on = bool(host.chat_thinking())
+    return _thinking_params(be, on)
 
 
 def caps(use_case, kind):
     
-    be = route(use_case)
-    h = _host(be)
+    h = _host(route())
     if h is None or not hasattr(h, "chat_caps"):
         return True
-    return bool(h.chat_caps(use_case, kind))
+    return bool(h.chat_caps(kind))
 
 
-def ctx_limit(use_case):
+def ctx_limit(use_case=None):
     
-    h = _host(route(use_case))
+    h = _host(route())
     if h is not None:
-        if hasattr(h, "chat_ctx_limit"):
-            return h.chat_ctx_limit(use_case)
-        return None
-    import server.provider as _p
-    return _p.get("agent_ctx_limit" if use_case == "assistant" else "llm_ctx_limit")
+        return h.chat_ctx_limit() if hasattr(h, "chat_ctx_limit") else None
+    return _provider().get("chat_ctx")
 
 
-def max_output_for(use_case, default=None):
+def max_output_for(use_case=None, default=None):
     
-    h = _host(route(use_case))
+    h = _host(route())
     if h is not None:
         if hasattr(h, "chat_max_output"):
-            v = h.chat_max_output(use_case)
+            v = h.chat_max_output()
             if v:
                 return int(v)
         return default
-    import server.provider as _p
-    v = _p.get("agent_max_output" if use_case == "assistant" else "llm_max_output")
+    v = _provider().get("chat_max_output")
     return int(v) if v else default
+
 
 
 def chat(use_case, messages, model=None, tools=None, tool_choice=None,
          stream=False, max_tokens=None, temperature=0.2,
          timeout=(10, 300)):
     
-    if use_case not in _USE_CASES:
+    if use_case is not None and use_case not in _USE_CASES:
         raise ValueError(f"未知 LLM 用例：{use_case!r}")
-    be = route(use_case)
+
+    be = route()
     host = _host(be)
     if be == "ms":
         base = _ms().get("base_url")
@@ -289,7 +269,7 @@ def chat(use_case, messages, model=None, tools=None, tool_choice=None,
         raise RuntimeError(f"LLM 后端「{be}」未配置密钥，无法发起 chat 请求")
 
 
-    _chosen_model = model or default_model(use_case)
+    _chosen_model = model or default_model()
     print(f"[llm.chat] use_case={use_case} backend={be} model={_chosen_model} url={base}/chat/completions", flush=True)
 
     model = _chosen_model
@@ -306,9 +286,7 @@ def chat(use_case, messages, model=None, tools=None, tool_choice=None,
 
 
 
-
-
-    payload.update(thinking_params(use_case, backend=be))
+    payload.update(thinking_params(backend=be))
     if stream:
         payload["stream"] = True
 

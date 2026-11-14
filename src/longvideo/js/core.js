@@ -139,23 +139,17 @@
         <div class="lv-ro-hint" id="lvShotsRoHint" hidden><span class="ic ic-lock" aria-hidden="true"></span>分镜卡已锁定（生成后为只读存档）。单段修改 → 到「分镜与生成」屏逐段改提示词重提；整体重编 → <button class="mini" id="lvUnlockEdit" type="button" style="color:var(--vio);font-weight:700;text-decoration:underline">解锁编辑</button>（旧成片保留对照，改完再生成）</div>
         <textarea id="lvScript" class="lv-script" placeholder="在这里粘贴你的脚本（对话、动作、场景都可以），点「智能分镜」自动拆成分镜；脚本不能为空。"></textarea>
         
+        <div class="lv-opt-hint" id="lvOptHint"></div>
+        
         <div class="lv-opts" id="lvOpts">
           <button class="lv-btn ghost" id="lvBack1">上一步</button>
-          <div class="seg" id="lvSegLlm">
-            <button type="button" class="seg-cur" title="分镜 LLM 引擎：2.5 稳，3.0 实验"><span class="seg-tx"></span><span class="seg-ar ic ic-chevron-down"></span></button>
-            <select id="lvLlmModel" style="display:none">
-              <option value="agnes-2.5-flash" selected>agnes-2.5-flash</option>
-              <option value="agnes-3.0-flash">agnes-3.0-flash（实验）</option>
-            </select>
-            <div class="seg-pop"></div>
-          </div>
           <button class="lv-btn primary" id="lvOptimize"><span class="ic ic-spark" aria-hidden="true"></span>智能分镜</button>
           <button class="mini" id="lvShotsHist" type="button" hidden title="历次分镜稿归档：可恢复/删除">分镜历史</button>
           <span class="lv-opts-sep" aria-hidden="true"></span>
           <div class="seg" id="lvSegModel">
             <button type="button" class="seg-cur"><span class="seg-tx"></span><span class="seg-ar ic ic-chevron-down"></span></button>
             <select id="lvOptModel" style="display:none">
-              <option value="agnes-video-2.5-flash">agnes-video-2.5-flash</option>
+              <option value="agnes-video-2.5-flash"></option>
             </select>
             <div class="seg-pop"></div>
           </div>
@@ -260,6 +254,17 @@
   document.querySelector(".main-area").appendChild(overlay);
 
   
+  let _modelMismatch = "";        
+  let _modelMismatchShown = "";   
+  function _warnModelMismatch(m) {
+    if (_modelMismatchShown === m) return;
+    _modelMismatchShown = m;
+    const w = window.__lvVideoProvider || "";
+    const label = ({ agnes: "Agnes", ark: "火山方舟", runninghub: "RunningHub" })[w] || "当前服务商";
+    setMsg(`该任务用的是 ${m}，不属于当前生效的视频服务商「${label}」；模型下拉只列本家模型，生成前请到「服务商设置」切换到对应服务商`);
+  }
+
+  
   document.addEventListener("provider:changed", (e) => {
     const prov = (e.detail) || {};
     
@@ -274,19 +279,29 @@
     try {
       
       
-      if (typeof window.lvApplyLlmModels === "function") window.lvApplyLlmModels(prov);
-      if (vidSel && Array.isArray(prov.videoModels) && prov.videoModels.length) {
+      
+      const pool = Array.isArray(prov.videoModels) ? prov.videoModels : [];
+      if (vidSel && pool.length) {
         const keep = vidSel.value;
-        vidSel.innerHTML = prov.videoModels.map(m => `<option value="${m}">${m}</option>`).join("");
-        if (prov.videoModels.includes(keep)) vidSel.value = keep;
+        const _lim = (prov.modelLimits && typeof prov.modelLimits === "object") ? prov.modelLimits : {};
+        const _optTx = (m) => {
+          const c = _lim[m] || {};
+          return c.label ? `${c.label} · 自助` : m;
+        };
+        const _optEsc = (s) => String(s).replace(/[&<>"']/g,
+          (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+        vidSel.innerHTML = pool.map(m => `<option value="${_optEsc(m)}">${_optEsc(_optTx(m))}</option>`).join("");
+        vidSel.value = pool.includes(keep) ? keep : pool[0];
+        
+        
+        window.__lvModelPoolReady = true;
       }
+      _modelMismatchShown = "";   
       
-      if (Array.isArray(prov.videoModels) && prov.videoModels.length && !prov.videoModels.includes(lv.opts.model)) {
-        lv.opts.model = prov.videoModels[0];
-      }
       
-      _segRefresh("lvSegLlm");
-      _segRefresh("lvSegModel");
+      
+      if (typeof _syncOptsToUI === "function") _syncOptsToUI();
+      else _segRefresh("lvSegModel");
     } catch (err) {}
   });
 
@@ -297,9 +312,19 @@
   
   
   
-  
+  function _polish(t) {
+    let s = String(t == null ? "" : t).trim();
+    s = s.replace(/[；;，,、\s]+$/, "");
+    s = s.replace(/[（(]\s*未写入(?:历史)?\s*[)）]/g, "");
+    s = s.replace(/[：:]\s*(?:undefined|null|\[object Object\]|NaN)\s*$/i, "，请稍后重试");
+    s = s.replace(/[：:]\s*HTTP\s*\d{3}\S*\s*$/i, "，服务暂时没响应，请稍后重试");
+    s = s.replace(/[：:]\s*[A-Za-z][A-Za-z0-9_.:/\- ]*(?:Error|Exception|failed|timeout)[A-Za-z0-9_.:/\- ]*$/i,
+                  "，服务暂时没响应，请稍后重试");
+    return s;
+  }
   function setMsg(t, ico) {
-    msg.innerHTML = t ? ((ico ? '<span class="ic ic-' + ico + '" aria-hidden="true"></span>' : "") + _esc(t)) : "";
+    const s = _polish(t);
+    msg.innerHTML = t ? ((ico ? '<span class="ic ic-' + ico + '" aria-hidden="true"></span>' : "") + _esc(s)) : "";
     msg.classList.remove("error");
     clearTimeout(msg._timeout);
     if (!t) return;
@@ -313,6 +338,24 @@
     msg.classList.add("error");
     clearTimeout(msg._timeout);
     msg._timeout = setTimeout(() => { msg.textContent = ""; msg.classList.remove("error"); }, 10000);
+  }
+  
+  function errFold(summary, detail) {
+    if (!detail) return err(summary);
+    clearTimeout(msg._timeout);
+    msg.innerHTML = _esc(_polish(summary)) +
+      '<details class="lv-msg-dt"><summary>查看明细</summary><div class="lv-msg-dtx">' +
+      _esc(detail) + "</div></details>";
+    msg.classList.add("error");
+  }
+
+  
+  const optHint = $("lvOptHint");
+  function setOptHint(html) { if (optHint) optHint.innerHTML = html || ""; }
+  function clearOptHint() { if (optHint) optHint.innerHTML = ""; }
+  
+  function _optWaitHint(sec, tail) {
+    setOptHint('<span class="lv-spin"></span>AI 正在分镜…（已等待 ' + sec + " 秒）" + (tail || "，请耐心等候"));
   }
 
   
@@ -382,6 +425,7 @@
   const lv = {
     assets: [],   
     shots: [],    
+    shotsBudgetError: "",   
     jobId: null,
     segs: [],     
     selSeg: 1,
@@ -391,7 +435,7 @@
     curShotVer: -1,    
     genStartTs: 0,     
     poll: null,
-    opts: { llmModel: "agnes-2.5-flash", model: "agnes-video-2.5-flash", aspect_ratio: "16:9", resolution: "720P" },  
+    opts: { model: "agnes-video-2.5-flash", aspect_ratio: "16:9", resolution: "720P" },  
   };
 
   
@@ -457,7 +501,8 @@
       lv.jobStatus = st.jobStatus || null;
       lv.genStartTs = st.genStartTs || 0;
       lv.storyboardBasis = st.storyboardBasis || null;   
-      if (st.opts) lv.opts = Object.assign(lv.opts, st.opts);   
+      
+      if (st.opts) lv.opts = Object.assign(lv.opts, st.opts);
       
       
       
@@ -500,12 +545,13 @@
     if (b) { b.disabled = true; b.innerHTML = '<span class="lv-spin"></span>分镜中…'; }
     if (_optTipTimer) { clearInterval(_optTipTimer); _optTipTimer = null; }
     const owner = _optActive;
+    
+    if (owner) _optWaitHint(Math.round((Date.now() - owner.t0) / 1000));
     _optTipTimer = setInterval(() => {
       if (!owner || owner.done || _optActive !== owner || owner.view !== "owner") {
         clearInterval(_optTipTimer); _optTipTimer = null; return;
       }
-      const sec = Math.round((Date.now() - owner.t0) / 1000);
-      setMsg(`AI 正在分镜…（已等待 ${sec} 秒），请耐心等候`);
+      _optWaitHint(Math.round((Date.now() - owner.t0) / 1000));
     }, 7000);
   }
   function _cancelInFlightOptimize(nextJobId) {
@@ -522,6 +568,9 @@
     
     const b = $("lvOptimize");
     if (b) { b.disabled = false; b.innerHTML = '<span class="ic ic-spark" aria-hidden="true"></span>智能分镜'; }
+    
+    
+    clearOptHint();
   }
   async function openJob(jobId, preferredStep, fromRestore) {
     const seq = ++_openSeq;   
@@ -543,6 +592,8 @@
         lv.jobId = null; lv.jobStatus = null; lv.segs = []; lv.shots = []; lv.assets = [];
         renderAssets();   
         clearState();
+        _resetModelToProvider();
+        _cancelInFlightOptimize();   
         goStep(1);
         return;
       }
@@ -554,7 +605,11 @@
       
       
       lv.assets = Array.isArray(j.assets) ? j.assets : [];
-      lv.shots  = Array.isArray(j.shots)  ? j.shots  : [];
+      lv.shotsBudgetError = j.shots_budget_error || "";
+      
+      
+      
+      lv.shots  = Array.isArray(j.shots) ? j.shots : [];
       lv.segs = [];   
                       
       lv.shotsHist = Array.isArray(j.shots_history) ? j.shots_history : [];   
@@ -566,6 +621,7 @@
       await loadLibrary().catch(() => {});   
       renderAssets();
       renderShots();
+      if (lv.shotsBudgetError) errFold("历史分镜超出模型上限，未阻止载入；该稿不能直接开始生成", lv.shotsBudgetError);
       lvStep2Act.hidden = lv.shots.length === 0;
       _syncStartBtn();          
       
@@ -683,7 +739,6 @@
     let changed = false;
     if (s0.aspect_ratio) { lv.opts.aspect_ratio = s0.aspect_ratio; changed = true; }
     if (s0.resolution)   { lv.opts.resolution   = s0.resolution;   changed = true; }
-    if (s0.model)        { lv.opts.model        = s0.model;        changed = true; }
     if (changed && typeof _syncOptsToUI === "function") _syncOptsToUI();
   }
 
@@ -729,7 +784,8 @@
         }),
       });
       const j = await r.json();
-      if (r.ok && j.job_id) {
+      if (!r.ok) { err("分镜未写入：" + (j.error || ("HTTP " + r.status))); return lv.jobId; }
+      if (j.job_id) {
         if (!lv.jobId) lv.jobId = j.job_id;
         saveState();
       }
@@ -1135,6 +1191,8 @@
         lvShots.innerHTML = "";
         if ($("lvScript")) $("lvScript").value = "";   
         clearState();
+        _resetModelToProvider();
+        _cancelInFlightOptimize();   
         _syncStartBtn();   
         goStep(1);
       }
@@ -1166,6 +1224,8 @@
         lvShots.innerHTML = "";
         if ($("lvScript")) $("lvScript").value = "";   
         clearState();
+        _resetModelToProvider();
+        _cancelInFlightOptimize();   
         _syncStartBtn();   
         goStep(1);
       }
@@ -1183,6 +1243,14 @@
     setMsg("");
   }
 
+  
+  function _resetModelToProvider() {
+    const pool = (window.__lvProvider && Array.isArray(window.__lvProvider.videoModels))
+      ? window.__lvProvider.videoModels : [];
+    if (!pool.length) return;
+    lv.opts.model = pool[0];
+    if (typeof _syncOptsToUI === "function") _syncOptsToUI();
+  }
   async function newTask() {
     _cancelInFlightOptimize();
     
@@ -1198,6 +1266,7 @@
     const _shb2 = $("lvShotsHist"); if (_shb2) _shb2.hidden = true;
     if (lvScript) lvScript.value = "";   
     clearState();
+    _resetModelToProvider();
     renderAssets();
     lvShots.innerHTML = "";
     const _rh = $("lvShotsRoHint"); if (_rh) _rh.hidden = true;

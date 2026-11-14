@@ -12,6 +12,9 @@ import uuid
 import shutil
 import logging
 import subprocess
+import sys
+import ipaddress
+from urllib.parse import urlparse
 
 import requests
 from flask import Blueprint, request, jsonify, current_app, send_file
@@ -23,6 +26,10 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS_DIR = os.path.join(_ROOT, "storage", "assets")
 os.makedirs(ASSETS_DIR, exist_ok=True)
 DB_PATH = os.path.join(_ROOT, "data", "app.db")
+
+
+class ShotBudgetViolation(ValueError):
+    pass
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 JOBS_DIR = os.path.join(_ROOT, "storage", "longvideo_jobs")
 os.makedirs(JOBS_DIR, exist_ok=True)
@@ -71,10 +78,21 @@ def _cfg_video_models() -> tuple:
     return ("agnes-video-2.5-flash", "agnes-video-2.5")
 
 def _cfg_llm_model() -> str:
-    return (_prov().get("llm_models") or [LLM_MODEL])[0]
+    
+    try:
+        import server.llm as _llm
+        return _llm.default_model() or LLM_MODEL
+    except Exception:
+        return LLM_MODEL
+
 
 def _cfg_llm_models() -> tuple:
-    return tuple(_prov().get("llm_models") or list(ALLOWED_LLM_MODELS))
+    
+    try:
+        import server.llm as _llm
+        return tuple(_llm.models_for() or list(ALLOWED_LLM_MODELS))
+    except Exception:
+        return tuple(ALLOWED_LLM_MODELS)
 
 IMG_EXTS = {"png", "jpg", "jpeg", "webp", "bmp", "gif"}
 AUD_EXTS = {"mp3", "wav", "m4a", "aac", "ogg", "flac"}
@@ -164,6 +182,173 @@ def _ref_caps(model=None):
     
     from server.video_caps import ref_caps as _rc
     return _rc(model or _cfg_video_model())
+
+
+def _ref_budget(model=None):
+    
+    model = model or _cfg_video_model()
+    img_cap, aud_cap = _ref_caps(model)
+
+
+
+
+    tail_slot = True
+    try:
+        try:
+            from . import providers as _lvprov
+        except Exception:
+            import importlib as _il
+            _lvprov = _il.import_module("longvideo_api.providers")
+        tail_slot = not bool(getattr(_lvprov.get_submitter(model),
+                                     "supports_native_multi_segment", False))
+    except Exception:
+        pass
+    return int(img_cap), int(aud_cap), tail_slot
+
+
+def _ref_count(images, audio, model=None):
+    
+    _, _, tail_slot = _ref_budget(model)
+    n_img = 0
+    for x in (images or []):
+        if not x:
+            continue
+        if not tail_slot and str(x) == "tail":
+            continue
+        n_img += 1
+    return n_img, len([x for x in (audio or []) if x])
+
+
+def _ref_overflow(images, audio, model=None):
+    
+    img_cap, aud_cap, _ = _ref_budget(model)
+    n_img, n_aud = _ref_count(images, audio, model)
+    bad = []
+    if n_img > img_cap:
+        bad.append("参考图 %d 张（上限 %d）" % (n_img, img_cap))
+    if n_aud > aud_cap:
+        bad.append("参考音频 %d 段（上限 %d）" % (n_aud, aud_cap))
+    return "、".join(bad) if bad else None
+
+
+def _shot_budget_gate(shots, model):
+    
+    if not isinstance(shots, list):
+        return None
+    _lo, _hi = _seg_bounds(model)
+    bad = []
+    for _i, _s in enumerate(shots, start=1):
+        if not isinstance(_s, dict):
+            continue
+        _tag = "第 %s 组" % (_s.get("shot_no") or _i)
+        _why = _ref_overflow(_s.get("images"), _s.get("audio"), model)
+        if _why:
+            bad.append("%s：%s" % (_tag, _why))
+        _raw = _s.get("estimated_seconds")
+        if _raw is not None:
+            try:
+                _sec = int(_raw)
+            except (TypeError, ValueError):
+                _sec = None
+            if _sec is not None and not (_lo <= _sec <= _hi):
+                bad.append("%s：时长 %s 秒越界（本模型 %s–%s 秒）" % (_tag, _sec, _lo, _hi))
+    for _gi, _unit in enumerate(_group_units(shots, model), 1):
+        _why = _unit_budget_error(_unit, model)
+        if _why:
+            _nos = "、".join(str(_s.get("shot_no") or "?") for _s in _unit)
+            bad.append("第 %d 批（组 %s，一条续接链）：%s" % (_gi, _nos, _why))
+    if not bad:
+        return None
+    _more = "（共 %d 条，此处列出前 %d 条）" % (len(bad), 6) if len(bad) > 6 else ""
+    return (
+        "分镜超出所选模型上限，未落库：%s%s。上限取自模型（%s）的能力表：参考图 / 音频"
+        "按本次提交实际素材数计（串行续接组的尾帧占位占 1 张、H3 由远端帧接力不计），"
+        "单组时长按该模型的区间。**一条续接链（链首组 + 其后续接组）整链一起提交**，"
+        "超限时请重新生成分镜或改选模型。"
+        % ("；".join(bad[:6]), _more, model or _cfg_video_model()))
+
+
+def _unit_refs(unit):
+    
+    imgs, auds = [], []
+    for s in unit:
+        if not isinstance(s, dict):
+            continue
+        _iu = s.get("images_urls") or []
+        for i, nm in enumerate(s.get("images") or []):
+            if not nm or str(nm) == "tail":
+                continue
+            k = _iu[i] if i < len(_iu) and _iu[i] else nm
+            if k not in imgs:
+                imgs.append(k)
+        _au = s.get("audio_urls") or []
+        for i, lb in enumerate(s.get("audio") or []):
+            if not lb:
+                continue
+            k = _au[i] if i < len(_au) and _au[i] else lb
+            if k not in auds:
+                auds.append(k)
+    return imgs, auds
+
+
+def _group_units(shots, model=None):
+    
+    if not isinstance(shots, list) or not shots:
+        return []
+    _items = [s for s in shots if isinstance(s, dict)]
+    if _ref_budget(model)[2]:
+        return [[s] for s in _items]
+    units, cur = [], []
+    for s in _items:
+        if cur and not s.get("is_continuation"):
+            units.append(cur)
+            cur = []
+        cur.append(s)
+    if cur:
+        units.append(cur)
+    return units
+
+
+def _assign_group_no(shots, model=None):
+    
+    if not isinstance(shots, list):
+        return shots
+    if _ref_budget(model)[2]:
+        for i, s in enumerate(shots, 1):
+            if isinstance(s, dict):
+                s["group_no"] = i
+        return shots
+    g = 0
+    for s in shots:
+        if not isinstance(s, dict):
+            continue
+        if g == 0 or not s.get("is_continuation"):
+            g += 1
+        s["group_no"] = g
+    return shots
+
+
+def _unit_budget_error(unit, model):
+    
+    img_cap, aud_cap, tail_slot = _ref_budget(model)
+    if tail_slot:
+        return None
+    imgs, auds = _unit_refs(unit)
+    bad = []
+    if len(imgs) > img_cap:
+        bad.append("整组参考图去重并集 %d 张（上限 %d）" % (len(imgs), img_cap))
+    if len(auds) > aud_cap:
+        bad.append("整组参考音频去重并集 %d 段（上限 %d）" % (len(auds), aud_cap))
+    return "、".join(bad) if bad else None
+
+
+def _stored_model(gen_params_json):
+    
+    try:
+        gp = json.loads(gen_params_json or "{}")
+    except (TypeError, ValueError):
+        gp = {}
+    return _norm_gen_params(gp if isinstance(gp, dict) else {}).get("model")
 
 
 
@@ -502,12 +687,61 @@ def _mime_of(name: str) -> str:
     return "application/octet-stream"
 
 
+_PM_MEDIA = None
+
+
+def _media_helper():
+    
+    global _PM_MEDIA
+    if _PM_MEDIA is None:
+        mod = sys.modules.get("server.payload_media")
+        if mod is None:
+            import importlib.util as _ilu
+            _spec = _ilu.spec_from_file_location(
+                "_payload_media_ext", os.path.join(_ROOT, "server", "payload_media.py"))
+            mod = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(mod)
+        _PM_MEDIA = mod
+    return _PM_MEDIA
+
+
+def _local_asset_path(url: str) -> str:
+    
+    if not url or not isinstance(url, str):
+        return ""
+    try:
+        return _media_helper().asset_local_path(url, ASSETS_DIR) or ""
+    except Exception:
+
+        if not url.startswith("/assets/"):
+            return ""
+        p = os.path.join(ASSETS_DIR, os.path.basename(url))
+        return p if os.path.exists(p) else ""
+
+
+def _unreachable_for_upstream(url: str) -> bool:
+    
+    if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        return False
+    try:
+        host = (urlparse(url).hostname or "").strip().lower()
+    except ValueError:
+        return False
+    if not host:
+        return False
+    if host in ("localhost", "127.0.0.1", "0.0.0.0", "::1", "host.docker.internal"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_unspecified
+
+
 def _local_to_b64(url: str, max_side: int = None) -> str:
     
-    if not url or not url.startswith("/assets/"):
-        return url
-    p = os.path.join(ASSETS_DIR, os.path.basename(url))
-    if not os.path.exists(p):
+    p = _local_asset_path(url)
+    if not p:
         return url
 
     if not max_side:
@@ -669,6 +903,34 @@ def _repair_truncated_json(s):
                 opens.pop()
     close_map = {'{': '}', '[': ']'}
     return text + ''.join(close_map[o] for o in reversed(opens))
+
+
+def _normalize_shots_structure(shots):
+    
+    out = []
+    for s in (shots if isinstance(shots, list) else []):
+        if not isinstance(s, dict):
+            continue
+        sc = s.get("scene")
+        if not isinstance(sc, dict):
+            if isinstance(sc, str):
+                s["scene"] = {"text": sc.strip()} if sc.strip() else {}
+            elif isinstance(sc, (list, tuple)):
+                txt = "，".join(str(x).strip() for x in sc
+                               if isinstance(x, str) and str(x).strip())
+                s["scene"] = {"text": txt} if txt else {}
+            else:
+                s["scene"] = {}
+        for key in ("images", "audio", "sfx"):
+            v = s.get(key)
+            s[key] = ([x for x in v if isinstance(x, str)]
+                      if isinstance(v, (list, tuple)) else [])
+        for key in ("characters", "dialogue"):
+            v = s.get(key)
+            s[key] = ([x for x in v if isinstance(x, dict)]
+                      if isinstance(v, (list, tuple)) else [])
+        out.append(s)
+    return out
 
 
 def _recover_shots_array(value):
@@ -1036,14 +1298,8 @@ def _load_registry_rows(job_id=None):
 
 
 def _allowed_models():
-    models = list(_cfg_video_models())
-    try:
-        import server.ark_provider as _ark
-        if _ark.video_ready():
-            models += [m for m in _ark.video_models() if m not in models]
-    except Exception:
-        pass
-    return models
+    
+    return list(_cfg_video_models())
 
 
 def _is_ark_model(model):
@@ -1092,35 +1348,13 @@ def _allowed_aspects(model):
     return list(_ALLOWED_ASPECTS)
 
 
-def _model_known(model):
-    
-    m = str(model or "").strip()
-    if not m:
-        return False
-    try:
-        from server.video_caps import model_limits as _ml
-        return bool(_ml(m))
-    except Exception:
-        return False
-
-
 def _norm_gen_params(raw):
     
     if not isinstance(raw, dict):
         raw = {}
-
-
     _pool = _allowed_models()
-
-
-
-
-
     _stored_model = str(raw.get("model") or "").strip()
-    if _stored_model and (_stored_model in _pool or _model_known(_stored_model)):
-        model = _stored_model
-    else:
-        model = _pool[0] if _pool else "agnes-video-2.5-flash"
+    model = _stored_model if _stored_model in _pool else (_pool[0] if _pool else "agnes-video-2.5-flash")
     _ars = _allowed_aspects(model)
     _res = _allowed_resolutions(model)
     out = {
@@ -1177,9 +1411,129 @@ def _norm_gen_params(raw):
 
 
 
-def _build_registry_text(rows) -> str:
+_SPK_RE = re.compile(r"([^\s:：\"“”+，、]{1,12})\s*[:：]\s*[\"“](?!（)")
+
+
+def _speaker_of(sound_cell):
     
-    lines = ["可用素材登记册（『标签』是人类可读的主索引，写分镜时优先按标签精确匹配；images 字段必须填 name 键值；续接段 images[0]='tail'）："]
+    out = []
+    for mm in _SPK_RE.finditer(sound_cell or ""):
+        nm = (mm.group(1) or "").strip()
+        if not nm or "画外" in nm or "·" in nm or nm.endswith("声"):
+            continue
+        if nm not in out:
+            out.append(nm)
+    return out
+
+
+def _script_rows(script):
+    
+    scenes, cur = [], None
+    for raw in (script or "").splitlines():
+        s = raw.strip()
+        m = re.match(r"^场景\s*([0-9一二三四五六七八九十百]+)\s*[｜|]\s*(.*)$", s)
+        if m:
+            cur = {"no": m.group(1), "name": (m.group(2) or "").strip(), "rows": []}
+            scenes.append(cur)
+            continue
+        if not s.startswith("|"):
+            continue
+        cells = [c.strip() for c in s.strip("|").split("|")]
+        if len(cells) < 6 or not re.match(r"^[0-9]+[-.][0-9]+$", cells[0]):
+            continue
+        dm = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*s", cells[5])
+        sec = float(dm.group(1)) if dm else 0.0
+        if cur is None:
+            cur = {"no": "?", "name": "", "rows": []}
+            scenes.append(cur)
+        cur["rows"].append((cells[0], sec, tuple(_speaker_of(cells[3]))))
+    return [sc for sc in scenes if sc["rows"]]
+
+
+def _script_total_seconds(script):
+    
+    return sum(r[1] for sc in _script_rows(script) for r in sc["rows"])
+
+
+def _build_rows_ledger(script, model=None):
+    
+    lo, hi = _seg_bounds(model)
+    _img_cap, aud_cap = _ref_caps(model)
+    scenes = _script_rows(script)
+    if not scenes:
+        return ""
+
+    def _plan(rows):
+        
+        n = len(rows)
+        best = [None] * (n + 1)
+        best[n] = (0, 0.0, [])
+        for i in range(n - 1, -1, -1):
+            sec, spk = 0.0, set()
+            for j in range(i, n):
+                sec, spk = sec + rows[j][1], spk | set(rows[j][2])
+                if sec > hi or len(spk) > aud_cap:
+                    break
+                if sec < lo or best[j + 1] is None:
+                    continue
+                g, m, tail = best[j + 1]
+                cand = (g + 1, max(m, sec), [(i, j)] + tail)
+                if best[i] is None or (cand[0], cand[1]) < (best[i][0], best[i][1]):
+                    best[i] = cand
+        return None if best[0] is None else best[0][2]
+
+    out = ["【分镜表切组方案】后端按 6 列分镜表的「时长」「声音」两列把每场的切法算好了 —— "
+           "照此切，不许自己合并、也不许再拆："]
+    _rows_all, _sec_all, _grp_all, _bad = 0, 0.0, 0, []
+    for sc in scenes:
+        rows = sc["rows"]
+        _rows_all += len(rows)
+        _sec_all += sum(r[1] for r in rows)
+        plan = _plan(rows)
+        if not plan:
+            _bad.append("场%s" % sc["no"])
+            out.append("场%s %s ｜ %d 行 %gs ｜ ⚠ 本场无合规切法（单行自身就超限）："
+                       "回上游重切镜头行，不许拆行、不许砍台词"
+                       % (sc["no"], sc["name"][:12], len(rows), sum(r[1] for r in rows)))
+            continue
+        _parts = []
+        for (a, b) in plan:
+            _spk = set()
+            for k in range(a, b + 1):
+                _spk |= set(rows[k][2])
+            _parts.append("%s~%s（%gs，说话 %d）" % (
+                rows[a][0], rows[b][0], sum(rows[k][1] for k in range(a, b + 1)), len(_spk)))
+        _grp_all += len(plan)
+        out.append("场%s %s ｜ %d 行 %gs ｜ %d 组：%s" % (
+            sc["no"], sc["name"][:12], len(rows), sum(r[1] for r in rows),
+            len(plan), " ／ ".join(_parts)))
+    out.append("全片 %d 行 %gs → %d 组。组数与每组末镜号已定：少一组 / 多一组 / 换切点都是违规；"
+               "每组 `estimated_seconds` 必须等于所含镜头行时长之和。"
+               % (_rows_all, _sec_all, _grp_all))
+    if _bad:
+        out.append("（%s 无解，其余场照上表切）" % "、".join(_bad))
+    return "\n".join(out) + "\n\n"
+
+
+def _optimize_checked(script, rows, llm_model=LLM_MODEL, video_model=None, tries=3):
+    
+    _fb, _last = "", None
+    for _i in range(max(1, tries)):
+        try:
+            return _optimize(script, rows, llm_model, video_model, feedback=_fb)
+        except ShotBudgetViolation as e:
+            _last = e
+            _fb = str(e)
+            if _i + 1 < tries:
+                print("[OPT-诊断] 第%d轮分镜不合规，回喂重出：%s" % (_i + 1, _fb[:200]), flush=True)
+    raise _last
+
+
+def _build_registry_text(rows, aud_cap=None) -> str:
+    
+    if aud_cap is None:
+        aud_cap = _ref_caps(_cfg_video_model())[1]
+    lines = ["可用素材登记册（『标签』是人类可读的主索引，写分镜时优先按标签精确匹配；images 字段必须填 name 键值；续接组 images[0]='tail'）："]
     img_lines, aud_lines = [], []
     for r in rows:
         if r["type"] == "image":
@@ -1212,9 +1566,10 @@ def _build_registry_text(rows) -> str:
         lines.append("\n【图片素材】(暂无)")
     if aud_lines:
         lines.append(
-            "\n【已归属的声线】(硬规则：下列『角色 X』有归属声线；本镜只要出现这些角色，"
-            "就必须把 X 写入 audio 数组；audio 填『角色 label』，不是『声线 label』，"
-            "也禁止写声线 name=xxx)"
+            "\n【已归属的声线】(硬规则：下列『角色 X』有归属声线；只有本组 `dialogue.line` 非空"
+            "（本组确实说话）的角色才把 X 写入 audio 数组；本组有台词的角色数超 %d 时"
+            "按 §2.1「一场多组」把多的镜头行拆到下一组，不删台词、不裁剪 audio；"
+            "audio 填『角色 label』，不是『声线 label』，也禁止写声线 name=xxx)" % aud_cap
         )
         for lbl, owner, name in aud_lines:
             if owner:
@@ -1291,20 +1646,65 @@ SYSTEM_PROMPT = _load_system_prompt()
 def _render_system_prompt(video_model=None, path=None):
     
     lo, hi = _seg_bounds(video_model)
-    img_cap, aud_cap = _ref_caps(video_model)
+    img_cap, aud_cap, _tail_slot = _ref_budget(video_model)
     aud_note = "" if aud_cap > 0 else (
-        '> 本次视频模型不支持参考音频：所有段的 `audio` 必须留空，'
+        '> 本次视频模型不支持参考音频：所有组的 `audio` 必须留空，'
         '台词直接写「角色名："台词"」，禁止出现「音频N」或「（音频N）」占位。')
-    return (_load_system_prompt(path)
+
+
+
+
+
+    _tail_zh = "tail"
+    if _tail_slot:
+        tail_note = (
+            '> 续接组尾帧占位（`images` 第一张固定写 `"%s"`）**占用**一个图槽位：上一组末帧'
+            '就是本组实发的第一张图。故**本组真图最多 %d 张**（连尾帧占位共 %d 张）；'
+            '非续接组真图仍 ≤ %d 张。'
+            % (_tail_zh, img_cap - 1, img_cap, img_cap)
+        )
+    else:
+        tail_note = (
+            '> 续接组尾帧占位（`images` 第一张固定写 `"%s"`）**不占用**图槽位：该占位不会'
+            '发给上游。故**本组真图最多 %d 张**，与非续接组一致。'
+            % (_tail_zh, img_cap)
+        )
+    _text = _load_system_prompt(path)
+
+
+
+
+
+
+
+
+
+    _go_block = r"<<<GROUP_ONLY:BEGIN>>>\r?\n(.*?)<<<GROUP_ONLY:END>>>\r?\n"
+    if _tail_slot:
+        def _go_sub(_m):
+            if _m.group(1).lstrip().startswith("**链级素材槽位"):
+                return ("- **组级素材槽位**：每组 `images` ≤ {{IMG_MAX}}、`audio` ≤ {{AUD_MAX}}、"
+                        "有台词的角色数 ≤ {{AUD_MAX}}，单组超上限按 §2.1 在该行前收组。\n")
+            return ("- 每组 `images` ≤ {{IMG_MAX}}、`audio` ≤ {{AUD_MAX}}、有台词的角色数 ≤ "
+                    "{{AUD_MAX}}，超了按 §2.1 在该行前收组；未砍素材、未删台词、未删镜头行。\n")
+        _text = re.sub(_go_block, _go_sub, _text, flags=re.S)
+    else:
+
+
+
+        _text = re.sub(_go_block, lambda _m: _m.group(1), _text, flags=re.S)
+    return (_text
             .replace("{{VIDEO_MODEL}}", video_model or _cfg_video_model())
             .replace("{{SEC_MIN}}", str(lo))
             .replace("{{SEC_MAX}}", str(hi))
             .replace("{{IMG_MAX}}", str(img_cap))
             .replace("{{AUD_MAX}}", str(aud_cap))
-            .replace("{{AUD_NOTE}}", aud_note))
+            .replace("{{AUD_NOTE}}", aud_note)
+            .replace("{{TAIL_SLOT_NOTE}}", tail_note))
 
 
-def _optimize(script: str, rows, llm_model: str = LLM_MODEL, video_model: str = None) -> dict:
+def _optimize(script: str, rows, llm_model: str = LLM_MODEL, video_model: str = None,
+              feedback: str = "") -> dict:
     
     import server.llm as _llm
     from concurrent.futures import ThreadPoolExecutor
@@ -1351,15 +1751,25 @@ def _optimize(script: str, rows, llm_model: str = LLM_MODEL, video_model: str = 
             return r
         with ThreadPoolExecutor(max_workers=min(2, len(missing))) as ex:
             list(ex.map(_rec, missing))
-    registry_text = _build_registry_text(rows)
 
 
-    _img_cap, _aud_cap = _ref_caps(video_model)
+
+
+
+    _, _aud_cap = _ref_caps(video_model)
+    registry_text = _build_registry_text(rows, _aud_cap)
+
+
+
+
+
+
+
+
     tool_schema = {
         "type": "function",
         "function": {
             "name": "save_shots",
-            "description": "保存优化后的结构化分镜数组（所有 shot mode 必为 reference）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1369,33 +1779,57 @@ def _optimize(script: str, rows, llm_model: str = LLM_MODEL, video_model: str = 
                             "type": "object",
                             "properties": {
                                 "shot_no": {"type": "integer"},
-                                "estimated_seconds": {"type": "integer", "minimum": _seg_bounds(video_model)[0], "maximum": _seg_bounds(video_model)[1]},
+
+
+
+                                "estimated_seconds": {"type": "integer"},
                                 "mode": {"type": "string", "enum": ["reference"]},
                                 "is_continuation": {"type": "boolean"},
-                                "characters": {"type": "array", "items": {"type": "object", "properties": {
-                                    "label": {"type": "string"}, "matched": {"type": "boolean"},
-                                    "voice_source": {"type": "string", "enum": ["reference_audio", "text_voice", "model_default"]},
-                                    "position": {"type": "string", "description": "该角色在本镜场景中的画面方位（如'画面左侧的窗台旁''画面中央'）：优先取自场景图登记册给出的「空间布局」方位点（如'左侧=窗台' → 写'画面左侧的窗台旁'）；无场景图时从脚本方位词派生（如'站在巷口' → '巷口'）；确实无依据可留空（不许编造）。注意：**同一方位必须同时写进 prompt 正文该角色的处所短语里（见硬规则 11.1），本字段仅作结构化记录、后端不注入 prompt。**"}
-                                }}, "description": "仅填登记册 kind=character 的角色 label；场景（kind=scene）/道具（kind=prop）的 label 严禁写入——场景/道具只通过 images 以 name 引用"},
-                                "dialogue": {"type": "array", "items": {"type": "object", "properties": {
-                                    "character": {"type": "string"}, "voice": {"type": "string"},
-                                    "line": {"type": "string", "description": "该镜此角色台词文本(无台词则整个 dialogue 对象省略,绝不写空字符串,绝不写裸双引号 — 空台词破坏 JSON 解析)"}, "needs_review": {"type": "boolean"}
-                                }}},
+                                "characters": {"type": "array", "items": {
+                                    "type": "object", "properties": {
+                                        "label": {"type": "string"},
+                                        "matched": {"type": "boolean"},
+                                        "voice_source": {"type": "string",
+                                                         "enum": ["reference_audio", "text_voice",
+                                                                  "model_default"]},
+                                        "position": {"type": "string"},
+                                    }}},
+                                "dialogue": {"type": "array", "items": {
+                                    "type": "object", "properties": {
+                                        "character": {"type": "string"},
+                                        "voice": {"type": "string"},
+                                        "line": {"type": "string"},
+                                        "needs_review": {"type": "boolean"},
+                                    }}},
                                 "sfx": {"type": "array", "items": {"type": "string"}},
-                                "scene": {"type": "object", "properties": {"text": {"type": "string", "description": "本镜场景/位置描述（场所+方位+陈设+光线与氛围），只写场景本身（场所+方位+陈设+光线与氛围），禁止抄入角色动作/神态/对白——那些统一在 prompt 文本里自然写，由视频模型直接读取"}, "style_anchor": {"type": "string"}}},
-                                "images": {"type": "array", "items": {"type": "string"}, "description": f"续接段 images[0]='tail'；其余填 registry 的 name 键值，按『角色 > 场景 > 道具』优先级排列，≤{_img_cap}（超出截断）；场景/道具图也在此列出，便于后端按 name 反查并绑定图N。图N 严格对应 images 数组下标（图1=images[0]）。"},
-                                "audio": {"type": "array", "items": {"type": "string"}, "description": f"本镜『实际有台词』角色的 label 列表（与硬规则7一致：只有 dialogue 里 line 非空的角色才配声）。按对话出现顺序填写，audio[0] 即『音频1』，≤{_aud_cap}（当前视频模型上限，超出静默截断）。无台词的角色（纯动作/空镜/画外音）一律不得写入。不得写声线 label（如『三花猫声音』），也不得写声线 name（lv_xxx）。"},
-                                "prompt": {"type": "string", "description": "按硬规则3/5/10/11 写：自然语言叙事一段话（禁『图1=』等号式与『SFX：/风格：』标签段）。已登记且有图角色/场景/道具不强制写文字外貌（靠图N 锚定），仅未登记/无图实体在首现处写一行精简外观签名；每处提及都重挂其图N（图N=images 下标）；已登记 posture 角色姿态由后端确定性注入（见硬规则11），LLM 不写姿态前缀。对白格式：『说话动词（音频N）：\"台词\"』（N = 该角色在 audio 数组中的序号：audio[0]→音频1…；无配声角色直接『角色：\"台词\"』）。禁止写声线真名或『老年女声』之类描述——声线由音频N 绑定（audio[0]→音频1…）。动作/微表情/光线/音效/禁止 等镜头级指令直接在 prompt 文本里写足。"}
+                                "scene": {"type": "object", "properties": {
+                                    "text": {"type": "string"},
+                                    "style_anchor": {"type": "string"},
+                                }},
+                                "images": {"type": "array", "items": {"type": "string"}},
+                                "audio": {"type": "array", "items": {"type": "string"}},
+                                "prompt": {"type": "string"},
                             },
-                            "required": ["shot_no", "estimated_seconds", "mode", "prompt", "is_continuation", "images"]
+                            "required": ["shot_no", "estimated_seconds", "mode", "prompt",
+                                         "is_continuation", "images"],
                         }
                     }
                 },
-                "required": ["shots"]
-            }
-        }
+                "required": ["shots"],
+            },
+        },
     }
+
+
+
+    _budget_line = "本次每个组的参考素材上限：图 %d 张"
     user_text = (
+        _build_rows_ledger(script, video_model) +
+
+
+        ("【上一次输出被拒，必须修正】" + feedback.strip() +
+         "\n按上面的【分镜表切组方案】重出全部分镜，组数 / 起止镜号 / 每组时长一律照方案，"
+         "一行台词都不许丢。\n\n" if feedback.strip() else "") +
         "请优化以下脚本为分镜数组。\n\n" + registry_text +
         "\n\n初始脚本：\n" + script
     )
@@ -1518,6 +1952,8 @@ def _optimize(script: str, rows, llm_model: str = LLM_MODEL, video_model: str = 
             "请稍等片刻再重试；若反复出现，可缩短脚本或拆成更少的逻辑段再提交。"
         )
 
+    shots = _normalize_shots_structure(shots)
+
     name_to_url = {r["name"]: r["url"] for r in rows}
     owner_to_audio = {r["owner"]: r["url"] for r in rows if r["type"] == "audio" and r["owner"]}
 
@@ -1578,6 +2014,36 @@ def _optimize(script: str, rows, llm_model: str = LLM_MODEL, video_model: str = 
     _strictly_validate_shots(shots, rows, script)
 
     shots = _enforce_visual_lock(shots, rows, script, video_model)
+
+
+
+
+    _want_sec = _script_total_seconds(script)
+    if _want_sec > 0:
+        _got_sec = 0
+        for _sh in shots:
+            try:
+                _got_sec += int(_sh.get("estimated_seconds") or 0)
+            except (TypeError, ValueError):
+                pass
+        if abs(_got_sec - _want_sec) > 1:
+            raise ShotBudgetViolation(
+                "分镜总时长 %ds ≠ 分镜表行时长之和 %ds（差 %+ds）：说明有镜头行被漏掉、"
+                "重复，或某组 `estimated_seconds` 被改小。请按【分镜表切组方案】把每一行都放进"
+                "对应组、并把每组时长写成该组行时长之和，一行台词都不许丢。"
+                % (_got_sec, _want_sec, _got_sec - _want_sec))
+
+
+    _nl = {r.get("name"): (r.get("label") or "").strip()
+           for r in rows if r.get("type") == "image"}
+    for _s in shots:
+        _pm = _s.get("prompt") or ""
+        _labs = {_nl.get(_n, "") for _n in (_s.get("images") or []) if isinstance(_n, str)}
+        _s["characters"] = [c for c in (_s.get("characters") or [])
+                            if isinstance(c, dict) and
+                            (((c.get("label") or "").strip() in _labs)
+                             or ((c.get("label") or "").strip()
+                                 and (c.get("label") or "").strip() in _pm))]
 
 
     if not shots:
@@ -1828,8 +2294,137 @@ _SHOT_DIRECTIVES = [
 ]
 
 
+_CHAIN_TAIL_SENT_RE = re.compile(r'^[^：:。]{0,30}?上一段视频的最后一帧[^：:。]{0,30}?[：:]')
+
+
+def _chain_sets(sh):
+    
+    return ({str(n) for n in (sh.get("images") or []) if n and str(n) != "tail"},
+            {str(a) for a in (sh.get("audio") or []) if a})
+
+
+def _pick_scene_anchor(shots, i, sh, name_kind, name_label, name_url):
+    
+    def _ok(n):
+        return (name_kind.get(n) or "").strip() == "scene" and bool(name_url.get(n))
+
+    obj = sh.get("scene") if isinstance(sh.get("scene"), dict) else {}
+    sa = str(obj.get("style_anchor") or "").strip()
+    if sa and _ok(sa):
+        return sa
+    txt = str(obj.get("text") or "")
+    for n in name_kind:
+        lb = (name_label.get(n) or "").strip()
+        if _ok(n) and lb and lb in txt:
+            return n
+    for k in range(i - 1, -1, -1):
+        for n in (shots[k].get("images") or []):
+            n = str(n)
+            if n != "tail" and _ok(n):
+                return n
+    return None
+
+
+def _as_chain_head(shots, i, name_kind, name_label, name_url, img_cap):
+    
+    sh = shots[i]
+    imgs = [str(n) for n in (sh.get("images") or [])]
+    urls = list(sh.get("images_urls") or [])
+    has_tail = bool(imgs) and imgs[0] == "tail"
+    body = [(n, urls[k] if k < len(urls) else None)
+            for k, n in enumerate(imgs) if not (has_tail and k == 0)]
+    body = [(n, u) for n, u in body if n and u]
+    if not body:
+        return False
+
+    scn = _pick_scene_anchor(shots, i, sh, name_kind, name_label, name_url)
+    _scene_obj = sh.get("scene") if isinstance(sh.get("scene"), dict) else {}
+    _present = {n for n, _ in body}
+    if scn and scn not in _present:
+        if len(body) < img_cap:
+            body.append((scn, name_url[scn]))
+        else:
+            sh.setdefault("_bind_warn", []).append(
+                "断链补场景图失败：本组 %d 张图已达上限 %d，未删任何素材" % (len(body), img_cap))
+            scn = None
+    sh["images"] = [n for n, _ in body]
+    sh["images_urls"] = [u for _, u in body]
+    sh["is_continuation"] = False
+    if scn and isinstance(sh.get("scene"), dict):
+        sh["scene"] = dict(_scene_obj, style_anchor=scn)
+
+    p = sh.get("prompt") or ""
+    if "上一段视频的最后一帧" in p:
+        m = _CHAIN_TAIL_SENT_RE.match(p)
+        p = p[m.end():] if m else re.sub(
+            r'^[^：:]*上一段视频的最后一帧[^：:]*[：:]', "", p, count=1)
+    if scn:
+
+
+        p = "%s场景中，" % (name_label.get(scn) or scn).strip() + p.lstrip("，, ")
+    sh["prompt"] = p
+    return True
+
+
+def _break_overfull_chains(shots, video_model, name_kind, name_label, name_url):
+    
+    if not isinstance(shots, list) or not shots:
+        return []
+    img_cap, aud_cap, tail_slot = _ref_budget(video_model)
+    if tail_slot:
+        return []
+    broken, cur_i, cur_a = [], set(), set()
+    for i, sh in enumerate(shots):
+        if not isinstance(sh, dict):
+            continue
+        im, au = _chain_sets(sh)
+        if not sh.get("is_continuation"):
+            cur_i, cur_a = set(im), set(au)
+            continue
+        ui, ua = cur_i | im, cur_a | au
+        if len(ui) <= img_cap and len(ua) <= aud_cap:
+            cur_i, cur_a = ui, ua
+            continue
+        why = []
+        if len(ui) > img_cap:
+            why.append("整链图并集 %d>%d" % (len(ui), img_cap))
+        if len(ua) > aud_cap:
+            why.append("整链音并集 %d>%d" % (len(ua), aud_cap))
+        why = "、".join(why)
+        if _as_chain_head(shots, i, name_kind, name_label, name_url, img_cap):
+            cur_i, cur_a = _chain_sets(sh)
+            broken.append((i, why))
+            sh.setdefault("_bind_warn", []).append(
+                "整链素材装不下，本组已改为另起组（断开末帧接力、补回场景图）：%s" % why)
+            print("[INFO] 链断点 shot#%s: %s" % (sh.get("shot_no"), why), flush=True)
+        else:
+            cur_i, cur_a = ui, ua
+    return broken
+
+
 def _enforce_visual_lock(shots, rows, script=None, video_model=None):
     
+
+
+
+
+
+    for _sh in (shots if isinstance(shots, list) else []):
+        if not isinstance(_sh, dict):
+            continue
+        _imgs = [str(n) for n in (_sh.get("images") or []) if n]
+        _urls = list(_sh.get("images_urls") or [])
+        _rest = [(n, _urls[k] if k < len(_urls) else None)
+                 for k, n in enumerate(_imgs) if n != "tail"]
+        if _sh.get("is_continuation"):
+            _sh["images"] = ["tail"] + [n for n, _ in _rest]
+            _sh["images_urls"] = ["tail"] + [u for _, u in _rest]
+            if "上一段视频的最后一帧" not in (_sh.get("prompt") or ""):
+                _sh["prompt"] = ("图1是上一段视频的最后一帧。请从这个镜头接着往下拍："
+                                 + (_sh.get("prompt") or ""))
+        elif len(_rest) != len(_imgs):
+            _sh["images"] = [n for n, _ in _rest]
+            _sh["images_urls"] = [u for _, u in _rest]
     label_ap, name_kind, name_label = {}, {}, {}
     for r in rows:
         if r.get("type") == "image":
@@ -1933,6 +2528,8 @@ def _enforce_visual_lock(shots, rows, script=None, video_model=None):
                 prompt = _np
                 changed = True
 
+
+
         speaking = []
         for d in (sh.get("dialogue") or []):
             ch = (d.get("character") or "").strip()
@@ -1940,6 +2537,13 @@ def _enforce_visual_lock(shots, rows, script=None, video_model=None):
             if ch and line and ch not in speaking:
                 speaking.append(ch)
         audio_new = [c for c in speaking if c in audio_labels]
+        _aud_cap = _ref_budget(video_model)[1]
+        if len(audio_new) > _aud_cap:
+            raise ShotBudgetViolation(
+                "第 %s 组有 %d 个说话角色（%s），超过本模型单组音频上限 %d 段："
+                "请在完整台词 / 动作收束处把该组拆为多个组，台词与镜头行一个不删。"
+                % (sh.get("shot_no") or "?", len(audio_new), "、".join(audio_new), _aud_cap)
+            )
         sh["audio"] = audio_new
         _url_by_owner = {r["owner"]: r["url"] for r in rows if r.get("type") == "audio" and r.get("owner")}
         _url_by_label = {r["label"]: r["url"] for r in rows if r.get("type") == "audio" and r.get("label")}
@@ -2093,6 +2697,48 @@ def _enforce_visual_lock(shots, rows, script=None, video_model=None):
 
         sh["unresolved_images"] = [
             k for k in (sh.get("images") or []) if k != "tail" and k not in _name_url
+        ]
+
+
+
+
+    _icap = _ref_budget(video_model)[0]
+    for _i, _sh in enumerate(shots):
+        if not isinstance(_sh, dict) or _sh.get("is_continuation"):
+            continue
+        _imgs = [str(n) for n in (_sh.get("images") or [])]
+        if "tail" in _imgs:
+            continue
+        _scn = _pick_scene_anchor(shots, _i, _sh, _name_kind, name_label, _name_url)
+        if not _scn or _scn in _imgs:
+            continue
+        if len(_imgs) >= _icap:
+            _sh.setdefault("_bind_warn", []).append(
+                "另起组缺场景图：图位已满 %d，未删任何素材" % _icap)
+            continue
+        _sh["images"] = _imgs + [_scn]
+        _sh["images_urls"] = list(_sh.get("images_urls") or []) + [_name_url[_scn]]
+        if isinstance(_sh.get("scene"), dict):
+            _sh["scene"] = dict(_sh["scene"], style_anchor=_scn)
+        _sh["prompt"] = ("%s场景中，" % (name_label.get(_scn) or _scn).strip()
+                         + (_sh.get("prompt") or "").lstrip("，, "))
+        _np, _ = _inject_ref_tokens(_sh["prompt"], _sh["images"], _sh.get("audio") or [],
+                                    _name_labels, _sh.get("dialogue"), label_posture)
+        _sh["prompt"] = _np
+        _sh["unresolved_images"] = [
+            k for k in _sh["images"] if k != "tail" and k not in _name_url]
+        _sh.setdefault("_bind_warn", []).append("另起组缺场景图，已补回并追加到 images 末尾")
+
+
+
+    for _i, _why in _break_overfull_chains(shots, video_model, _name_kind, name_label, _name_url):
+        _sh = shots[_i]
+        _np, _ = _inject_ref_tokens(_sh.get("prompt") or "", _sh.get("images") or [],
+                                    _sh.get("audio") or [], _name_labels,
+                                    _sh.get("dialogue"), label_posture)
+        _sh["prompt"] = _np
+        _sh["unresolved_images"] = [
+            k for k in (_sh.get("images") or []) if k != "tail" and k not in _name_url
         ]
     return shots
 
@@ -2583,7 +3229,7 @@ def _job_video_model(job_id):
         gp = json.loads(row["gen_params_json"]) if row and row["gen_params_json"] else {}
     except Exception:
         gp = {}
-    return (gp.get("model") or "").strip() or _cfg_video_model()
+    return _norm_gen_params(gp if isinstance(gp, dict) else {}).get("model") or _cfg_video_model()
 
 
 def _resume_segment(job_id, seg):
@@ -3004,13 +3650,17 @@ def _gen_segment(job_id, seg, prev_tail_b64):
             continue
         images_urls.append(u)
     audio_urls = json.loads(seg["audio_urls"] or "[]")
-    _img_cap, _aud_cap = _ref_caps(seg_model)
-    if len(images_urls) > _img_cap:
-        images_urls = images_urls[:_img_cap]
 
 
-    if len(audio_urls) > _aud_cap:
-        audio_urls = audio_urls[:_aud_cap]
+
+
+
+    _why = _ref_overflow(images_urls, audio_urls, seg_model)
+    if _why:
+        return False, None, None, (
+            "本段参考素材超限，已中止提交：%s。上限取自该模型能力表；"
+            "续接段尾帧占位按本模型的提交方式计入（串行模型占 1 张、H3 远端接力不计入）。"
+            "请减少该镜参考素材或把镜头拆开后再单段重新生成。" % _why)
 
 
     if not images_urls and not audio_urls:
@@ -3383,8 +4033,24 @@ def _gen_group(job_id, group_segs, common, sub):
             "continuity": idx > 0,
         })
     mode = "reference" if (global_imgs or global_auds) else "text"
+
+
+
+
+
+    _why = _ref_overflow(global_imgs, global_auds, seg_model)
+    if _why:
+        return False, None, None, (
+            "同批各组参考素材超限，已中止提交（该批含组 %s）：%s。"
+            "同批各组单独看可能都没超，是这条续接链的去重并集超出了该模型上限 —— "
+            "整链必须一起提交，请重新生成分镜后再试。"
+            % ("、".join(str(s["seg_no"]) for s in group_segs), _why))
     _common = dict(common or {})
-    _common.update({"mode": mode, "aspect_ratio": anchor_aspect, "size": anchor_size})
+
+
+
+    _common.update({"mode": mode, "aspect_ratio": anchor_aspect, "size": anchor_size,
+                    "images": global_imgs, "audios": global_auds})
 
     is_paid = "flash" not in (seg_model or "")
     max_attempts = 3 if is_paid else 6
@@ -3571,27 +4237,24 @@ def _run_job(job_id):
     _seg_index = {s["seg_no"]: i for i, s in enumerate(seg_list)}
     units = []
     if _supports_group:
-        i = 0
-        n = len(seg_list)
-        while i < n:
-
-            if i + 1 < n and seg_list[i + 1]["is_continuation"]:
-                j = i + 1
-                while j < n and seg_list[j]["is_continuation"]:
-                    j += 1
-                grp_segs = seg_list[i:j]
-                anchor = grp_segs[0]
-                _gc = dict(_common_base)
 
 
-                _gc["refine"], _gc["face"] = _h3_post_opts(anchor)
-                units.append({"type": "group", "segs": grp_segs,
-                              "nos": [s["seg_no"] for s in grp_segs], "common": _gc})
-                i = j
+
+        buckets = []
+        for s in seg_list:
+            if buckets and s.get("is_continuation"):
+                buckets[-1].append(s)
             else:
-                s = seg_list[i]
-                units.append({"type": "seg", "segs": [s], "nos": [s["seg_no"]]})
-                i += 1
+                buckets.append([s])
+        for grp_segs in buckets:
+            if len(grp_segs) > 1:
+                _gc = dict(_common_base)
+                _gc["refine"], _gc["face"] = _h3_post_opts(grp_segs[0])
+                units.append({"type": "group", "segs": grp_segs,
+                              "nos": [x["seg_no"] for x in grp_segs], "common": _gc})
+            else:
+                units.append({"type": "seg", "segs": grp_segs,
+                              "nos": [grp_segs[0]["seg_no"]]})
     else:
         for s in seg_list:
             units.append({"type": "seg", "segs": [s], "nos": [s["seg_no"]]})
@@ -3846,14 +4509,189 @@ def _update_job(job_id, **fields):
             print(f"[warn] 长视频对账登记失败（不影响任务）job={job_id}: {e}", flush=True)
 
 
+
+
+
+_H3_PROMPT_ZH = os.path.join(_ROOT, "prompts", "h3-prompt-writing", "references", "ref-zh.txt")
+
+
+def _shot_opt_err(raw) -> str:
+    
+    s = " ".join(str(raw or "").split())
+    low = s.lower()
+    if "too many 500" in low or ("max retries" in low and "500" in low):
+        tip = "文本模型上游连续返回 500，自动重试后仍失败（服务暂时不可用），请稍后重试"
+    elif "429" in low or "rate limit" in low or "too many requests" in low:
+        tip = "文本模型触发限流，请稍后重试或切换服务商设置里的服务商"
+    elif "timeout" in low or "timed out" in low:
+        tip = "文本模型请求超时，请稍后重试"
+    elif "invalid image" in low or "image format" in low or "image_url" in low:
+        tip = "文本模型拒绝了图片素材，请检查参考图是否可读取"
+    elif "connection" in low or "ssl" in low or "certificate" in low:
+        tip = "文本模型连接失败，请检查网络与服务商配置"
+    else:
+        tip = "文本模型调用失败"
+    return tip + ("；原始信息：" + s[:180] if s else "")
+
+
+def _h3_optimize_core(prompt, materials, on_delta=None):
+    
+    import server.llm as _llm
+    prompt = prompt or ""
+    if not isinstance(prompt, str) or not prompt.strip():
+        return None, "缺少待优化的提示词"
+    _ok, _why = _llm.configured("storyboard")
+    if not _ok:
+        return None, (_why or "尚未配置文本模型访问密钥（服务商设置或 .env）")
+    try:
+        with io.open(_H3_PROMPT_ZH, encoding="utf-8") as f:
+            sys_prompt = f.read()
+    except OSError as e:
+        return None, "H3 六段规约读取失败：%s" % e
+
+
+
+
+
+
+
+
+
+
+    _KIND2TAG = {"image": "Picture", "audio": "Audio", "video": "Video"}
+    lines = []
+    imgs = []
+    img_ids = []
+    for m in (materials or []):
+        if not isinstance(m, dict):
+            continue
+        kind = _KIND2TAG.get(str(m.get("kind") or ""), "Audio")
+        idx = m.get("idx")
+        label = m.get("label") or m.get("name") or ""
+        note = ""
+        if kind == "Picture":
+            u = str(m.get("url") or "")
+            b64 = _local_to_b64(u, max_side=1024) if u else ""
+            ok_img = b64.startswith("data:image/") or (
+                b64.startswith(("http://", "https://")) and not _unreachable_for_upstream(b64))
+            if ok_img:
+                imgs.append(b64)
+                img_ids.append("<%s %s>" % (kind, idx))
+            else:
+                note = "（无可用真图，未附图）"
+        lines.append("<%s %s> = %s%s" % (kind, idx, label, note))
+    img_order = "、".join(img_ids) if img_ids else "（本次无可用真图）"
+    user_text = (
+        "请按 system 指南定义的六段全参考格式改写下面的分镜提示词。"
+        "六个字段名保持英文原样，六段正文一律用中文书写；"
+        "原样保留全部 <Picture N> / <Video N> / <Audio N> 编号与每一句台词（台词按原语言，不翻译）；"
+        "只输出六段，不要附加任何说明或前后缀。\n\n"
+        "参考素材：\n" + ("\n".join(lines) or "（无）")
+        + "\n\n附图按 " + img_order + " 的顺序排列；未列出的编号没有可用真图，"
+        "按文字登记理解，不要臆造画面。\n\n分镜提示词：\n" + prompt
+    )
+    user_content = [{"type": "text", "text": user_text}]
+    for b64 in imgs:
+        user_content.append({"type": "image_url", "image_url": {"url": b64}})
+    messages = [{"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_content}]
+    print("[SHOT-OPT] 输入=%d字 真图=%d张 后端=%s 模型=%s" % (
+        len(prompt), len(user_content) - 1, _llm.route("storyboard"),
+        _llm.default_model("storyboard")), flush=True)
+    if on_delta is None:
+
+        try:
+            r = _llm.chat("storyboard", messages=messages, temperature=0.2, timeout=(10, 900))
+        except Exception as e:
+            return None, _shot_opt_err(e)
+        if r.status_code != 200:
+            return None, "文本模型返回 %s；%s" % (r.status_code, _shot_opt_err(r.text[:300]))
+        try:
+            content = (r.json()["choices"][0]["message"].get("content") or "").strip()
+        except Exception as e:
+            return None, "文本模型回包解析失败：%s" % e
+    else:
+
+
+        try:
+            r = _llm.chat("storyboard", messages=messages, temperature=0.2,
+                          stream=True, timeout=(10, 900))
+        except Exception as e:
+            return None, _shot_opt_err(e)
+        if r.status_code != 200:
+            try:
+                _raw = r.content[:300].decode("utf-8", errors="replace")
+            except Exception:
+                _raw = ""
+            return None, "文本模型返回 %s；%s" % (r.status_code, _shot_opt_err(_raw))
+        acc = ""
+        try:
+            for raw in r.iter_lines(decode_unicode=False):
+                if not raw:
+                    continue
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                chunk = line[5:].strip()
+                if chunk == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(chunk)
+                except Exception:
+                    continue
+                c = ((obj.get("choices") or [{}])[0].get("delta") or {}).get("content")
+                if not c:
+                    continue
+
+                if acc and c.startswith(acc) and len(c) > len(acc):
+                    inc = c[len(acc):]
+                elif acc and c == acc and len(acc) >= 64:
+                    inc = ""
+                else:
+                    inc = c
+                if inc:
+                    acc += inc
+                    try:
+                        on_delta(inc)
+                    except Exception:
+                        pass
+        except Exception as e:
+            return None, _shot_opt_err(e)
+        content = acc.strip()
+    if not content:
+        return None, "文本模型返回空内容（疑似上游限流/过载），请重试"
+    return content, None
+
+
+def _h3_optimize_stream(prompt, materials, on_delta):
+    
+    return _h3_optimize_core(prompt, materials, on_delta=on_delta)
+
+
+@lv_bp.route("/optimize-shot-prompt", methods=["POST"])
+def api_optimize_shot_prompt():
+    
+    data = request.get_json(silent=True) or {}
+    prompt = data.get("prompt") or ""
+    materials = data.get("materials") or []
+    content, err = _h3_optimize_core(prompt, materials)
+    if err:
+        if err.startswith("缺少"):
+            return jsonify(error=err), 400
+        if "尚未配置" in err:
+            return jsonify(error=err), 500
+        return jsonify(error=err), 502
+    return jsonify(prompt=content)
+
+
 @lv_bp.route("/optimizer", methods=["POST"])
 def api_optimizer():
     
 
 
+    import server.llm as _llm
     try:
-        import server.llm as _llm
-        _ok, _why = _llm.configured("storyboard")
+        _ok, _why = _llm.configured()
     except Exception:
         _ok, _why = (bool(_cfg_key()), "")
     if not _ok:
@@ -3863,20 +4701,24 @@ def api_optimizer():
     job_id = (data.get("job_id") or "").strip() or None
 
 
-
-    import server.llm as _llm
-    llm_model = (data.get("llm_model") or "").strip()
-    _allowed = _llm.models_for("storyboard")
-    _fb = _llm.default_model("storyboard")
-    print(f"[OPT-诊断] 收到请求 llm_model={llm_model!r} 后端={_llm.route('storyboard')} -> 实际采用={ (llm_model if llm_model in _allowed else _fb)!r}", flush=True)
-    if llm_model not in _allowed:
-        llm_model = _fb
+    llm_model = _llm.default_model()
+    print(f"[OPT-诊断] 统一模型后端={_llm.route()} -> 实际采用={llm_model!r}", flush=True)
     if not script:
         return jsonify(error="缺少 script"), 400
+
+
+
+
     video_model = (data.get("video_model") or "").strip() or None
+    if video_model and video_model not in _cfg_video_models():
+        print(f"[OPT-诊断] 分镜模型 {video_model!r} 不属于当前生效家，回落 {_cfg_video_model()!r}", flush=True)
+        video_model = None
     rows = _load_registry_rows(job_id)
     try:
-        result = _optimize(script, rows, llm_model, video_model)
+        result = _optimize_checked(script, rows, llm_model, video_model)
+    except ShotBudgetViolation as e:
+
+        return jsonify(error=str(e)), 400
     except RuntimeError as e:
 
         import traceback as _tb
@@ -3895,6 +4737,10 @@ def api_optimizer():
 
         result["video_model"] = video_model or _cfg_video_model()
         result["sec_bounds"] = list(_seg_bounds(video_model))
+        _assign_group_no(result.get("shots"), result["video_model"])
+        _gate = _shot_budget_gate(result.get("shots"), result["video_model"])
+        if _gate:
+            return jsonify(error=_gate), 400
     return jsonify(result)
 
 
@@ -3932,12 +4778,27 @@ def api_create_job():
             return jsonify(error="需要 script 或 shots"), 400
         rows = _load_registry_rows(job_id)
         try:
-            opt = _optimize(script, rows, video_model=gen_params["model"])
+
+
+
+            _sb_model = (gen_params["model"] if gen_params["model"] in _cfg_video_models()
+                         else _cfg_video_model())
+            opt = _optimize_checked(script, rows, video_model=_sb_model)
             shots = opt["shots"]
+        except ShotBudgetViolation as e:
+            return jsonify(error=str(e)), 400
         except Exception as e:
             return jsonify(error=f"优化失败：{e}"), 500
     if not shots:
         return jsonify(error="未产出分镜"), 400
+
+
+    _assign_group_no(shots, gen_params["model"])
+
+
+    _gate = _shot_budget_gate(shots, gen_params["model"])
+    if _gate:
+        return jsonify(error=_gate), 400
 
     assets_json = json.dumps(_pack_assets(data.get("assets", [])), ensure_ascii=False)
     shots_json = json.dumps(shots, ensure_ascii=False)
@@ -4018,7 +4879,6 @@ def api_create_job():
 
 
 
-        _sb_lo, _sb_hi = _seg_bounds(gen_params["model"])
         for idx, s in enumerate(shots, start=1):
             aspect = (s.get("aspect_ratio") or "").strip() or seg_aspect
             resolution = (s.get("resolution") or "").strip() or seg_resolution
@@ -4026,12 +4886,11 @@ def api_create_job():
                 _sec = int(s.get("estimated_seconds") or 5)
             except (TypeError, ValueError):
                 _sec = 5
-            _sec = max(_sb_lo, min(_sb_hi, _sec))
             con.execute(
                 """INSERT INTO lv_segments(job_id,seg_no,shot_no,is_continuation,prompt,seconds,
                    images_keys,images_urls,audio_urls,audio,mode,aspect_ratio,resolution,status,started_at,created_at,updated_at,prompt_history,
-                   post_refine,post_face)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   post_refine,post_face,group_id)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     job_id, idx, s.get("shot_no", idx),
                     1 if s.get("is_continuation") else 0,
@@ -4049,6 +4908,7 @@ def api_create_job():
 
                     json.dumps(s.get("post_refine") or {}, ensure_ascii=False) if s.get("post_refine") else None,
                     json.dumps(s.get("post_face") or {}, ensure_ascii=False) if s.get("post_face") else None,
+                    str(s.get("group_no") or idx),
                 ),
             )
 
@@ -4092,6 +4952,12 @@ def api_save_draft():
         _new_name = (data.get("name") or "").strip()[:60] or None
     else:
         _new_name = None
+
+
+    _assign_group_no(shots, gen_params["model"])
+    _gate = _shot_budget_gate(shots, gen_params["model"])
+    if _gate:
+        return jsonify(error=_gate), 400
     assets_json = json.dumps(_pack_assets(assets), ensure_ascii=False)
     shots_json = json.dumps(shots, ensure_ascii=False)
     gen_params_json = json.dumps(gen_params, ensure_ascii=False)
@@ -4158,6 +5024,9 @@ def api_get_job(job_id):
         except Exception:
             return []
     job = dict(job)
+    _shots = _jsonl(job, "shots_json")
+    _model = _stored_model(job.get("gen_params_json"))
+    _assign_group_no(_shots, _model)
     seg_norm = []
     for s in segs:
         s = dict(s)
@@ -4226,15 +5095,37 @@ def api_get_job(job_id):
         segments=seg_norm,
         final_url=job.get("final_url"),
         script=job.get("script"),
-        stage=job.get("stage"),
+        stage=_derive_stage(job.get("status"), job.get("stage"),
+                            job.get("segment_count") or len(seg_norm)),
         assets=_attach_appearance(json.loads(job.get("assets_json") or "[]")),
-        shots=json.loads(job.get("shots_json") or "[]"),
+        shots=_shots,
+        shots_budget_error=_shot_budget_gate(_shots, _model),
         gen_params=_norm_gen_params(json.loads(job.get("gen_params_json") or "{}")),
         shots_history=shots_hist_meta,
         current_shot_ver=job.get("current_shot_ver"),
 
         queue_state=_qstate,
     )
+
+
+_DRAFT_STAGES = ("素材登记", "分镜预览")
+
+
+def _derive_stage(status, stored, seg_count=0):
+    
+    st = (status or "").strip()
+    if st == "completed":
+        return "成片预览"
+    if st == "cancelled":
+        return "已停止"
+    if st == "failed":
+        return "失败"
+    if st in ("processing", "pending", "running"):
+        return (stored or "").strip() or "生成中"
+    _s = (stored or "").strip()
+    if _s in _DRAFT_STAGES:
+        return _s
+    return "分镜预览" if seg_count else "素材登记"
 
 
 @lv_bp.route("/jobs", methods=["GET"])
@@ -4254,12 +5145,7 @@ def api_list_jobs():
                 "SELECT status FROM lv_segments WHERE job_id=?", (j["id"],)
             ).fetchall()
             done = sum(1 for s in segs if s["status"] == "completed")
-            stage = j.get("stage") or (
-                "生成中" if j["status"] == "processing" else
-                "成片预览" if j["status"] == "completed" else
-                "失败" if j["status"] == "failed" else
-                "草稿"
-            )
+            stage = _derive_stage(j["status"], j.get("stage"), j.get("segment_count") or 0)
 
 
             _name = (j.get("name") or "").strip()
@@ -4419,15 +5305,16 @@ def api_reedit_job(job_id):
     
     con = _db()
     try:
-        job = con.execute("SELECT id,status FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
+        job = con.execute("SELECT id,status,segment_count FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
         if not job:
             return jsonify(error="not found"), 404
         if job["status"] == "processing":
             return jsonify(error="任务生成中，请等待完成后再重新编排"), 409
         if job["status"] == "draft":
             return jsonify(ok=True, skipped=True, status="draft")
-        con.execute("UPDATE lv_jobs SET status='draft', error=NULL, updated_at=? WHERE id=?",
-                    (time.time(), job_id))
+
+        con.execute("UPDATE lv_jobs SET status='draft', stage=?, error=NULL, updated_at=? WHERE id=?",
+                    (_derive_stage("draft", None, job["segment_count"] or 0), time.time(), job_id))
         con.commit()
     finally:
         con.close()
@@ -4444,12 +5331,20 @@ def api_save_shots(job_id):
         return jsonify(error="shots 必须为非空数组"), 400
     con = _db()
     try:
-        job = con.execute("SELECT id, status FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
+        job = con.execute(
+            "SELECT id, status, gen_params_json FROM lv_jobs WHERE id=?", (job_id,)
+        ).fetchone()
         if not job:
             return jsonify(error="not found"), 404
 
         if job["status"] not in (None, "", "draft"):
             return jsonify(error="原任务已进入生成，迟到分镜不予写入"), 409
+
+        _model = _stored_model(job["gen_params_json"])
+        _assign_group_no(shots, _model)
+        _gate = _shot_budget_gate(shots, _model)
+        if _gate:
+            return jsonify(error=_gate), 400
         if isinstance(script, str) and script:
             con.execute(
                 "UPDATE lv_jobs SET shots_json=?, segment_count=?, stage=?, script=?, updated_at=? WHERE id=?",
@@ -4476,9 +5371,14 @@ def api_archive_shots(job_id):
         return jsonify(error="shots 必须为非空数组"), 400
     con = _db()
     try:
-        job = con.execute("SELECT shots_history FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
+        job = con.execute("SELECT shots_history, gen_params_json FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
         if not job:
             return jsonify(error="not found"), 404
+        _model = _stored_model(job["gen_params_json"])
+        _assign_group_no(shots, _model)
+        _gate = _shot_budget_gate(shots, _model)
+        if _gate:
+            return jsonify(error=_gate), 400
         try:
             hist = json.loads(job["shots_history"] or "[]")
             if not isinstance(hist, list):
@@ -4535,9 +5435,14 @@ def api_update_shots_history(job_id, idx):
         return jsonify(error="shots 必须为数组"), 400
     con = _db()
     try:
-        job = con.execute("SELECT shots_history FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
+        job = con.execute("SELECT shots_history, gen_params_json FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
         if not job:
             return jsonify(error="not found"), 404
+        _model = _stored_model(job["gen_params_json"])
+        _assign_group_no(shots, _model)
+        _gate = _shot_budget_gate(shots, _model)
+        if _gate:
+            return jsonify(error=_gate), 400
         try:
             hist = json.loads(job["shots_history"] or "[]")
             if not isinstance(hist, list):
@@ -4563,7 +5468,7 @@ def api_get_shots_history(job_id, idx):
     
     con = _db()
     try:
-        job = con.execute("SELECT shots_history FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
+        job = con.execute("SELECT shots_history, gen_params_json FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
         if not job:
             return jsonify(error="not found"), 404
         try:
@@ -4572,6 +5477,11 @@ def api_get_shots_history(job_id, idx):
             hist = []
         if idx < 0 or idx >= len(hist):
             return jsonify(error="版本不存在"), 404
+        _model = _stored_model(job["gen_params_json"])
+        _assign_group_no(hist[idx].get("shots"), _model)
+        _gate = _shot_budget_gate(hist[idx].get("shots"), _model)
+        if _gate:
+            return jsonify(error=_gate), 400
         return jsonify(ok=True, version=hist[idx])
     finally:
         con.close()
@@ -5339,8 +6249,28 @@ def _resume_stuck_jobs():
         logging.getLogger(__name__).warning("启动续跑扫描失败：%s", e)
 
 
+def _reap_orphan_segments():
+    
+    con = _db()
+    try:
+        n = con.execute(
+            "UPDATE lv_segments SET status='cancelled', updated_at=? "
+            "WHERE status='processing' AND job_id IN ("
+            "  SELECT id FROM lv_jobs "
+            "  WHERE COALESCE(status,'') NOT IN ('processing','pending','running'))",
+            (time.time(),),
+        ).rowcount
+        con.commit()
+    finally:
+        con.close()
+    if n:
+        logging.getLogger(__name__).info("启动对账：%d 个中断的在飞段已置为已停止", n)
+
+
 def register_longvideo(app):
     
     app.register_blueprint(lv_bp)
+
+    _reap_orphan_segments()
 
     _resume_stuck_jobs()

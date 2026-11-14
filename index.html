@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0" data-page-node-id="eHaf3KuCAKCdvpKdQUGKmW" />
 <title>视频生成工作台</title>
 
-<link rel="stylesheet" href="/api/base_style.css?v=20261109a">
+<link rel="stylesheet" href="/api/base_style.css?v=20261114a">
 <script>
 
 try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "session") document.documentElement.classList.add("boot-defer"); } catch (e) {}
@@ -72,17 +72,16 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
     <div class="prov-ttl">服务商设置</div>
   </div>
 <div class="prov-tabs" id="provTabs">
-      <button class="prov-tab on" id="provTabMedia" data-tab="media" type="button" title="视频生成 / 图片生成 / 猫灵助手 / 长视频分镜引擎">Agnes</button>
-      <button class="prov-tab" id="provTabAudio" data-tab="audio" type="button" title="底部「音频生成」的基座语音合成服务（OpenRouter）">OpenRouter</button>
-      <button class="prov-tab" id="provTabMimo" data-tab="mimo" type="button" title="小米 MiMo · 语音合成（音色复刻 / 文字设计音色），可与 OpenRouter 二选一">MiMo</button>
-      <button class="prov-tab" id="provTabArk" data-tab="ark" type="button" title="火山方舟 · 豆包 Seedream 生图 + 豆包 Seedance 视频">火山方舟</button>
-      <button class="prov-tab" id="provTabRh" data-tab="rh" type="button" title="RunningHub · MiniMax H3（视频：多段 + 原生音频 + 生成采样）">RunningHub</button>
-      <button class="prov-tab" id="provTabMs" data-tab="ms" type="button" title="魔搭社区 ModelScope · 生图与多角度改机位 + 猫灵助手与长视频分镜引擎">魔搭</button>
-      <button class="prov-tab" id="provTabCustom" data-tab="custom" type="button" title="自定义 OpenAI 兼容接口 · 猫灵助手与长视频分镜引擎">自定义 OpenAI</button>
+      <button class="prov-tab on" id="provTabMedia" data-tab="media" type="button" title="视频 / 生图 / 文本模型">Agnes</button>
+      <button class="prov-tab" id="provTabAudio" data-tab="audio" type="button" title="音频">OpenRouter</button>
+      <button class="prov-tab" id="provTabMimo" data-tab="mimo" type="button" title="音频">MiMo</button>
+      <button class="prov-tab" id="provTabArk" data-tab="ark" type="button" title="生图 / 视频">火山方舟</button>
+      <button class="prov-tab" id="provTabRh" data-tab="rh" type="button" title="视频">RunningHub</button>
+      <button class="prov-tab" id="provTabMs" data-tab="ms" type="button" title="生图 / 文本模型">魔搭</button>
+      <button class="prov-tab" id="provTabCustom" data-tab="custom" type="button" title="文本模型">自定义 OpenAI</button>
     </div>
     <div class="prov-body">
       <div class="prov-pane" id="provPaneMedia">
-      <div class="prov-lead">视频生成、图片生成、猫灵助手与长视频分镜引擎，都走这一套 Agnes 端点。</div>
       <div class="prov-fld">
         <label for="provBase">接口地址（Base URL）</label>
         <input id="provBase" type="text" spellcheck="false" autocomplete="off" placeholder="https://api.agnes-ai.cn/v1">
@@ -97,87 +96,72 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
         <input id="provPoll" type="text" spellcheck="false" autocomplete="off" placeholder="https://api.agnes-ai.cn/agnesapi">
       </div>
       <div class="prov-fld">
-        <label for="provAgentModels">助手模型（逗号分隔，首个为默认）</label>
-        <input id="provAgentModels" type="text" spellcheck="false" autocomplete="off" placeholder="agnes-3.0-flash, agnes-2.5-flash">
+        <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
+          <label class="prov-chk" for="agnesChatEnabled" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+            <input type="checkbox" id="agnesChatEnabled" style="margin:0">
+          </label>
+          <label for="provChatModels" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">文本模型（逗号分隔，首个为默认，勾选启用为文本模型服务商）</label>
+          <span class="prov-hint" id="agnesChatStateHint" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
+        </div>
+        <input id="provChatModels" type="text" spellcheck="false" autocomplete="off" placeholder="agnes-3.0-flash, agnes-2.5-flash">
         <div class="prov-hint">可接入：agnes-3.0-flash、agnes-2.5-flash</div>
-        <div class="prov-adv" id="provAgentAdv">
+        <div class="prov-adv" id="provChatAdv">
           <div class="adv-row">
-            <label title="不用管这个勾——Agnes 的模型本来就支持工具调用，勾不勾效果都一样"><input type="checkbox" id="provAgentCapsTools" checked> 工具调用</label>
-            <label title="不用管这个勾——Agnes 的模型本来就能看图，勾不勾效果都一样"><input type="checkbox" id="provAgentCapsVision" checked> 图片识别</label>
-            <label><input type="checkbox" id="provAgentThinking" checked> 思考模式</label>
+            <label title="不用管这个勾——Agnes 的模型本来就支持工具调用，勾不勾效果都一样"><input type="checkbox" id="provChatCapsTools" checked> 工具调用</label>
+            <label title="不用管这个勾——Agnes 的模型本来就能看图，勾不勾效果都一样"><input type="checkbox" id="provChatCapsVision" checked> 图片识别</label>
+            <label><input type="checkbox" id="provChatThinking" checked> 思考模式</label>
           </div>
-          <div class="adv-row" id="provAgentBudgetRow" hidden>
+          <div class="adv-row" id="provChatBudgetRow" hidden>
             <span class="adv-lbl">思考强度</span>
-            <div class="seg adv-seg-dis" id="segAgnesBudgetAssistant" title="Agnes 的思考是开关式（enable_thinking），接口无强度参数">
-              <select id="provAgentBudget" style="display:none" disabled>
+            <div class="seg adv-seg-dis" id="segAgnesBudget" title="Agnes 的思考是开关式（enable_thinking），接口无强度参数">
+              <select id="provChatBudget" style="display:none" disabled>
                 <option value="auto">自动</option>
                 <option value="low">低</option>
                 <option value="medium">中</option>
                 <option value="high">高</option>
               </select>
               <button type="button" class="seg-cur"><span class="seg-tx">自动</span><span class="seg-ar ic ic-chevron-down"></span></button>
-              <div class="seg-pop" data-seg="segAgnesBudgetAssistant"></div>
+              <div class="seg-pop" data-seg="segAgnesBudget"></div>
             </div>
             <span class="adv-note">本模型不支持强度调节（开关式思考）</span>
           </div>
           <div class="adv-row">
-            <span class="adv-lbl">输出上限</span><input type="text" id="provAgentMaxOutput" placeholder="留空 = 默认">
+            <span class="adv-lbl">输出上限</span><input type="text" id="provChatMaxOutput" placeholder="留空 = 默认">
             <span class="adv-note">token</span>
-            <span class="adv-lbl">上下文上限</span><input type="text" id="provAgentCtxLimit" placeholder="从模型文档抄">
+            <span class="adv-lbl">上下文上限</span><input type="text" id="provChatCtxLimit" placeholder="从模型文档抄">
             <span class="adv-note">token</span>
           </div>
         </div>
       </div>
       <div class="prov-fld">
-        <label for="provVideoModels">视频模型（逗号分隔，首个为默认）</label>
+        <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
+          <label class="prov-chk" for="agnesVideoEnabled" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+            <input type="checkbox" id="agnesVideoEnabled" style="margin:0">
+          </label>
+          <label for="provVideoModels" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">视频模型（逗号分隔，首个为默认，勾选启用为视频服务商）</label>
+          <span class="prov-hint" id="agnesVideoStateHint" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
+        </div>
         <input id="provVideoModels" type="text" spellcheck="false" autocomplete="off" placeholder="agnes-video-2.5-flash, agnes-video-2.5">
         <div class="prov-hint">可接入：agnes-video-2.5-flash、agnes-video-2.5</div>
       </div>
       <div class="prov-fld">
-        <label for="provImageModels">生图模型（逗号分隔，首个为默认）</label>
+        <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
+          <label class="prov-chk" for="agnesImageEnabled" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+            <input type="checkbox" id="agnesImageEnabled" style="margin:0">
+          </label>
+          <label for="provImageModels" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">生图模型（逗号分隔，首个为默认，勾选启用为生图服务商）</label>
+          <span class="prov-hint" id="agnesImageStateHint" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
+        </div>
         <input id="provImageModels" type="text" spellcheck="false" autocomplete="off" placeholder="agnes-image-2.1-flash, agnes-image-2.5-flash">
         <div class="prov-hint">可接入：agnes-image-2.1-flash、agnes-image-2.5-flash</div>
       </div>
-      <div class="prov-fld">
-        <label for="provLlmModels">分镜引擎模型（逗号分隔，首个为默认）</label>
-        <input id="provLlmModels" type="text" spellcheck="false" autocomplete="off" placeholder="agnes-2.5-flash, agnes-3.0-flash">
-        <div class="prov-hint">可接入：agnes-2.5-flash、agnes-3.0-flash</div>
-        <div class="prov-adv" id="provLlmAdv">
-          <div class="adv-row">
-            <label title="不用管这个勾——Agnes 的模型本来就支持工具调用，勾不勾效果都一样"><input type="checkbox" id="provLlmCapsTools" checked> 工具调用</label>
-            <label title="不用管这个勾——Agnes 的模型本来就能看图，勾不勾效果都一样"><input type="checkbox" id="provLlmCapsVision" checked> 图片识别</label>
-            <label><input type="checkbox" id="provLlmThinking"> 思考模式</label>
-          </div>
-          <div class="adv-row" id="provLlmBudgetRow" hidden>
-            <span class="adv-lbl">思考强度</span>
-            <div class="seg adv-seg-dis" id="segAgnesBudgetStoryboard" title="Agnes 的思考是开关式（enable_thinking），接口无强度参数">
-              <select id="provLlmBudget" style="display:none" disabled>
-                <option value="auto">自动</option>
-                <option value="low">低</option>
-                <option value="medium">中</option>
-                <option value="high">高</option>
-              </select>
-              <button type="button" class="seg-cur"><span class="seg-tx">自动</span><span class="seg-ar ic ic-chevron-down"></span></button>
-              <div class="seg-pop" data-seg="segAgnesBudgetStoryboard"></div>
-            </div>
-            <span class="adv-note">本模型不支持强度调节（开关式思考）</span>
-          </div>
-          <div class="adv-row">
-            <span class="adv-lbl">输出上限</span><input type="text" id="provLlmMaxOutput" placeholder="留空 = 默认">
-            <span class="adv-note">token</span>
-            <span class="adv-lbl">上下文上限</span><input type="text" id="provLlmCtxLimit" placeholder="从模型文档抄">
-            <span class="adv-note">token</span>
-          </div>
-        </div>
-      </div>
-      <div class="prov-test-row">
+            <div class="prov-test-row">
         <button class="prov-test" id="provTest">测试连接</button>
         <span class="prov-test-out" id="provTestOut"></span>
       </div>
       </div>
 
       <div class="prov-pane" id="provPaneAudio" style="display:none">
-        <div class="prov-lead">底部「音频生成」的语音合成服务，通过 OpenRouter 调用。</div>
         <div class="prov-fld">
           <label for="ttsBase">接口地址（Base URL）</label>
         <input id="ttsBase" type="text" spellcheck="false" autocomplete="off" placeholder="https://openrouter.ai/api/v1">
@@ -188,8 +172,14 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
         <a class="prov-key-link" href="https://openrouter.ai/sign-up" target="_blank" rel="noopener noreferrer">获取密钥</a>
       </div>
         <div class="prov-fld">
-          <label for="ttsModel">模型（逗号分隔，首个为默认）</label>
-        <input id="ttsModel" type="text" spellcheck="false" autocomplete="off" placeholder="fish-audio/s2.1-pro-free:free">
+          <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
+            <label class="prov-chk" for="openrouterTtsEnabled" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+              <input type="checkbox" id="openrouterTtsEnabled" style="margin:0">
+            </label>
+            <label for="ttsModel" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">模型（逗号分隔，首个为默认，勾选启用为音频服务商）</label>
+            <span class="prov-hint" id="openrouterTtsStateHint" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
+          </div>
+          <input id="ttsModel" type="text" spellcheck="false" autocomplete="off" placeholder="fish-audio/s2.1-pro-free:free">
         <div class="prov-hint">可接入：fish-audio/s2.1-pro-free:free。填多个即可在底部面板用「模型」菜单切换</div>
         </div>
         <div class="prov-test-row">
@@ -199,7 +189,6 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
       </div>
 
       <div class="prov-pane" id="provPaneMimo" style="display:none">
-        <div class="prov-lead">小米 MiMo 的语音合成服务，可整体替代 OpenRouter 承担底部「音频生成」；两家<b>只能选一家</b>，勾选即切换。</div>
         <div class="prov-fld">
           <label for="mimoBase">接口地址（Base URL）</label>
         <input id="mimoBase" type="text" spellcheck="false" autocomplete="off" placeholder="https://api.xiaomimimo.com/v1">
@@ -211,7 +200,7 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
       </div>
         <div class="prov-fld">
           <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
-            <label class="prov-chk" for="mimoEnabled" title="勾选 = 把底部「音频生成」切到小米 MiMo。音频服务商只能选一家，勾上这家会自动取消另一家。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+            <label class="prov-chk" for="mimoEnabled" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
               <input type="checkbox" id="mimoEnabled" style="margin:0">
             </label>
             <label for="mimoModels" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">模型（逗号分隔，首个为默认，勾选启用为音频服务商）</label>
@@ -227,7 +216,6 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
       </div>
 
       <div class="prov-pane" id="provPaneArk" style="display:none">
-        <div class="prov-lead">火山方舟（豆包 Seedream 生图 / 豆包 Seedance 视频），可整体替代 Agnes 承担生图与视频；两个开关各自独立。</div>
         <div class="prov-fld">
           <label for="arkBase">接口地址（Base URL）</label>
         <input id="arkBase" type="text" spellcheck="false" autocomplete="off" placeholder="https://ark.cn-beijing.volces.com/api/v3">
@@ -239,7 +227,7 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
       </div>
         <div class="prov-fld">
           <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
-            <label class="prov-chk" for="arkEnabled" title="勾选 = 把生图切到火山方舟。生图服务商只能选一家，勾上这家会自动取消另一家。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+            <label class="prov-chk" for="arkEnabled" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
               <input type="checkbox" id="arkEnabled" style="margin:0">
             </label>
             <label for="arkModels" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">生图模型（逗号分隔，首个为默认，勾选启用为生图服务商）</label>
@@ -250,7 +238,7 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
         </div>
         <div class="prov-fld">
           <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
-            <label class="prov-chk" for="arkVideoEnabled" title="勾选 = 把视频切到火山方舟（Agnes 视频停用）；取消 = 回 Agnes 视频。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+            <label class="prov-chk" for="arkVideoEnabled" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
               <input type="checkbox" id="arkVideoEnabled" style="margin:0">
             </label>
             <label for="arkVideoModels" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">视频模型（逗号分隔，首个为默认，勾选启用为视频服务商）</label>
@@ -266,7 +254,6 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
       </div>
 
       <div class="prov-pane" id="provPaneRh" style="display:none">
-        <div class="prov-lead">RunningHub · MiniMax H3（视频上游：多段一气呵成 + 原生音画同步 + 生成采样）。视频服务商三选一：Agnes / 火山方舟 / RunningHub，勾选本页 = 视频走 MiniMax H3，取消落回Agnes。</div>
         <div class="prov-fld">
           <label for="rhBase">接口地址（Base URL）</label>
           <input id="rhBase" type="text" spellcheck="false" autocomplete="off" placeholder="https://www.runninghub.cn">
@@ -294,23 +281,23 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
         </div>
         <div class="prov-fld">
           <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
-            <label class="prov-chk" for="rhVideoEnabled" title="勾选 = 把视频切到 MiniMax H3（方舟视频自动取消，互斥）；取消 = 回 Agnes 视频。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+            <label class="prov-chk" for="rhVideoEnabled" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
               <input type="checkbox" id="rhVideoEnabled" style="margin:0">
             </label>
-            <label for="rhWorkflow" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">工作流 ID（MiniMax H3导演台）</label>
+            <label for="rhWorkflow" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">MiniMax H3（不支持修改，勾选启用为视频服务商）</label>
             <span class="prov-hint" id="rhVideoStateHint" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
           </div>
-          <input id="rhWorkflow" type="text" spellcheck="false" autocomplete="off" placeholder="2084788947984666625">
+          <input id="rhWorkflow" type="text" spellcheck="false" autocomplete="off" placeholder="2114605659261071361">
           <div class="prov-hint">接入：MiniMax H3 / Lora加速 / 二次采样 / 脸部修复</div>
         </div>
         <div class="prov-test-row">
           <button class="prov-test" id="rhTest">测试连接</button>
           <span class="prov-test-out" id="rhTestOut"></span>
         </div>
+
       </div>
 
       <div class="prov-pane" id="provPaneMs" style="display:none">
-        <div class="prov-lead">魔搭社区（ModelScope）API-Inference，可整体替代 Agnes 承担生图，也可作为猫灵助手与长视频分镜引擎（各自独立切换，留空 = 回落 Agnes）。</div>
         <div class="prov-fld">
           <label for="msBase">接口地址（Base URL）</label>
         <input id="msBase" type="text" spellcheck="false" autocomplete="off" placeholder="https://api-inference.modelscope.cn/v1">
@@ -322,7 +309,7 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
       </div>
         <div class="prov-fld">
           <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
-            <label class="prov-chk" for="msEnabled" title="勾选 = 把生图切到魔搭。生图服务商只能选一家，勾上这家会自动取消另一家。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+            <label class="prov-chk" for="msEnabled" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
               <input type="checkbox" id="msEnabled" style="margin:0">
             </label>
             <label for="msModels" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">生图模型（逗号分隔，首个为默认，勾选启用为生图服务商）</label>
@@ -344,88 +331,49 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
         </div>
         <div class="prov-fld">
           <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
-            <label class="prov-chk" for="provMsChatAssistantEnabled" title="勾选 = 猫灵助手（智能模式）切换到魔搭接口；不勾选 = 回落 Agnes。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
-              <input type="checkbox" id="provMsChatAssistantEnabled" style="margin:0">
+            <label class="prov-chk" for="provMsChatEnabled" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+              <input type="checkbox" id="provMsChatEnabled" style="margin:0">
             </label>
-            <label for="provMsChatModelsAssistant" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">助手模型（逗号分隔，首个为默认，勾选切换到魔搭接口）</label>
-            <span class="prov-hint" id="provMsChatAssistantState" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
+            <label for="provMsChatModels" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">文本模型</label>
+            <span class="prov-hint" id="provMsChatState" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
           </div>
-          <input id="provMsChatModelsAssistant" type="text" spellcheck="false" autocomplete="off" placeholder="模型所有者/模型名（如 Qwen/Qwen3.8-Flash-Next）">
+          <input id="provMsChatModels" type="text" spellcheck="false" autocomplete="off" placeholder="模型所有者/模型名（如 Qwen/Qwen3.8-Flash-Next）">
           <div class="prov-hint">可接入：魔搭 API-Inference 任意兼容 /v1/chat/completions 的对话模型</div>
-          <div class="prov-adv" id="provMsAdvAssistant">
+          <div class="prov-adv" id="provMsAdv">
             <div class="adv-row">
-              <label><input type="checkbox" id="provMsAdvAssistantTools" checked> 工具调用</label>
-              <label><input type="checkbox" id="provMsAdvAssistantVision" checked> 图片识别</label>
-              <label><input type="checkbox" id="provMsAdvAssistantThinking" checked> 思考模式</label>
+              <label><input type="checkbox" id="provMsAdvTools" checked> 工具调用</label>
+              <label><input type="checkbox" id="provMsAdvVision" checked> 图片识别</label>
+              <label><input type="checkbox" id="provMsAdvThinking" checked> 思考模式</label>
             </div>
-            <div class="adv-row" id="provMsBudgetAssistantRow" hidden>
+            <div class="adv-row" id="provMsBudgetRow" hidden>
               <span class="adv-lbl">思考强度</span>
-              <div class="seg" id="segMsBudgetAssistant">
-                <select id="provMsBudgetAssistant" style="display:none">
+              <div class="seg" id="segMsBudget">
+                <select id="provMsBudget" style="display:none">
                   <option value="auto">自动</option>
                   <option value="low">低</option>
                   <option value="medium">中</option>
                   <option value="high">高</option>
                 </select>
                 <button type="button" class="seg-cur"><span class="seg-tx">自动</span><span class="seg-ar ic ic-chevron-down"></span></button>
-                <div class="seg-pop" data-seg="segMsBudgetAssistant"></div>
+                <div class="seg-pop" data-seg="segMsBudget"></div>
               </div>
               <span class="adv-note">档位切换根据模型实际反馈为准，不做保障</span>
             </div>
             <div class="adv-row">
-              <span class="adv-lbl">输出上限</span><input type="text" id="provMsMaxOutputAssistant" placeholder="留空 = 默认">
+              <span class="adv-lbl">输出上限</span><input type="text" id="provMsMaxOutput" placeholder="留空 = 默认">
               <span class="adv-note">token</span>
-              <span class="adv-lbl">上下文上限</span><input type="text" id="provMsCtxAssistant" placeholder="从模型文档抄">
-              <span class="adv-note">token</span>
-            </div>
-          </div>
-        </div>
-        <div class="prov-fld">
-          <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
-            <label class="prov-chk" for="provMsChatStoryboardEnabled" title="勾选 = 长视频分镜引擎切换到魔搭接口；不勾选 = 回落 Agnes。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
-              <input type="checkbox" id="provMsChatStoryboardEnabled" style="margin:0">
-            </label>
-            <label for="provMsChatModelsStoryboard" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">分镜引擎模型（逗号分隔，首个为默认，勾选切换到魔搭接口）</label>
-            <span class="prov-hint" id="provMsChatStoryboardState" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
-          </div>
-          <input id="provMsChatModelsStoryboard" type="text" spellcheck="false" autocomplete="off" placeholder="模型所有者/模型名（如 Qwen/Qwen3.8-Flash-Next）">
-          <div class="prov-hint">可接入：魔搭 API-Inference 任意兼容 /v1/chat/completions 的对话模型</div>
-          <div class="prov-adv" id="provMsAdvStoryboard">
-            <div class="adv-row">
-              <label><input type="checkbox" id="provMsAdvStoryboardTools" checked> 工具调用</label>
-              <label><input type="checkbox" id="provMsAdvStoryboardVision" checked> 图片识别</label>
-              <label><input type="checkbox" id="provMsAdvStoryboardThinking"> 思考模式</label>
-            </div>
-            <div class="adv-row" id="provMsBudgetStoryboardRow" hidden>
-              <span class="adv-lbl">思考强度</span>
-              <div class="seg" id="segMsBudgetStoryboard">
-                <select id="provMsBudgetStoryboard" style="display:none">
-                  <option value="auto">自动</option>
-                  <option value="low">低</option>
-                  <option value="medium">中</option>
-                  <option value="high">高</option>
-                </select>
-                <button type="button" class="seg-cur"><span class="seg-tx">自动</span><span class="seg-ar ic ic-chevron-down"></span></button>
-                <div class="seg-pop" data-seg="segMsBudgetStoryboard"></div>
-              </div>
-              <span class="adv-note">档位切换根据模型实际反馈为准，不做保障</span>
-            </div>
-            <div class="adv-row">
-              <span class="adv-lbl">输出上限</span><input type="text" id="provMsMaxOutputStoryboard" placeholder="留空 = 默认">
-              <span class="adv-note">token</span>
-              <span class="adv-lbl">上下文上限</span><input type="text" id="provMsCtxStoryboard" placeholder="从模型文档抄">
+              <span class="adv-lbl">上下文上限</span><input type="text" id="provMsCtx" placeholder="从模型文档抄">
               <span class="adv-note">token</span>
             </div>
           </div>
         </div>
-        <div class="prov-test-row">
+                <div class="prov-test-row">
           <button class="prov-test" id="msTest">测试连接</button>
           <span class="prov-test-out" id="msTestOut"></span>
         </div>
       </div>
 
       <div class="prov-pane" id="provPaneCustom" style="display:none">
-        <div class="prov-lead">自定义 OpenAI 兼容接口（本地 Ollama·vLLM 均可），用于猫灵助手与长视频分镜引擎。</div>
         <div class="prov-fld">
           <label for="customBase">接口地址（Base URL，OpenAI 兼容）</label>
           <input id="customBase" type="text" spellcheck="false" autocomplete="off" placeholder="https://api.deepseek.com/v1">
@@ -437,81 +385,43 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
         </div>
         <div class="prov-fld">
           <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
-            <label class="prov-chk" for="provCustomChatAssistantEnabled" title="勾选 = 猫灵助手（智能模式）切换到本接口；不勾选 = 回落 Agnes / 魔搭。勾选本页会自动取消魔搭页同用例的勾选。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
-              <input type="checkbox" id="provCustomChatAssistantEnabled" style="margin:0">
+            <label class="prov-chk" for="provCustomChatEnabled" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
+              <input type="checkbox" id="provCustomChatEnabled" style="margin:0">
             </label>
-            <label for="provCustomChatModelsAssistant" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">助手模型（逗号分隔，首个为默认，勾选切换到本接口）</label>
-            <span class="prov-hint" id="provCustomChatAssistantState" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
+            <label for="provCustomChatModels" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">文本模型</label>
+            <span class="prov-hint" id="provCustomChatState" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
           </div>
-          <input id="provCustomChatModelsAssistant" type="text" spellcheck="false" autocomplete="off" placeholder="模型名（如 deepseek-chat）">
+          <input id="provCustomChatModels" type="text" spellcheck="false" autocomplete="off" placeholder="模型名（如 deepseek-chat）">
           <div class="prov-hint">填任意该服务提供的对话模型 ID（多模型用逗号分隔，首项为默认）</div>
-          <div class="prov-adv" id="provCustomAdvAssistant">
+          <div class="prov-adv" id="provCustomAdv">
             <div class="adv-row">
-              <label><input type="checkbox" id="provCustomAdvAssistantTools" checked> 工具调用</label>
-              <label><input type="checkbox" id="provCustomAdvAssistantVision" checked> 图片识别</label>
-              <label><input type="checkbox" id="provCustomAdvAssistantThinking" checked> 思考模式</label>
+              <label><input type="checkbox" id="provCustomAdvTools" checked> 工具调用</label>
+              <label><input type="checkbox" id="provCustomAdvVision" checked> 图片识别</label>
+              <label><input type="checkbox" id="provCustomAdvThinking" checked> 思考模式</label>
             </div>
-            <div class="adv-row" id="provCustomBudgetAssistantRow" hidden>
+            <div class="adv-row" id="provCustomBudgetRow" hidden>
               <span class="adv-lbl">思考强度</span>
-              <div class="seg" id="segCustomBudgetAssistant">
-                <select id="provCustomBudgetAssistant" style="display:none">
+              <div class="seg" id="segCustomBudget">
+                <select id="provCustomBudget" style="display:none">
                   <option value="auto">自动</option>
                   <option value="low">低</option>
                   <option value="medium">中</option>
                   <option value="high">高</option>
                 </select>
                 <button type="button" class="seg-cur"><span class="seg-tx">自动</span><span class="seg-ar ic ic-chevron-down"></span></button>
-                <div class="seg-pop" data-seg="segCustomBudgetAssistant"></div>
+                <div class="seg-pop" data-seg="segCustomBudget"></div>
               </div>
               <span class="adv-note">透传 reasoning_effort，不支持的服务会忽略</span>
             </div>
             <div class="adv-row">
-              <span class="adv-lbl">输出上限</span><input type="text" id="provCustomMaxOutputAssistant" placeholder="留空 = 默认">
+              <span class="adv-lbl">输出上限</span><input type="text" id="provCustomMaxOutput" placeholder="留空 = 默认">
               <span class="adv-note">token</span>
-              <span class="adv-lbl">上下文上限</span><input type="text" id="provCustomCtxAssistant" placeholder="从模型文档抄">
-              <span class="adv-note">token</span>
-            </div>
-          </div>
-        </div>
-        <div class="prov-fld">
-          <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
-            <label class="prov-chk" for="provCustomChatStoryboardEnabled" title="勾选 = 长视频分镜引擎切换到本接口；不勾选 = 回落 Agnes / 魔搭。勾选本页会自动取消魔搭页同用例的勾选。" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
-              <input type="checkbox" id="provCustomChatStoryboardEnabled" style="margin:0">
-            </label>
-            <label for="provCustomChatModelsStoryboard" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">分镜引擎模型（逗号分隔，首个为默认，勾选切换到本接口）</label>
-            <span class="prov-hint" id="provCustomChatStoryboardState" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
-          </div>
-          <input id="provCustomChatModelsStoryboard" type="text" spellcheck="false" autocomplete="off" placeholder="模型名（如 deepseek-chat）">
-          <div class="prov-hint">填任意该服务提供的对话模型 ID（建议选支持结构化输出 / 工具调用的模型）</div>
-          <div class="prov-adv" id="provCustomAdvStoryboard">
-            <div class="adv-row">
-              <label><input type="checkbox" id="provCustomAdvStoryboardTools" checked> 工具调用</label>
-              <label><input type="checkbox" id="provCustomAdvStoryboardVision" checked> 图片识别</label>
-              <label><input type="checkbox" id="provCustomAdvStoryboardThinking"> 思考模式</label>
-            </div>
-            <div class="adv-row" id="provCustomBudgetStoryboardRow" hidden>
-              <span class="adv-lbl">思考强度</span>
-              <div class="seg" id="segCustomBudgetStoryboard">
-                <select id="provCustomBudgetStoryboard" style="display:none">
-                  <option value="auto">自动</option>
-                  <option value="low">低</option>
-                  <option value="medium">中</option>
-                  <option value="high">高</option>
-                </select>
-                <button type="button" class="seg-cur"><span class="seg-tx">自动</span><span class="seg-ar ic ic-chevron-down"></span></button>
-                <div class="seg-pop" data-seg="segCustomBudgetStoryboard"></div>
-              </div>
-              <span class="adv-note">透传 reasoning_effort，不支持的服务会忽略</span>
-            </div>
-            <div class="adv-row">
-              <span class="adv-lbl">输出上限</span><input type="text" id="provCustomMaxOutputStoryboard" placeholder="留空 = 默认">
-              <span class="adv-note">token</span>
-              <span class="adv-lbl">上下文上限</span><input type="text" id="provCustomCtxStoryboard" placeholder="从模型文档抄">
+              <span class="adv-lbl">上下文上限</span><input type="text" id="provCustomCtx" placeholder="从模型文档抄">
               <span class="adv-note">token</span>
             </div>
           </div>
         </div>
-        <div class="prov-test-row">
+                <div class="prov-test-row">
           <button class="prov-test" id="customTest">测试连接</button>
           <span class="prov-test-out" id="customTestOut"></span>
         </div>
@@ -600,10 +510,10 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
         </div>
 
         <div class="seg" id="modelSel" data-seg="model" data-page-node-id="c3fDUcdxcN3kwJDqMWA5w7">
-          <button type="button" class="seg-cur" data-page-node-id="9bssGXHgHoobFyww1trCZF"><span class="seg-tx" data-page-node-id="XfKyAkf9IxXxYA9VbGWCkB">Agnes 2.5 Video Flash</span><span class="seg-ar ic ic-chevron-down" data-page-node-id="i3G58wRP5g79NluGGRneWj"></span></button>
+          <button type="button" class="seg-cur" data-page-node-id="9bssGXHgHoobFyww1trCZF"><span class="seg-tx" data-page-node-id="XfKyAkf9IxXxYA9VbGWCkB"></span><span class="seg-ar ic ic-chevron-down" data-page-node-id="i3G58wRP5g79NluGGRneWj"></span></button>
           <select id="model" style="display:none" data-page-node-id="ec8kntDJPT5KkLDB99avFj">
-            <option value="agnes-video-2.5-flash" selected data-page-node-id="oSsRVEe1wKhyCffO4eHgYZ">Agnes 2.5 Video Flash</option>
-            <option value="agnes-video-2.5" data-page-node-id="m1EMB5KabEGMaotSlY7nqd">Agnes 2.5 Video</option>
+            <option value="agnes-video-2.5-flash" selected data-page-node-id="oSsRVEe1wKhyCffO4eHgYZ"></option>
+            <option value="agnes-video-2.5" data-page-node-id="m1EMB5KabEGMaotSlY7nqd"></option>
           </select>
           <div class="seg-pop" data-page-node-id="F1VSI6MdOjPI89iMPuzVjH"></div>
         </div>
@@ -668,6 +578,10 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
               <path d="M6 14.5l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9L3.7 17l1.9-.7.7-1.9z"/>
             </svg>
           </button>
+          
+          <button type="button" class="polish-btn" id="h3PromptOpt" title="优化提示词（H3 六段）" style="display:none">
+            <span class="ic ic-spark" aria-hidden="true" style="width:22px;height:22px"></span>
+          </button>
           <button class="send" id="send" title="生成" data-page-node-id="aaraEf2BHrY8rbIGNdPtiO"><span class="ic ic-arrow-up" data-page-node-id="E3lpQBLKoHJGdRwYpbj7I1"></span></button>
         </div>
       </div>
@@ -681,7 +595,7 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
 
 <script src="/api/waveform.js?v=20261010a"></script>
 
-<script src="/api/longvideo_ui.js?v=20261108b"></script>
+<script src="/api/longvideo_ui.js?v=20261114a"></script>
 <div class="at-pop" id="atpop" data-page-node-id="RouEFDOwMOhgyF1Ngo2Ym9">
   <div class="at-hd" id="atHead" data-page-node-id="i0vFw3jzxFqIJpw8v6A4QP">选择素材插入</div>
   <div id="atList" data-page-node-id="l2hwoVK4rSw6pEqG2URnEL"></div>
@@ -788,7 +702,7 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
   <div class="atp-list" id="agentTopicList"></div>
 </div>
 
-<script src="/api/base_ui.js?v=20261109b"></script>
+<script src="/api/base_ui.js?v=20261114a"></script>
 
   <script src="/api/assets_ui.js?v=20260930g"></script>
   <script src="/api/assets_picker.js?v=20261104a"></script>
@@ -798,7 +712,7 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
   <script src="/api/canvas_manager.js?v=20261104a"></script>
   
   <script src="/api/canvas_timeline.js?v=20261104c"></script>
-  <script src="/api/canvas_stage.js?v=20261104k"></script>
+  <script src="/api/canvas_stage.js?v=20261113c"></script>
 <script src="/api/tts_upload.js?v=20260918d"></script>
 <script src="/api/audio_ui.js?v=20261104c"></script>
 

@@ -219,8 +219,12 @@ class RhSubmitter(SegmentSubmitter):
             "segments": segments,
 
 
+
+
+
+
             "images": common.get("images") or _aggregate_refs(segments),
-            "audios": common.get("audios") or [],
+            "audios": common.get("audios") or _aggregate_audio_refs(segments),
         }
 
         import server.runninghub_provider as _rh
@@ -252,6 +256,13 @@ def _aggregate_refs(segments):
         for x in (s.get("images") or []):
             if x and x not in seen:
                 seen.add(x); out.append(x)
+    return out
+
+
+def _aggregate_audio_refs(segments):
+    
+    seen, out = set(), []
+    for s in segments:
         for x in (s.get("audios") or []):
             if x and x not in seen:
                 seen.add(x); out.append(x)

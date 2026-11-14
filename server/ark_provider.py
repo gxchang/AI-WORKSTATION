@@ -241,7 +241,7 @@ def active_state():
     if en and key:
         return True, ""
     if en and not key:
-        return False, "已开启方舟生图，但未配置 ARK 访问密钥 —— 已回落 Agnes 生图"
+        return False, "尚未配置访问密钥。请点击左侧「服务商设置」填入密钥（或 .env 配置 AGNES_API_KEY 后重启）。"
     return False, ""
 
 
