@@ -913,7 +913,8 @@ def upload_material(src, kind="video", model=None, api_key_override=None):
         "success_action_status": (None, "200"),
         "file": (safe, blob),
     }
-    up = _rq.post(host, files=form, timeout=(10, 600))
+
+    up = _rq.post(host, files=form, timeout=(60, 600))
     if up.status_code != 200:
         raise RuntimeError(f"上传素材失败（{up.status_code}）：{up.text[:180]}")
     return f"oss://{obj_key}"

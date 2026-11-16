@@ -29,10 +29,15 @@ DEFAULTS = {
     "base_url": "https://ark.cn-beijing.volces.com/api/v3",
 
 
-    "image_models": ["doubao-seedream-4-0-250828"],
+    "image_models": ["doubao-seedream-5-5-261028", "doubao-seedream-5-0-flash-260915",
+                     "doubao-seedream-5-0-pro-260628", "doubao-seedream-5-0-260128",
+                     "doubao-seedream-5-0-lite-260128", "doubao-seedream-4-5-251128",
+                     "doubao-seedream-4-0-250828"],
 
 
-    "video_models": ["doubao-seedance-2-0-260128", "doubao-seedance-2-5-260628"],
+    "video_models": ["doubao-seedance-2-5-flash-261115", "doubao-seedance-2-5-260628",
+                     "doubao-seedance-2-0-260128", "doubao-seedance-2-0-fast-260128",
+                     "doubao-seedance-2-0-mini-260615"],
 }
 
 
@@ -357,11 +362,23 @@ def resolve_tier(size, limits):
 VIDEO_MODEL_LIMITS = {
     "doubao-seedance-2-5-260628": {
         "label": "豆包 Seedance 2.5",
-        "sizes": ["480p", "720p", "1080p"],
+        "sizes": ["480p", "720p", "1080p", "4k"],
         "min_seconds": 4, "max_seconds": 30,
         "max_images": 30, "max_audios": 10, "max_videos": 10, "allow_video": True,
         "submit_gap_base": 10,
-        "note": "时长 4~30s；参考图≤30 / 参考音频≤10 / 参考视频≤10（合计≤50）；成片 24h 有效自动转存",
+        "note": "时长 4~30s；支持 4K；参考图≤30 / 参考音频≤10 / 参考视频≤10（合计≤50）；成片 24h 有效自动转存",
+    },
+
+
+
+
+    "doubao-seedance-2-5-flash-261115": {
+        "label": "豆包 Seedance 2.5 Flash",
+        "sizes": ["480p", "720p"],
+        "min_seconds": 4, "max_seconds": 30,
+        "max_images": 10, "max_audios": 5, "max_videos": 5, "allow_video": True,
+        "submit_gap_base": 10,
+        "note": "时长 4~30s；仅 480p/720p；参考图≤10 / 参考音频≤5 / 参考视频≤5（合计≤20）；成片 24h 有效自动转存",
     },
     "doubao-seedance-2-0-260128": {
         "label": "豆包 Seedance 2.0",

@@ -72,6 +72,17 @@ MS_EDGE_HARD_MAX = 2048
 
 CAPS = {
 
+
+
+
+
+
+    "doubao-seedream-5-5-261028": {
+        "tiers": ["1K", "1.5K", "2K"], "min_px": 921600, "max_px": 4624220,
+        "max_ref_images": 10,
+        "sequential": False, "seed": False, "png": True,
+        "can_t2i": True, "can_edit": True,
+    },
     "doubao-seedream-5-0-pro-260628": {
         "tiers": ["1K", "1.5K", "2K"], "min_px": 921600, "max_px": 4624220,
         "max_ref_images": 10,

@@ -600,7 +600,7 @@ def _submit_video_to_ark(data):
             f"{base}/contents/generations/tasks",
             json=payload,
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            timeout=(10, 3600),
+            timeout=(60, 3600),
         )
     except requests.RequestException as e:
         return {"error": f"请求方舟 API 失败：{e}"}, 502
@@ -675,7 +675,7 @@ def _submit_video_to_wan(data):
         headers["X-DashScope-OssResourceResolve"] = "enable"
     try:
         resp = requests.post(_wanprov.create_url(), json=payload, headers=headers,
-                             timeout=(10, 3600))
+                             timeout=(60, 3600))
     except requests.RequestException as e:
         return {"error": f"请求百炼 API 失败：{e}"}, 502
     if resp.status_code != 200:
@@ -788,7 +788,7 @@ def _rh_upload_one(path_or_url, kind="image"):
         f"{base}/task/openapi/upload",
         files={"file": (name, blob)},
         data={"apiKey": _rhprov.api_key(), "fileType": "input"},
-        timeout=(10, 600),
+        timeout=(60, 600),
     )
     body = {}
     try:
@@ -1247,7 +1247,7 @@ def _submit_video_to_agnes(data):
                     "Content-Type": "application/json",
                 },
                 json=payload,
-                timeout=(10, 3600),
+                timeout=(60, 3600),
             )
             break
         except requests.exceptions.ReadTimeout as e:

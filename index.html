@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0" data-page-node-id="eHaf3KuCAKCdvpKdQUGKmW" />
 <title>视频生成工作台</title>
 
-<link rel="stylesheet" href="/api/base_style.css?v=20261116f">
+<link rel="stylesheet" href="/api/base_style.css?v=20261116i">
 <script>
 
 try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "session") document.documentElement.classList.add("boot-defer"); } catch (e) {}
@@ -177,7 +177,7 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
             <label class="prov-chk" for="openrouterTtsEnabled" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
               <input type="checkbox" id="openrouterTtsEnabled" style="margin:0">
             </label>
-            <label for="ttsModel" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">模型（逗号分隔，首个为默认，勾选启用为音频服务商）</label>
+            <label for="ttsModel" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">TTS模型（逗号分隔，首个为默认，勾选启用为音频服务商）</label>
             <span class="prov-hint" id="openrouterTtsStateHint" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
           </div>
           <input id="ttsModel" type="text" spellcheck="false" autocomplete="off" placeholder="fish-audio/s2.1-pro-free:free">
@@ -204,7 +204,7 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
             <label class="prov-chk" for="mimoEnabled" style="display:flex;align-items:center;margin:0;padding:0;line-height:1">
               <input type="checkbox" id="mimoEnabled" style="margin:0">
             </label>
-            <label for="mimoModels" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">模型（逗号分隔，首个为默认，勾选启用为音频服务商）</label>
+            <label for="mimoModels" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">TTS模型（逗号分隔，首个为默认，勾选启用为音频服务商）</label>
             <span class="prov-hint" id="mimoStateHint" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
           </div>
         <input id="mimoModels" type="text" spellcheck="false" autocomplete="off" placeholder="mimo-v2.5-tts, mimo-v2.5-tts-voiceclone, mimo-v2.5-tts-voicedesign">
@@ -234,8 +234,8 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
             <label for="arkModels" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">生图模型（逗号分隔，首个为默认，勾选启用为生图服务商）</label>
             <span class="prov-hint" id="arkStateHint" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
           </div>
-          <input id="arkModels" type="text" spellcheck="false" autocomplete="off" placeholder="doubao-seedream-4-0-250828, doubao-seedream-4-5-251128">
-          <div class="prov-hint">可接入：doubao-seedream-5-0-flash-260915、doubao-seedream-5-0-pro-260628、doubao-seedream-5-0-260128、doubao-seedream-5-0-lite-260128、doubao-seedream-4-5-251128、doubao-seedream-4-0-250828</div>
+          <input id="arkModels" type="text" spellcheck="false" autocomplete="off" placeholder="doubao-seedream-5-5-261028, doubao-seedream-5-0-flash-260915, doubao-seedream-5-0-pro-260628, doubao-seedream-5-0-260128, doubao-seedream-5-0-lite-260128, doubao-seedream-4-5-251128, doubao-seedream-4-0-250828">
+          <div class="prov-hint">可接入：doubao-seedream-5-5-261028、doubao-seedream-5-0-flash-260915、doubao-seedream-5-0-pro-260628、doubao-seedream-5-0-260128、doubao-seedream-5-0-lite-260128、doubao-seedream-4-5-251128、doubao-seedream-4-0-250828</div>
         </div>
         <div class="prov-fld">
           <div class="prov-label-row" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;margin-bottom:6px;overflow:hidden">
@@ -245,8 +245,8 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
             <label for="arkVideoModels" style="margin:0;padding:0;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">视频模型（逗号分隔，首个为默认，勾选启用为视频服务商）</label>
             <span class="prov-hint" id="arkVideoStateHint" style="white-space:nowrap;flex-shrink:0;line-height:1;margin:0;padding:0"></span>
           </div>
-          <input id="arkVideoModels" type="text" spellcheck="false" autocomplete="off" placeholder="doubao-seedance-2-0-260128, doubao-seedance-2-5-260628">
-          <div class="prov-hint">可接入：doubao-seedance-2-5-260628、doubao-seedance-2-0-260128、doubao-seedance-2-0-fast-260128、doubao-seedance-2-0-mini-260615</div>
+          <input id="arkVideoModels" type="text" spellcheck="false" autocomplete="off" placeholder="doubao-seedance-2-5-flash-261115, doubao-seedance-2-5-260628, doubao-seedance-2-0-260128, doubao-seedance-2-0-fast-260128, doubao-seedance-2-0-mini-260615">
+          <div class="prov-hint">可接入：doubao-seedance-2-5-flash-261115、doubao-seedance-2-5-260628、doubao-seedance-2-0-260128、doubao-seedance-2-0-fast-260128、doubao-seedance-2-0-mini-260615</div>
         </div>
         <div class="prov-test-row">
           <button class="prov-test" id="arkTest">测试连接</button>
@@ -686,7 +686,7 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
 
 <script src="/api/waveform.js?v=20261010a"></script>
 
-<script src="/api/longvideo_ui.js?v=20261116f"></script>
+<script src="/api/longvideo_ui.js?v=20261116i"></script>
 <div class="at-pop" id="atpop" data-page-node-id="RouEFDOwMOhgyF1Ngo2Ym9">
   <div class="at-hd" id="atHead" data-page-node-id="i0vFw3jzxFqIJpw8v6A4QP">选择素材插入</div>
   <div id="atList" data-page-node-id="l2hwoVK4rSw6pEqG2URnEL"></div>
@@ -793,7 +793,7 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
   <div class="atp-list" id="agentTopicList"></div>
 </div>
 
-<script src="/api/base_ui.js?v=20261116f"></script>
+<script src="/api/base_ui.js?v=20261116i"></script>
 
   <script src="/api/assets_ui.js?v=20260930g"></script>
   <script src="/api/assets_picker.js?v=20261104a"></script>
@@ -805,7 +805,7 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
   <script src="/api/canvas_timeline.js?v=20261104c"></script>
   <script src="/api/canvas_stage.js?v=20261113c"></script>
 <script src="/api/tts_upload.js?v=20260918d"></script>
-<script src="/api/audio_ui.js?v=20261116f"></script>
+<script src="/api/audio_ui.js?v=20261116i"></script>
 
 </body>
 </html>

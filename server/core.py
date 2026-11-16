@@ -679,7 +679,7 @@ def _ms_create(base, key, label, wire):
             f"{base}/images/generations",
             headers=dict(hdr, **{"X-ModelScope-Async-Mode": "true"}),
             json=wire,
-            timeout=(15, 3600),
+            timeout=(60, 3600),
         )
     except requests.RequestException as e:
 
@@ -950,7 +950,9 @@ def _submit_image(payload, upstream=None, ms_task_id=None, on_submitted=None, lo
 
 
 
-            timeout=(15, 3600),
+
+
+            timeout=(60, 3600),
         )
     except requests.RequestException as e:
 
