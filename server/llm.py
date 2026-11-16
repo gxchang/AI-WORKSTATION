@@ -19,6 +19,7 @@ LLM_PROVIDERS = (
     {"key": "custom", "label": "自定义 OpenAI"},
     {"key": "ms", "label": "魔搭 ModelScope"},
     {"key": "agnes", "label": "Agnes"},
+    {"key": "wan", "label": "阿里云百炼"},
 )
 LLM_PROVIDER_ORDER = tuple(p["key"] for p in LLM_PROVIDERS)
 LLM_PROVIDER_LABELS = {p["key"]: p["label"] for p in LLM_PROVIDERS}
@@ -56,9 +57,15 @@ def _custom():
     return _c
 
 
+def _wan():
+    
+    import server.wan_provider as _w
+    return _w
+
+
 def _host(key):
     
-    return {"custom": _custom, "ms": _ms}.get(key, lambda: None)()
+    return {"custom": _custom, "ms": _ms, "wan": _wan}.get(key, lambda: None)()
 
 
 
@@ -137,6 +144,8 @@ def models_for(use_case=None):
         return list(_ms().chat_model() or [DEFAULT_MS_CHAT_MODEL])
     if be == "custom":
         return list(_custom().chat_model() or [])
+    if be == "wan":
+        return list(_wan().chat_model() or [])
     lst = _provider().get(_AGNES_MODEL_KEY) or []
     return list(lst) if lst else list(_AGNES_DEFAULT_MODEL)
 
@@ -163,6 +172,13 @@ def configured(use_case=None):
         ok, why = _custom().ready_state()
         if not ok:
             return False, f"已路由到「自定义 OpenAI」，但{why}"
+        return True, ""
+    if be == "wan":
+        ok, why = _wan().ready_state()
+        if not ok:
+            return False, f"已路由到「阿里云百炼」，但{why}"
+        if not _wan().chat_model():
+            return False, "已路由到「阿里云百炼」，但「百炼」标签页未填文本模型（2026-11-14 起缺项只报错、不换家）"
         return True, ""
     if not _provider().get("api_key"):
         return False, "尚未配置 Agnes 访问密钥（在「Agnes」标签页填写接口地址与密钥，或配置 .env）"
@@ -201,6 +217,22 @@ def _thinking_params(backend, thinking, use_case=None):
         if hasattr(_custom(), "chat_budget_effort"):
             effort = _custom().chat_budget_effort()
         return {"reasoning_effort": effort} if effort else {}
+    if backend == "wan":
+
+
+
+        p = {"enable_thinking": bool(thinking)}
+        effort = None
+        if thinking and hasattr(_wan(), "chat_budget_effort"):
+            effort = _wan().chat_budget_effort()
+        if effort:
+            p["reasoning_effort"] = effort
+
+
+
+
+        p["preserve_thinking"] = False
+        return p
 
     return {"chat_template_kwargs": {"enable_thinking": bool(thinking)}}
 
@@ -261,6 +293,9 @@ def chat(use_case, messages, model=None, tools=None, tool_choice=None,
     elif be == "custom":
         base = _custom().get("base_url")
         key = _custom().get("api_key")
+    elif be == "wan":
+        base = _wan().compatible_base_url()
+        key = _wan().api_key()
     else:
         base = _provider().get("base_url")
         key = _provider().get("api_key")
@@ -279,7 +314,10 @@ def chat(use_case, messages, model=None, tools=None, tool_choice=None,
         "temperature": temperature,
     }
     if max_tokens is not None:
-        payload["max_tokens"] = max_tokens
+
+
+
+        payload["max_completion_tokens" if be == "wan" else "max_tokens"] = max_tokens
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = tool_choice or "auto"

@@ -259,8 +259,8 @@
   function _warnModelMismatch(m) {
     if (_modelMismatchShown === m) return;
     _modelMismatchShown = m;
-    const w = window.__lvVideoProvider || "";
-    const label = ({ agnes: "Agnes", ark: "火山方舟", runninghub: "RunningHub" })[w] || "当前服务商";
+    
+    const label = window.__lvVideoLabel || "当前服务商";
     setMsg(`该任务用的是 ${m}，不属于当前生效的视频服务商「${label}」；模型下拉只列本家模型，生成前请到「服务商设置」切换到对应服务商`);
   }
 
@@ -274,6 +274,8 @@
     
     if (prov.videoProvider && prov.videoProvider.winner) {
       window.__lvVideoProvider = prov.videoProvider.winner;
+      
+      if (prov.videoProvider.label) window.__lvVideoLabel = prov.videoProvider.label;
     }
     const vidSel = document.getElementById("lvOptModel");
     try {
@@ -472,6 +474,8 @@
       window.__lvProvider = d.provider || {};
       
       window.__lvVideoProvider = (d.videoProvider && d.videoProvider.winner) || window.__lvVideoProvider || "agnes";
+      
+      if (d.videoProvider && d.videoProvider.label) window.__lvVideoLabel = d.videoProvider.label;
       document.dispatchEvent(new CustomEvent("provider:changed", {
         detail: Object.assign({}, d.provider || {}, { videoProvider: d.videoProvider || {} }),
       }));

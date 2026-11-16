@@ -136,6 +136,43 @@ CAPS = {
         "can_t2i": False, "can_edit": True, "seed": True,
         "ratios": ["1:1", "4:3", "3:4", "3:2", "2:3", "16:9", "9:16"],
     },
+
+
+
+
+
+
+
+
+
+
+
+
+
+    "qwen-image-3.0-pro": {
+        "tiers": ["1K", "2K"], "min_px": 262144, "max_px": 4194304,
+        "max_ref_images": 3,
+        "sequential": False, "seed": True, "png": False,
+        "can_t2i": True, "can_edit": True, "negative_prompt": True,
+    },
+    "qwen-image-3.0": {
+        "tiers": ["1K", "2K"], "min_px": 262144, "max_px": 4194304,
+        "max_ref_images": 3,
+        "sequential": False, "seed": True, "png": False,
+        "can_t2i": True, "can_edit": True, "negative_prompt": True,
+    },
+    "qwen-image-2.1-pro": {
+        "tiers": ["1K", "2K"], "min_px": 262144, "max_px": 4194304,
+        "max_ref_images": 10,
+        "sequential": False, "seed": True, "png": False,
+        "can_t2i": True, "can_edit": True, "negative_prompt": False,
+    },
+    "qwen-image-2.1-turbo": {
+        "tiers": ["1K", "2K"], "min_px": 262144, "max_px": 4194304,
+        "max_ref_images": 10,
+        "sequential": False, "seed": True, "png": False,
+        "can_t2i": True, "can_edit": True, "negative_prompt": False,
+    },
 }
 
 
@@ -150,12 +187,33 @@ FALLBACK_CAPS = {
     "ms": {"edge_min": 64, "edge_max": 1664,
            "tier_presets": {"2K": MS_TIER_PRESETS_2K},
            "can_t2i": True, "can_edit": True, "seed": True},
+
+
+    "wan": {"tiers": ["1K", "2K"], "min_px": 262144, "max_px": 4194304,
+            "max_ref_images": 3,
+            "sequential": False, "seed": True, "png": False,
+            "can_t2i": True, "can_edit": True, "negative_prompt": False},
 }
 
 
+
+
+
+
+_MODEL_PREFIX_PROVIDER = (("Qwen/", "ms"), ("qwen-image-", "wan"))
+
 MODEL_PROVIDER = {}
 for _m in CAPS:
-    MODEL_PROVIDER[_m] = "ms" if _m.startswith("Qwen/") else "ark"
+    MODEL_PROVIDER[_m] = next((p for pre, p in _MODEL_PREFIX_PROVIDER
+                               if _m.startswith(pre)), "ark")
+
+
+def _provider_of_model(model):
+    
+    m = str(model or "").strip()
+    if m in MODEL_PROVIDER:
+        return MODEL_PROVIDER[m]
+    return next((p for pre, p in _MODEL_PREFIX_PROVIDER if m.startswith(pre)), "ark")
 
 
 
@@ -172,7 +230,7 @@ PARAM_CAP = {
 
 NON_PARAM_CAPS = frozenset({"min_px", "max_px", "max_ref_images", "sequential",
                             "png", "can_t2i", "can_edit", "edge_max", "edge_min",
-                            "size_policy", "tier_presets"})
+                            "size_policy", "tier_presets", "negative_prompt"})
 
 
 def param_cap_map():
@@ -185,7 +243,7 @@ def caps_for(model, provider=None):
     m = str(model or "").strip()
     if m in CAPS:
         return dict(CAPS[m])
-    prov = provider or ("ms" if m.startswith("Qwen/") else MODEL_PROVIDER.get(m, "ark"))
+    prov = provider or _provider_of_model(m)
     return dict(FALLBACK_CAPS.get(prov, FALLBACK_CAPS["ark"]))
 
 
@@ -271,6 +329,40 @@ PROVIDERS = {
             {"to": "loras", "kind": "loras", "from": "loras"},
         ],
     },
+
+
+
+
+
+
+    "wan": {
+        "label": "阿里云百炼",
+        "endpoint": "/images/generations",
+        "async": False,
+        "size_rule": "pixel_range",
+
+
+
+        "input": {"edge_max": 8000},
+        "fields": [
+            {"to": "model", "kind": "model"},
+            {"to": "prompt", "kind": "text", "from": "prompt", "default": ""},
+            {"to": "size", "kind": "size"},
+
+
+            {"to": "image", "kind": "media", "from": ["extra_body.image", "images"]},
+
+            {"to": "seed", "kind": "cast_int", "from": "seed", "gate": "seed"},
+
+
+            {"to": "prompt_extend", "kind": "const", "value": False},
+            {"to": "watermark", "kind": "const", "value": False},
+
+
+
+
+        ],
+    },
 }
 
 
@@ -288,9 +380,15 @@ AGNES_ENDPOINT = "/images/generations"
 
 
 
+
+
 IMAGE_PROVIDERS = (
     {"key": "ark", "label": "豆包 Seedream（火山方舟）", "patch_mask": True},
     {"key": "ms", "label": "魔搭 ModelScope", "patch_mask": True},
+
+
+
+    {"key": "wan", "label": "阿里云百炼 · 千问图像", "patch_mask": False},
 
 
 
@@ -527,7 +625,10 @@ def tier_fits(tier, ratio, rule, caps):
 
 def reachable_tiers(provider, caps_map, ratio="1:1"):
     
-    rule = "pixel_range" if provider == "ark" else "edge_range"
+
+
+
+    rule = PROVIDERS.get(str(provider or "").lower(), {}).get("size_rule") or "edge_range"
     out = []
     for t in ("1K", "2K", "3K", "4K"):
         for c in (caps_map or {}).values():

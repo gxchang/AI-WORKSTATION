@@ -17,6 +17,7 @@ import server.tts_provider as _ttsprov
 import server.tts_models as _ttsmodels
 import server.ark_provider as _arkprov
 import server.runninghub_provider as _rhprov
+import server.wan_provider as _wanprov
 from server.video_caps import (
     video_provider_models as _video_provider_models,
     video_provider_state as _video_provider_state,
@@ -313,6 +314,7 @@ def api_config():
 
 
 
+
     _vp_st = _video_provider_state()
     _vm_out, _vp_limits = _video_provider_models()
     _video_limits = dict(MODEL_LIMITS)
@@ -437,6 +439,11 @@ def api_config():
                        loras=_msprov.get("loras")),
 
 
+            "wan": dict(_img_prov_block("wan"),
+                        hasKey=bool(_wanprov.get("api_key")),
+                        fallbackReason=_wanprov.image_active_state()[1]),
+
+
 
             "ttsProvider": _tts_prov,
             "ttsProviderLabel": _ttsmodels.TTS_PROVIDER_LABELS.get(_tts_prov, ""),
@@ -555,13 +562,15 @@ def _submit_video(data):
 
         _w = _video_provider_state()["winner"]
         _k = {"runninghub": _rhprov.api_key(), "ark": _arkprov.get("api_key"),
-              "agnes": _cfg_key()}.get(_w)
+              "wan": _wanprov.api_key(), "agnes": _cfg_key()}.get(_w)
         if not _k:
-            return {"error": "尚未配置访问密钥。请点击左侧「服务商设置」填入密钥（或 .env 配置 AGNES_API_KEY 后重启）。"}, 500
+            return {"error": "尚未配置访问密钥。请点击左侧「服务商设置」填入密钥。"}, 500
     if _rhprov.is_video_model(model):
         _out = _submit_video_to_runninghub(data)
     elif _arkprov.is_video_model(model):
         _out = _submit_video_to_ark(data)
+    elif _wanprov.is_video_model(model):
+        _out = _submit_video_to_wan(data)
     else:
         _out = _submit_video_to_agnes(data)
 
@@ -639,6 +648,77 @@ def _submit_video_to_ark(data):
     rows.insert(0, record)
     _save_history(rows)
     return {"video_id": video_id, "rid": rid, "raw": body, "upstream": "ark"}, 200
+
+
+def _submit_video_to_wan(data):
+    
+    if not _wanprov.video_enabled():
+        return {"error": "阿里云百炼视频未启用。请在「服务商设置 → 阿里云百炼」勾选视频开关。"}, 400
+    if not _wanprov.api_key():
+        return {"error": "阿里云百炼未配置 API Key。请在「服务商设置 → 阿里云百炼」填入密钥。"}, 400
+    ep = _wanprov.endpoint()
+    if not ep:
+        return {"error": "阿里云百炼未填写业务空间 ID（WorkspaceId），无法拼出 Endpoint。"}, 400
+    model = str(data.get("model") or "").strip() or _wanprov.video_models()[0]
+    payload, err = _wanprov.to_wan_video_payload(
+        {**data, "model": model},
+        b64_fn=_to_b64_if_local,
+        oss_fn=lambda u, kind: _wanprov.upload_material(u, kind, model),
+    )
+    if err:
+        return {"error": err}, 400
+
+    headers = {"Authorization": "Bearer " + _wanprov.api_key(),
+               "Content-Type": "application/json",
+               "X-DashScope-Async": "enable"}
+    if _wanprov.needs_oss_resource_resolve(payload):
+        headers["X-DashScope-OssResourceResolve"] = "enable"
+    try:
+        resp = requests.post(_wanprov.create_url(), json=payload, headers=headers,
+                             timeout=(10, 3600))
+    except requests.RequestException as e:
+        return {"error": f"请求百炼 API 失败：{e}"}, 502
+    if resp.status_code != 200:
+        try:
+            _b = resp.json()
+            msg = _b.get("message") or _b.get("code") or resp.text[:160]
+        except Exception:
+            msg = resp.text[:160]
+        return {"error": f"百炼拒绝请求（{resp.status_code}）：{msg}"}, resp.status_code
+    try:
+        body = resp.json()
+    except Exception:
+        return {"error": f"无法解析百炼响应：{resp.text[:160]}"}, 502
+    video_id = (body.get("output") or {}).get("task_id") if isinstance(body.get("output"), dict) else None
+    video_id = video_id or body.get("task_id")
+    if not video_id:
+        return {"error": f"百炼响应缺少 task_id：{str(body)[:160]}"}, 502
+
+    rid = uuid.uuid4().hex[:12]
+    record = {
+        "id": rid,
+        "video_id": video_id,
+        "upstream": "wan",
+        "sessionId": data.get("sessionId"),
+        "origin_view": data.get("origin_view"),
+        "model": model,
+        "mode": data.get("mode", "text"),
+        "prompt": str(data.get("prompt") or ""),
+        "params": dict({
+            "seconds": (payload.get("parameters") or {}).get("duration"),
+            "aspect_ratio": (payload.get("parameters") or {}).get("ratio"),
+            "size": (payload.get("parameters") or {}).get("resolution"),
+            "seed": (payload.get("parameters") or {}).get("seed"),
+        }, **_video_ref_media(data)),
+        "assets": data.get("assets") or [],
+        "created_at": time.time(),
+        "video_url": None,
+        "status": "processing",
+    }
+    rows = _load_history()
+    rows.insert(0, record)
+    _save_history(rows)
+    return {"video_id": video_id, "rid": rid, "raw": body, "upstream": "wan"}, 200
 
 
 
@@ -985,6 +1065,7 @@ def runninghub_provider_cfg():
 
             _provider.set_choice("video", "runninghub")
             _arkprov.save({"video_enabled": False})
+            _wanprov.save({"video_enabled": False})
         return jsonify(ok=True, **_runninghub_cfg_payload())
     return jsonify(**_runninghub_cfg_payload())
 
@@ -1321,13 +1402,20 @@ def _submit_image_task(data):
     _prov = _img_provider_now()
     use_ark = (_prov == "ark")
     use_ms = (_prov == "ms")
+    use_wan = (_prov == "wan")
 
 
     _key_of = {"ark": lambda: _arkprov.get("api_key"),
                "ms": lambda: _msprov.get("api_key"),
+               "wan": lambda: _wanprov.get("api_key"),
                "agnes": lambda: _cfg_key()}
     if not (_key_of.get(_prov) or _key_of["agnes"])():
         return {"error": "尚未配置访问密钥。请点击左侧「服务商设置」填入密钥（或 .env 配置 AGNES_API_KEY 后重启）。"}, 500
+
+
+    if use_wan and not _wanprov.endpoint():
+        return {"error": "尚未填写业务空间 ID（WorkspaceId），百炼 Endpoint 无法拼出。"
+                         "请到「服务商设置 → 阿里云百炼」补齐（或填接口地址整体覆盖）。"}, 400
 
 
 
@@ -1362,10 +1450,24 @@ def _submit_image_task(data):
     if use_ark:
 
         size = _arkprov.resolve_tier(size, _arkprov.model_limits(model))
+    elif use_wan:
+
+
+        size = _imgen.resolve_tier(size, _wanprov.image_model_limits(model))
     elif size not in _imgen.AGNES_TIERS:
         size = "1K"
     ratio = (data.get("ratio") or data.get("aspect_ratio") or "").strip()
     images = _ref_imgs
+
+
+
+
+    if use_wan and images:
+        _ref_cap = (_wanprov.image_model_limits(model) or {}).get("max_ref_images")
+        if _ref_cap and len(images) > _ref_cap:
+            return {"error": f"当前模型「{model}」最多支持 {_ref_cap} 张参考图，本次传了 "
+                             f"{len(images)} 张。请减少参考图，或改用支持更多张的 "
+                             f"qwen-image-2.1 系列模型。"}, 400
 
 
 
@@ -1436,7 +1538,7 @@ def _submit_image_task(data):
 
 
 
-    if src_size and not (use_ark or use_ms):
+    if src_size and not (use_ark or use_ms or use_wan):
         payload["size"] = _imgen.solve_size(size, ratio, "tier_string", None,
                                             src_px=_imgen.parse_src_size(src_size),
                                             allowed_tiers=_imgen.AGNES_TIERS)
@@ -1444,7 +1546,7 @@ def _submit_image_task(data):
         payload["size"] = size
     if ratio:
 
-        _r = ratio if (use_ark or use_ms) else _agnes_ratio(ratio)
+        _r = ratio if (use_ark or use_ms or use_wan) else _agnes_ratio(ratio)
         if _r:
             payload["ratio"] = _r
     if data.get("seed") not in (None, ""):
@@ -1484,6 +1586,12 @@ def _submit_image_task(data):
 
         payload = _msprov.to_ms_payload(payload)
         upstream = "ms"
+    elif use_wan:
+
+
+
+        payload = _wanprov.to_wan_image_payload(payload)
+        upstream = "wan"
 
 
 
@@ -1503,7 +1611,13 @@ def _submit_image_task(data):
     if ratio:
         _user_params["ratio"] = str(ratio).strip()
     if images:
-        _user_params["images"] = [images[0]]
+
+
+
+
+
+
+        _user_params["images"] = [images[0]] if data.get("_patch_mask") else list(images)
 
 
 
@@ -2045,17 +2159,25 @@ def _agnes_ratio(ratio):
 _IMG_PROV_SRC = {
     "ark": {"models": _arkprov.image_models, "limits": _arkprov.model_limits_map, "caps": _arkprov.model_limits},
     "ms": {"models": _msprov.image_models, "limits": _msprov.model_limits_map, "caps": _msprov.model_limits},
+
+
+    "wan": {"models": _wanprov.image_models, "limits": _wanprov.image_model_limits_map,
+            "caps": _wanprov.image_model_limits},
     "agnes": {"models": lambda: (_provider.get("image_models") or ["agnes-image-2.1-flash", "agnes-image-2.5-flash"]),
               "limits": lambda: {}, "caps": None},
 }
 
-_IMG_ENABLED_SRC = {"ark": lambda: bool(_arkprov.get("enabled")), "ms": lambda: bool(_msprov.get("enabled"))}
+_IMG_ENABLED_SRC = {"ark": lambda: bool(_arkprov.get("enabled")),
+                    "ms": lambda: bool(_msprov.get("enabled")),
+                    "wan": lambda: bool(_wanprov.get("enabled"))}
 
 _IMG_READY_SRC = {"ark": lambda: bool(_arkprov.get("api_key")),
                   "ms": lambda: bool(_msprov.get("api_key")),
+                  "wan": lambda: bool(_wanprov.get("api_key")),
                   "agnes": lambda: bool(_cfg_key())}
 
-_IMG_SAVE_MODS = (("ark", _arkprov), ("ms", _msprov))
+
+_IMG_SAVE_MODS = (("ark", _arkprov), ("ms", _msprov), ("wan", _wanprov))
 
 _IMG_EXCLUSIVE_DONE = {"done": False}
 
@@ -2111,14 +2233,16 @@ def _img_apply_exclusive(chosen):
 
 
 
+
 def _video_apply_exclusive(chosen):
     
     key = str(chosen or "").strip().lower()
-    if key not in ("agnes", "ark", "runninghub"):
+    if key not in ("agnes", "ark", "runninghub", "wan"):
         raise ValueError("未知的视频服务商：%r" % chosen)
     _provider.set_choice("video", key)
     _rhprov.save({"video_enabled": key == "runninghub"})
     _arkprov.save({"video_enabled": key == "ark"})
+    _wanprov.save({"video_enabled": key == "wan"})
     return key
 
 
@@ -5133,6 +5257,33 @@ def _ark_video_status(video_id, model_name):
     return jsonify({"status": status, "video_url": video_url, "error": err_msg, "raw": body})
 
 
+def _wan_video_status(video_id, model_name):
+    
+    key = _wanprov.api_key()
+    if not key:
+        return jsonify({"error": "百炼未配置 API Key，无法查询任务状态。"}), 502
+    try:
+        resp = requests.get(_wanprov.task_url(video_id),
+                            headers={"Authorization": f"Bearer {key}"},
+                            timeout=(10, 30))
+    except requests.RequestException as e:
+        return jsonify({"error": f"查询失败：{e}"}), 502
+    try:
+        body = resp.json()
+    except Exception:
+        return jsonify({"error": f"无法解析查询结果：{resp.text[:160]}"}), 502
+    if resp.status_code != 200:
+        try:
+            msg = body.get("message") or body.get("code") or resp.text[:160]
+        except Exception:
+            msg = resp.text[:160]
+        return jsonify({"error": f"百炼查询失败（{resp.status_code}）：{msg}"}), resp.status_code
+    status, video_url, err_msg = _wanprov.parse_status(body)
+    if status == "completed" and video_url:
+        video_url = _finalize_video_result(video_id, video_url, model_name, prefix="wan")
+    return jsonify({"status": status, "video_url": video_url, "error": err_msg, "raw": body})
+
+
 @app.route("/api/status")
 def api_status():
     video_id = request.args.get("video_id")
@@ -5153,6 +5304,12 @@ def api_status():
 
     if _rhprov.is_video_model(model_name) or str(video_id).startswith("rh-"):
         return _rh_video_status(video_id, model_name)
+
+
+
+    if _wanprov.is_video_model(model_name) or (
+            (_find_history_by_video_id(video_id) or {}).get("upstream") == "wan"):
+        return _wan_video_status(video_id, model_name)
 
     try:
         resp = _AGNES_SESSION.get(
@@ -6467,6 +6624,7 @@ def api_ark_provider_save():
     if data.get("video_enabled"):
         _provider.set_choice("video", "ark")
         _rhprov.save({"video_enabled": False})
+        _wanprov.save({"video_enabled": False})
         snap = _arkprov.config_snapshot(masked=True)
     return jsonify({"ok": True, "config": snap})
 
@@ -6484,6 +6642,54 @@ def api_ark_provider_test():
         base_url=draft_base or None,
         api_key=draft_key or None,
         model=draft_model or None,
+    )
+    return jsonify(result)
+
+
+
+
+
+@app.route("/api/wan/provider", methods=["GET"])
+def api_wan_provider_get():
+    return jsonify(_wanprov.config_snapshot(masked=True))
+
+
+@app.route("/api/wan/provider", methods=["POST"])
+def api_wan_provider_save():
+    
+    data = request.get_json(silent=True) or {}
+    try:
+        snap = _wanprov.save(data)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if data.get("video_enabled"):
+        _provider.set_choice("video", "wan")
+        _rhprov.save({"video_enabled": False})
+        _arkprov.save({"video_enabled": False})
+        snap = _wanprov.config_snapshot(masked=True)
+    if data.get("enabled"):
+        _img_apply_exclusive("wan")
+        snap = _wanprov.config_snapshot(masked=True)
+    if data.get("chat_models_enabled"):
+        _provider.set_choice("llm", "wan")
+        _msprov.save({"chat_models_enabled": False})
+        _customprov.save({"chat_models_enabled": False})
+        snap = _wanprov.config_snapshot(masked=True)
+    return jsonify({"ok": True, "config": snap})
+
+
+@app.route("/api/wan/provider/test", methods=["POST"])
+def api_wan_provider_test():
+    
+    data = request.get_json(silent=True) or {}
+    draft_key = (data.get("api_key") or "").strip()
+    if draft_key and "…" in draft_key:
+        draft_key = ""
+    result = _wanprov.test_connection(
+        base_url=(data.get("base_url") or "").strip() or None,
+        api_key_=draft_key or None,
+        workspace_id=(data.get("workspace_id") or "").strip() or None,
+        region=(data.get("region") or "").strip() or None,
     )
     return jsonify(result)
 
@@ -6514,12 +6720,14 @@ def api_provider_select():
         elif kind == "llm":
             _msprov.save({"chat_models_enabled": key == "ms"})
             _customprov.save({"chat_models_enabled": key == "custom"})
+            _wanprov.save({"chat_models_enabled": key == "wan"})
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     st = {"video": _video_provider_state(), "image": _img_provider_state(),
           "tts": _tts_provider_state(), "llm": _llm._resolve_now()}[kind]
     return jsonify({"ok": True, "kind": kind, "provider": key, "state": st,
                     "warning": st.get("note") or ""})
+
 
 
 
@@ -6563,6 +6771,7 @@ def api_ms_provider_save():
     if data.get("chat_models_enabled"):
         _provider.set_choice("llm", "ms")
         _customprov.save({"chat_models_enabled": False})
+        _wanprov.save({"chat_models_enabled": False})
     return jsonify({"ok": True, "config": snap})
 
 
@@ -6606,6 +6815,7 @@ def api_custom_provider_save():
     if data.get("chat_models_enabled"):
         _provider.set_choice("llm", "custom")
         _msprov.save({"chat_models_enabled": False})
+        _wanprov.save({"chat_models_enabled": False})
     return jsonify({"ok": True, "config": snap})
 
 
@@ -6633,8 +6843,10 @@ def api_llm_provider_set():
     en_key = "chat_models_enabled"
     _provider.set_choice("llm", key)
 
+
     _msprov.save({en_key: key == "ms"})
     _customprov.save({en_key: key == "custom"})
+    _wanprov.save({en_key: key == "wan"})
     st = _llm._resolve_now()
     warn = st.get("note") or ""
     if st["fallback"]:

@@ -158,10 +158,11 @@ def _meta_del(key):
 
 
 CHOICE_ALLOWED = {
-    "video": ("agnes", "ark", "runninghub"),
-    "image": ("agnes", "ark", "ms"),
+    "video": ("agnes", "ark", "runninghub", "wan"),
+    "image": ("agnes", "ark", "ms", "wan"),
     "tts":   ("openrouter", "mimo"),
-    "llm":   ("agnes", "ms", "custom"),
+
+    "llm":   ("agnes", "ms", "custom", "wan"),
 }
 CHOICE_DEFAULTS = {"video": "runninghub", "image": "ms", "tts": "mimo", "llm": "agnes"}
 

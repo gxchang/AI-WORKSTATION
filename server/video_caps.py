@@ -3,10 +3,12 @@
 from . import provider as _provider
 from . import ark_provider as _arkprov
 from . import runninghub_provider as _rhprov
+from . import wan_provider as _wanprov
 
 
 def video_provider_state():
     
+
 
     legacy = []
     if bool(_arkprov.get("video_enabled")):
@@ -14,11 +16,13 @@ def video_provider_state():
     if _rhprov.video_enabled():
         legacy.append("runninghub")
     winner = _provider.get_choice("video", legacy)
-    labels = {"agnes": "Agnes", "ark": "火山方舟", "runninghub": "RunningHub"}
+    labels = {"agnes": "Agnes", "ark": "火山方舟", "runninghub": "RunningHub",
+              "wan": "阿里云百炼"}
     keys = {
         "agnes": bool(_provider.get("api_key")),
         "ark": bool(_arkprov.get("api_key")),
         "runninghub": _rhprov.api_key(),
+        "wan": _wanprov.api_key(),
     }
     conflict = len(legacy) > 1
     return {
@@ -27,8 +31,8 @@ def video_provider_state():
         "label": labels.get(winner, winner),
         "providers": {k: {"selected": winner == k, "ready": bool(keys[k])}
                       for k in labels},
-        "note": ("尚未配置访问密钥。请点击左侧「服务商设置」填入密钥（或 .env 配置 AGNES_API_KEY 后重启）。" if not keys.get(winner)
-                 else ("方舟与 RunningHub 的视频开关同时打开 → 重新勾选一家即可收敛。"
+        "note": ("尚未配置访问密钥。请点击左侧「服务商设置」填入密钥。" if not keys.get(winner)
+                 else ("多家视频开关同时打开 → 重新勾选一家即可收敛。"
                        if conflict else "")),
     }
 
@@ -42,6 +46,9 @@ def video_provider_models():
     if st["winner"] == "runninghub":
         ms = list(_rhprov.video_models())
         return ms, {m: _rhprov.limits(m) for m in ms}
+    if st["winner"] == "wan":
+        ms = list(_wanprov.video_models())
+        return ms, {m: _wanprov.video_limits(m) for m in ms}
     return list(_provider.get("video_models") or ["agnes-video-2.5-flash", "agnes-video-2.5"]), {}
 
 
@@ -58,6 +65,11 @@ def model_limits(model):
     try:
         if _arkprov.is_video_model(m):
             return _arkprov.video_limits(m) or {}
+    except Exception:
+        pass
+    try:
+        if _wanprov.is_video_model(m):
+            return _wanprov.video_limits(m) or {}
     except Exception:
         pass
     from . import core as _core

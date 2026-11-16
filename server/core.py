@@ -60,6 +60,7 @@ _load_env()
 import server.provider as _provider
 import server.ark_provider as _arkprov
 import server.ms_provider as _msprov
+import server.wan_provider as _wanprov
 import server.imgen as _imgen
 import media_gc as _mgc
 import server.payload_media as _pm
@@ -893,6 +894,12 @@ def _submit_image(payload, upstream=None, ms_task_id=None, on_submitted=None, lo
         base, key, label = _arkprov.get("base_url"), _arkprov.get("api_key"), "方舟"
     elif up == "ms":
         base, key, label = _msprov.get("base_url"), _msprov.get("api_key"), "魔搭"
+    elif up == "wan":
+
+
+
+
+        base, key, label = _wanprov.image_base_url(), _wanprov.get("api_key"), "阿里云百炼"
     else:
         base, key, label = _cfg_base(), _cfg_key(), "Agnes"
 
@@ -978,7 +985,9 @@ def _submit_image(payload, upstream=None, ms_task_id=None, on_submitted=None, lo
 
 
 
-    items = [_persist_generated_image(u, prefix=("ark" if up == "ark" else "agnes")) for u in items]
+    items = [_persist_generated_image(
+        u, prefix=("wan" if up == "wan" else "ark" if up == "ark" else "agnes"))
+        for u in items]
     return True, items, None, None
 
 

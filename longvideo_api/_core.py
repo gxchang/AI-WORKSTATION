@@ -1312,6 +1312,17 @@ def _is_ark_model(model):
     except Exception:
         return False
 
+
+def _is_wan_model(model):
+    
+    if not model:
+        return False
+    try:
+        import server.wan_provider as _wan
+        return _wan.is_video_model(model)
+    except Exception:
+        return False
+
 _ALLOWED_ASPECTS = ("16:9", "9:16", "1:1", "4:3", "3:4", "21:9")
 
 
@@ -3111,9 +3122,73 @@ def _ark_poll_video(video_id, timeout=600):
     return "timeout", None
 
 
+def _wan_create_video(images_urls, audio_urls, prompt, seconds, mode="reference",
+                      size="720P", aspect_ratio="16:9", model=None):
+    
+    try:
+        import server.wan_provider as _wan
+    except Exception as e:
+        return _FakeResp(500, {"error": {"message": f"百炼模块不可用：{e}"}})
+    mdl = model or _wan.video_models()[0]
+    try:
+        payload, err = _wan.to_wan_video_payload(
+            {"model": mdl, "prompt": prompt, "mode": mode, "seconds": seconds,
+             "size": size, "aspect_ratio": aspect_ratio,
+             "images": images_urls or [], "audios": audio_urls or []},
+            b64_fn=_local_to_b64,
+            oss_fn=lambda u, kind: _wan.upload_material(u, kind, mdl),
+        )
+    except Exception as e:
+        return _FakeResp(400, {"error": {"message": f"参考素材上传失败：{e}"}})
+    if err:
+        return _FakeResp(400, {"error": {"message": err}})
+    key = _wan.api_key()
+    if not key:
+        return _FakeResp(401, {"error": {"message": "百炼未配置 API Key"}})
+    if not _wan.endpoint():
+        return _FakeResp(400, {"error": {"message": "百炼未填写业务空间 ID（WorkspaceId）"}})
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json",
+               "X-DashScope-Async": "enable"}
+    if _wan.needs_oss_resource_resolve(payload):
+        headers["X-DashScope-OssResourceResolve"] = "enable"
+    try:
+        return requests.post(_wan.create_url(), json=payload, headers=headers,
+                             timeout=(10, 3600))
+    except requests.RequestException as e:
+        return _FakeResp(503, {"error": {"message": f"请求百炼失败：{e}"}})
+
+
+def _wan_poll_video(video_id, timeout=600, should_stop=None):
+    
+    import server.wan_provider as _wan
+    key = _wan.api_key()
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if should_stop and should_stop():
+            return "cancelled", ""
+        try:
+            resp = requests.get(_wan.task_url(video_id),
+                                headers={"Authorization": f"Bearer {key}"},
+                                timeout=30)
+            body = resp.json()
+        except Exception:
+            time.sleep(15)
+            continue
+        status, url, _err = _wan.parse_status(body)
+        if status == "completed":
+            return ("completed", url) if url else ("failed", None)
+        if status == "failed":
+            return "failed", None
+        time.sleep(15)
+    return "timeout", None
+
+
 def _agnes_create_video(images_urls, audio_urls, prompt, seconds, attempt=0, mode="reference",
                       size="720P", aspect_ratio="16:9", model=None):
     
+    if _is_wan_model(model):
+        return _wan_create_video(images_urls, audio_urls, prompt, seconds, mode=mode, size=size,
+                                 aspect_ratio=aspect_ratio, model=model)
     if _is_ark_model(model):
         return _ark_create_video(images_urls, audio_urls, prompt, seconds, mode=mode, size=size, model=model)
     payload = {
@@ -3140,6 +3215,8 @@ def _agnes_create_video(images_urls, audio_urls, prompt, seconds, attempt=0, mod
 
 def _agnes_poll(video_id, timeout=600, model=None, should_stop=None):
     
+    if _is_wan_model(model):
+        return _wan_poll_video(video_id, timeout, should_stop=should_stop)
     if _is_ark_model(model):
         return _ark_poll_video(video_id, timeout)
     t0 = time.time()
@@ -3832,7 +3909,11 @@ def _gen_segment(job_id, seg, prev_tail_b64):
                 detail = resp.text
             return False, None, None, f"{_sub.label} 拒绝({resp.status_code}): {detail}"
         body = resp.json()
-        video_id = body.get("video_id") or body.get("id") or body.get("task_id")
+
+
+        _out = body.get("output") if isinstance(body.get("output"), dict) else {}
+        video_id = (body.get("video_id") or body.get("id") or body.get("task_id")
+                    or _out.get("task_id") or _out.get("video_id"))
         break
     if not video_id:
         return False, None, None, f"创建视频任务失败（已自动重试{max_attempts}次）：{_last_err or '限流/网络'}"
