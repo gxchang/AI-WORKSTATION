@@ -467,7 +467,7 @@ def _save_tasks(data):
 
 
 def _create_task(kind, model, payload, video_id=None, media_hint=None, session_id=None, upstream=None,
-                 ratio=None, user_params=None, patch_mask=False, origin_view=None):
+                 ratio=None, user_params=None, patch_mask=False, origin_view=None, parent_run_id=None):
     
 
 
@@ -505,6 +505,8 @@ def _create_task(kind, model, payload, video_id=None, media_hint=None, session_i
 
 
         **({"origin_view": origin_view} if origin_view else {}),
+
+        **({"parent_run_id": parent_run_id} if parent_run_id else {}),
         "created_at": time.time(),
 
 
@@ -1447,6 +1449,39 @@ def _is_task_canceled(tid):
         return tid in _CANCELED_TASKS
 
 
+def cancel_child_tasks(parent_run_id):
+    
+    if not parent_run_id:
+        return []
+    out = []
+    try:
+        with _DB_LOCK:
+            conn = _db_conn()
+            try:
+                rows = conn.execute("SELECT tid, data FROM tasks WHERE status='processing'").fetchall()
+            finally:
+                conn.close()
+        for r in rows:
+            try:
+                rec = json.loads(r["data"])
+            except Exception:
+                continue
+            if (rec.get("parent_run_id") or "") != parent_run_id:
+                continue
+            tid = r["tid"]
+
+            _mark_task_canceled(tid)
+            _update_task(tid, status="cancelled",
+                         error="所属回合已按用户要求停止（本子任务级联叫停，不再提交、不再轮询）",
+                         finished_at=time.time())
+            out.append((tid, rec.get("kind") or ""))
+            print(f"[cancel] 级联叫停子任务 {tid}（kind={rec.get('kind')}）← run {parent_run_id}",
+                  flush=True)
+    except Exception as e:
+        print(f"[warn] cancel_child_tasks 异常：{type(e).__name__}: {e}", flush=True)
+    return out
+
+
 def _get_task_progress_lock(tid):
     with _TASK_PROGRESS_LOCKS_LOCK:
         if tid not in _TASK_PROGRESS_LOCKS:
@@ -2134,4 +2169,4 @@ def _infer_ext_and_mime(url, content_type):
 
 
 __all__ = ['AGNES_API_KEY', 'AGNES_BASE_URL', 'ALLOWED_EXTS', 'ASSETS_DIR', 'AUD_EXTS', 'DB_FILE', 'DEFAULT_MODEL', 'DOWNLOAD_ALLOW_HOSTS', 'FRONTEND_DIR', 'HISTORY_FILE', 'IMG_EXTS', 'MODEL_LIMITS', 'PUBLIC_BASE_URL', 'SESSIONS_FILE', 'TASKS_FILE', 'VID_EXTS', '_AGNES_SESSION', '_DB_LOCK', '_DB_READY', '_EXT_MIME', '_ROOT', '_TASKS_LOCK', '_WORKER_LOCK', '_WORKER_STARTED', '_add_cors', '_build_agnes_session', '_create_task', '_db_conn', '_deinline_payload_media', '_ensure_db', '_infer_ext_and_mime',
- '_init_db', '_inline_payload_media', '_load_env', '_load_history', '_load_sessions', '_load_tasks', '_migrate_legacy_json', '_persist_generated_image', '_progress_one', '_public_base', '_purge_history_rows', '_query_agnes_video', '_safe_name', '_save_history', '_save_sessions', '_save_tasks', '_start_worker_once', '_submit_image', '_submit_image_to_agnes', '_sync_result_to_session', '_table_empty', '_task_worker', '_to_b64_if_local', '_update_task', 'app']
+ '_init_db', '_inline_payload_media', '_load_env', '_load_history', '_load_sessions', '_load_tasks', '_migrate_legacy_json', '_persist_generated_image', '_progress_one', '_public_base', '_purge_history_rows', '_query_agnes_video', '_safe_name', '_save_history', '_save_sessions', '_save_tasks', '_start_worker_once', '_submit_image', '_submit_image_to_agnes', '_sync_result_to_session', '_table_empty', '_task_worker', '_to_b64_if_local', '_update_task', 'app', 'cancel_child_tasks']

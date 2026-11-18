@@ -55,7 +55,9 @@ from server.core import (
     _ensure_db,
     _get_task, _infer_ext_and_mime, _llm_chat_completions, _load_agent_sessions,
     _load_history, _load_sessions, _load_tasks,
-    _mark_task_canceled, _persist_generated_video, _public_base, _register_generated_video,
+    _is_task_canceled, _mark_task_canceled, _persist_generated_video, _public_base,
+    _register_generated_video,
+    cancel_child_tasks,
     _safe_name, _save_agent_sessions, _save_history, _save_sessions,
     _sync_result_to_session, _to_b64_if_local,
     _task_stage, _queue_depth,
@@ -1647,7 +1649,10 @@ def _submit_image_task(data):
                               ratio=ratio,
                               user_params=_user_params,
                               patch_mask=bool(data.get("_patch_mask")),
-                              origin_view=data.get("origin_view"))
+                              origin_view=data.get("origin_view"),
+
+
+                              parent_run_id=data.get("_parent_run_id"))
         _IMG_SUBMIT_DEDUP[_fp] = (tid, _now)
 
         if len(_IMG_SUBMIT_DEDUP) > 256:
@@ -2124,6 +2129,10 @@ def _agent_exec_batch(run_id, parsed, session_id, trace, round_no, dedup, gen_co
     _tool_names = sorted({n for n, _a, _e in parsed if n})
     _single = (len(_tool_names) == 1)
 
+    def _stopped():
+        
+        return _runst.is_canceled(run_id)
+
     def _lbl(st):
 
 
@@ -2143,16 +2152,29 @@ def _agent_exec_batch(run_id, parsed, session_id, trace, round_no, dedup, gen_co
 
 
     for _idx, (_name, _args, _pre_err) in enumerate(parsed):
-        if _name == "optimize_h3_prompt" and not _pre_err:
-            _got = _run_tool_phase(run_id, _name, _args, session_id, trace=trace,
-                                   round_no=round_no, item_level=_single,
-                                   call_no=_idx + 1)
-            items.extend(_got)
-            _it = next((i for i in _got if i.get("kind") == "h3_optimize"), None)
-            if _it and _it.get("text"):
-                _opt_text = _it["text"]
+        if _name != "optimize_h3_prompt" or _pre_err:
+            continue
+        if _stopped():
+            break
+        _got = _run_tool_phase(run_id, _name, _args, session_id, trace=trace,
+                               round_no=round_no, item_level=_single,
+                               call_no=_idx + 1)
+        items.extend(_got)
+        _it = next((i for i in _got if i.get("kind") == "h3_optimize"), None)
+        if _it and _it.get("text"):
+            _opt_text = _it["text"]
     for _idx, (_name, _args, _pre_err) in enumerate(parsed):
         if _name == "optimize_h3_prompt":
+            continue
+        if _stopped():
+
+            if trace is not None:
+                _turn_pub(run_id, _tool_turn_key(_name, _idx + 1), "skipped", trace,
+                          label="已停止", raw=_name or "",
+                          detail="用户叫停，未执行", kind="tool",
+                          parent=_turn_id("tools", round_no), round_no=round_no)
+            items.append({"kind": "canceled", "tool": _name,
+                          "error": "已按你的要求停止，该调用未执行"})
             continue
         if _name == "generate_video" and _opt_text:
             _args = dict(_args)
@@ -2218,8 +2240,14 @@ def _agent_exec_batch(run_id, parsed, session_id, trace, round_no, dedup, gen_co
 
     _n_err = sum(1 for i in items if i.get("kind") == "error")
     _n_reason = sum(1 for i in items if i.get("kind") == "need_reason")
-    _n_ok = sum(1 for i in items if i.get("kind") not in ("error", "need_reason"))
-    if _n_reason and not _n_ok and not _n_err:
+    _n_stop = sum(1 for i in items if i.get("kind") in ("canceled", "longvideo_assets_canceled"))
+    _n_ok = sum(1 for i in items if i.get("kind") not in ("error", "need_reason", "canceled",
+                                                         "longvideo_assets_canceled"))
+    if _n_stop and _runst.is_canceled(run_id):
+
+
+        _tools_state, _tools_detail = "skipped", "已停止 · 成功 %d · 未执行 %d" % (_n_ok, _n_stop)
+    elif _n_reason and not _n_ok and not _n_err:
 
         _tools_state, _tools_detail = "warn", "需要说明重做理由"
     elif _n_err and not _n_ok:
@@ -2886,7 +2914,7 @@ def _multi_angle_model():
     return ""
 
 
-def _multi_angle_submit(args, session_id):
+def _multi_angle_submit(args, session_id, local_tid=None):
     
     if not _multi_angle_available():
         return {"kind": "error",
@@ -2910,6 +2938,8 @@ def _multi_angle_submit(args, session_id):
         "prompt": prompt,
         "images": [img],
         "sessionId": session_id,
+
+        "_parent_run_id": local_tid,
     }
     if model:
         payload["model"] = model
@@ -3236,13 +3266,19 @@ def _lv_upsert_assets(con, job_id, assets):
     return written
 
 
-def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None):
+def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None,
+                        local_tid=None):
     
     norm, failed = [], []
     _assets = list(assets or [])
     _total = len(_assets)
     if _total == 0:
         return norm, failed
+
+    def _stopped():
+        
+        return bool(local_tid) and _is_task_canceled(local_tid)
+
 
 
     _prov = _img_provider_now()
@@ -3290,6 +3326,12 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None)
     print(f"[lv-assets] 开始：共 {_total} 项，生效家={_prov}，模型={_img_model}，"
           f"变体接力 {len(_dep)} 项", flush=True)
     for _seq, _i in enumerate(_order):
+
+
+        if _stopped():
+            print(f"[lv-assets] 用户已停止：第 {_seq + 1}/{_total} 项起不再提交（已出图 "
+                  f"{len(norm)} 张保留）", flush=True)
+            break
         a = _assets[_i]
         label = a.get("label") or ""
         _t0 = time.time()
@@ -3400,18 +3442,29 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None)
 
             _attempt = 0
             while True:
+                if _stopped():
+                    break
                 print(f"[lv-assets] #{_i} 提交（第 {_attempt + 1} 次尝试）→ {_upstream or 'agnes'}", flush=True)
-                ok, urls, err, _ms_tid = _core_mod._submit_image(_payload, _upstream)
+
+                ok, urls, err, _ms_tid = _core_mod._submit_image(
+                    _payload, _upstream, local_tid=local_tid)
                 print(f"[lv-assets] #{_i} 返回 ok={ok} urls={[str(u)[-24:] for u in (urls or [])][:2]} "
                       f"err={str(err)[:120] if err else ''} ms_tid={str(_ms_tid)[:12]}", flush=True)
 
 
                 _tries = 0
                 while (not ok) and _ms_tid and _tries < 60:
+                    if _stopped():
+
+                        err = err or "用户已停止"
+                        break
                     time.sleep(3)
                     _tries += 1
-                    ok, urls, err, _ms_tid = _core_mod._submit_image(_payload, _upstream, _ms_tid)
+                    ok, urls, err, _ms_tid = _core_mod._submit_image(
+                        _payload, _upstream, _ms_tid, local_tid=local_tid)
                 if ok:
+                    break
+                if _stopped():
                     break
                 _transient = bool(err) and any(
                     k in str(err) for k in ("503", "502", "504", "429", "无可用渠道",
@@ -3428,6 +3481,12 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None)
                 except Exception:
                     pass
             continue
+        if _stopped() and (not ok or not urls):
+
+
+
+            print(f"[lv-assets] 已停止：#{_i} 未取得结果，不计入失败", flush=True)
+            break
         if not ok or not urls:
             failed.append({"label": a.get("label"), "error": err})
             if on_progress:
@@ -3613,7 +3672,7 @@ def _lv_submit_job(script, assets_with_url, job_id=None, session_id=None, name=N
     return job_id, default_name, len(norm), failed
 
 
-def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None):
+def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None, local_tid=None):
     
     norm, failed = [], []
     _audios = list(audios or [])
@@ -3623,7 +3682,13 @@ def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None):
     _prov = _tts_provider_now()
     _models = list(_ttsprov.models(_prov) or [])
     print(f"[lv-audio] 开始：共 {_total} 项，生效家={_prov}", flush=True)
-    for _i, a in enumerate(_audios):
+
+
+
+
+
+    for _seq, a in enumerate(_audios):
+        _i = _seq
         _owner = a.get("owner") or ""
         _label = a.get("label") or _owner or ""
 
@@ -3704,6 +3769,10 @@ def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None):
                 failed.append({"label": _label,
                                "error": f"当前模型不支持这些标签：{', '.join(_bad)}"})
                 continue
+
+        if local_tid and _is_task_canceled(local_tid):
+            print(f"[lv-audio] 已按用户要求停止：剩 {_total - _seq} 条声线不再合成", flush=True)
+            break
         try:
             _c = _ttsclient.synthesize_candidate(
                 _txt_spoken, speed=a.get("speed") or 1,
@@ -3753,7 +3822,7 @@ def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None):
     return norm, failed
 
 
-def _agent_tool_events(name, args, session_id, holder, on_item=None):
+def _agent_tool_events(name, args, session_id, holder, on_item=None, local_tid=None):
     
     q = _queue.Queue()
 
@@ -3772,6 +3841,7 @@ def _agent_tool_events(name, args, session_id, holder, on_item=None):
                 on_progress=lambda done, total, label: q.put(("p", (done, total, label))),
                 on_item=on_item,
                 on_delta=lambda inc: q.put(("d", inc)),
+                local_tid=local_tid,
             )
             q.put(("r", item))
         except Exception as e:
@@ -3808,9 +3878,20 @@ def _agent_tool_events(name, args, session_id, holder, on_item=None):
         return
 
 
-def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None, on_delta=None):
+def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None, on_delta=None,
+                    local_tid=None):
     
+    def _st():
+        
+        return bool(local_tid) and _is_task_canceled(local_tid)
+
+    def _canceled_item(what):
+        return {"kind": "canceled", "tool": name,
+                "error": "已按你的要求停止：%s未提交（未产生费用）" % what}, False
+
     if name == "generate_video":
+        if _st():
+            return _canceled_item("本次视频生成")
         payload = {
             "prompt": args.get("prompt") or "",
             "mode": args.get("mode") or "text",
@@ -3832,6 +3913,20 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None, on_d
         }
         body, code = _submit_video(payload)
         if code == 200:
+
+
+
+            _vid = body.get("video_id")
+            if local_tid and _vid:
+                try:
+                    _st_row = _runst.get(local_tid) or {}
+                    _vs = list(((_st_row.get("state") or {}).get("videos")) or [])
+                    _vs.append({"video_id": _vid, "rid": body.get("rid"),
+                                "model": payload.get("model") or "",
+                                "upstream": body.get("upstream") or ""})
+                    _runst.merge_state(local_tid, videos=_vs)
+                except Exception as _e:
+                    print(f"[warn] 记录回合视频任务失败（不影响生成）：{_e}", flush=True)
             return {
                 "kind": "video",
                 "video_id": body.get("video_id"),
@@ -3865,6 +3960,8 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None, on_d
         return {"kind": "h3_optimize", "text": _ocontent, "prompt": _op}, True
 
     if name == "generate_image":
+        if _st():
+            return _canceled_item("本次生图")
         payload = {
             "prompt": args.get("prompt") or "",
             "size": args.get("size"),
@@ -3873,6 +3970,9 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None, on_d
             "sessionId": session_id,
 
             "origin_view": _assets_store.ORIGIN_VIEW_ASSISTANT,
+
+
+            "_parent_run_id": local_tid,
         }
         body, code = _submit_image_task(payload)
         if code == 200:
@@ -3889,6 +3989,10 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None, on_d
     if name == "generate_audio":
 
 
+
+
+        if _st():
+            return _canceled_item("本次配音")
         _txt = str(args.get("text") or "").strip()
         if not _txt:
             return {"kind": "error", "error": "generate_audio 需要 text（要朗读的文字）"}, False
@@ -3971,7 +4075,9 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None, on_d
 
 
 
-        return _multi_angle_submit(args, session_id)
+        if _st():
+            return _canceled_item("本次换机位")
+        return _multi_angle_submit(args, session_id, local_tid=local_tid)
 
     if name == "generate_longvideo_assets":
         assets = args.get("assets") or []
@@ -3982,7 +4088,17 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None, on_d
                     "error": "generate_longvideo_assets 需要非空的 assets 素材清单（每项含 label/kind/prompt）。"
                              "请先规划角色/场景/道具的生成提示词，待用户确认后再调用本工具，不要发空参数。"}, False
         norm, failed = _lv_generate_assets(assets, on_progress=on_progress, on_item=on_item,
-                                           session_id=session_id)
+                                           session_id=session_id, local_tid=local_tid)
+        if local_tid and _is_task_canceled(local_tid):
+
+
+            return {"kind": "longvideo_assets_canceled",
+                    "assets": [{"url": a.get("url"), "label": a.get("label"),
+                                "name": a.get("name"), "kind": a.get("kind")} for a in norm],
+                    "done_count": len(norm),
+                    "total": len(assets),
+                    "error": "已按你的要求停止（已生成 %d/%d 张，其余未提交）"
+                             % (len(norm), len(assets))}, False
         if not norm:
             first = next((f.get("error") for f in failed if f.get("error")), "未知原因")
             return {"kind": "error",
@@ -4004,7 +4120,7 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None, on_d
                     "error": "generate_longvideo_audio 需要非空的 audios 声线清单（每项含 owner/text）。"
                              "请先规划角色声线（归属角色 + 台词），待用户确认图后再调用本工具，不要发空参数。"}, False
         norm, failed = _lv_generate_audio(audios, on_progress=on_progress, on_item=on_item,
-                                           session_id=session_id)
+                                           session_id=session_id, local_tid=local_tid)
         if not norm:
             first = next((f.get("error") for f in failed if f.get("error")), "未知原因")
             return {"kind": "error",
@@ -4566,6 +4682,15 @@ def _run_snapshot_events(row):
         evs.append({"type": "error", "error": row.get("error") or "任务失败"})
     elif status == "interrupted":
         evs.append({"type": "error", "error": row.get("error") or "服务重启导致任务中断，请重新发送。"})
+    elif status == "canceled":
+
+
+
+        _cn = row.get("result") or {}
+        evs.append({"type": "canceled", "run_id": row.get("id"),
+                    "text": "已按你的要求停止：后续不再提交、不再轮询上游"})
+        if _cn:
+            evs.append({"type": "done", "replayed": True, "canceled": True, **_cn})
     return evs
 
 
@@ -4613,6 +4738,24 @@ def _agent_done_payload(items, body, think):
 
 _TURN_PARAM_KEYS = ("stage", "seconds", "size", "count", "resolution", "ratio",
                     "duration", "mode", "speed", "voice_name", "quality")
+
+
+def _agent_canceled_payload(items, body, think, round_no=1, note=""):
+    
+    ev = _agent_done_payload(items, body, think)
+    ev["canceled"] = True
+    ev["hops"] = round_no
+    ev["text"] = (body or "") if body else "已按你的要求停止。"
+    if ev.get("kind") == "error":
+
+        ev["kind"] = "canceled"
+    _done_n = len([i for i in items
+                   if i.get("kind") in ("video", "image", "audio", "longvideo_job",
+                                        "longvideo_assets", "h3_optimize",
+                                        "longvideo_assets_canceled")])
+    ev["summary"] = note or ("已停止：本次已产出 %d 项，剩余不再提交（不再产生费用）" % _done_n
+                             if _done_n else "已停止：后续不再提交、不再轮询上游")
+    return ev
 
 
 def _turn_params(name, args):
@@ -4742,7 +4885,8 @@ def _run_tool_phase(run_id, name, args, session_id, trace=None, round_no=1,
                                      "label": it.get("label"), "kind": it.get("kind")}]})
 
     _holder = {}
-    for _ev in _agent_tool_events(name, args, session_id, _holder, on_item=_on_item):
+    for _ev in _agent_tool_events(name, args, session_id, _holder, on_item=_on_item,
+                                  local_tid=run_id):
         _run_pub(run_id, _ev)
         if _ev.get("type") == "tool_progress" and _ev.get("total"):
             _runst.merge_state(run_id, progress={"done": _ev.get("done"), "total": _ev.get("total"),
@@ -4752,6 +4896,13 @@ def _run_tool_phase(run_id, name, args, session_id, trace=None, round_no=1,
         item = {"kind": "error",
                 "error": _holder.get("error") or ("%s未返回结果" % _tool_label(name, "error"))}
     _failed = (item.get("kind") == "error")
+
+
+
+    _canceled = bool(_runst.is_canceled(run_id)
+                     or item.get("kind") == "longvideo_assets_canceled")
+    if _canceled:
+        _failed = False
     _err_text = str(item.get("error") or "")[:120]
 
 
@@ -4760,21 +4911,28 @@ def _run_tool_phase(run_id, name, args, session_id, trace=None, round_no=1,
     if trace is not None:
         _pt = _turn_params_text(_params)
         if _tool_key:
-            _turn_pub(run_id, _tool_key, "error" if _failed else "done", trace,
-                      label=_tool_label(name, "error" if _failed else "done"), raw=name,
-                      detail=(("失败 · " + _pt) if _pt else "失败") if _failed else _pt,
-                      round_no=round_no, kind="tool", parent=_tools_parent, params=_params,
-                      result={"ok": not _failed, "error": _err_text} if _failed
-                             else {"ok": True})
+            _st = "skipped" if _canceled else ("error" if _failed else "done")
+            _turn_pub(run_id, _tool_key, _st, trace,
+                      label=("已停止" if _canceled
+                             else _tool_label(name, "error" if _failed else "done")),
+                      raw=name, kind="tool", parent=_tools_parent, params=_params,
+                      detail=("已停止 · " + _pt) if _canceled and _pt
+                             else ("已停止" if _canceled
+                                   else ((("失败 · " + _pt) if _pt else "失败") if _failed else _pt)),
+                      round_no=round_no,
+                      result={"ok": not _failed,
+                              **({"canceled": True} if _canceled else {}),
+                              **({"error": _err_text} if _failed else {})})
         if item_level:
 
 
             for _idx, _k in _item_keys.items():
                 if _idx in _item_done:
                     continue
-                _turn_pub(run_id, _k, "error" if _failed else "skipped", trace,
-                          detail="失败" if _failed else "已跳过", round_no=round_no,
-                          kind="item", parent=_parent,
+                _turn_pub(run_id, _k,
+                          "error" if _failed else "skipped", trace,
+                          detail="失败" if _failed else ("已停止，未提交" if _canceled else "已跳过"),
+                          round_no=round_no, kind="item", parent=_parent,
                           result={"ok": False, "error": _err_text} if _failed else None)
 
 
@@ -5015,11 +5173,31 @@ def _agent_run_pipeline(run_id, messages, session_id, plan_armed=False):
 
 
 
+        if _runst.is_canceled(run_id):
+            _turn_pub(run_id, "tools", "skipped", trace, label="已停止",
+                      detail="用户叫停，剩余未执行", kind="tool", round_no=1)
+            _turn_pub(run_id, "finish", "done", trace, round_no=1)
+            _ev = _agent_canceled_payload(items, body, think, 1)
+            _ev["turn"] = trace
+            _runst.mark(run_id, status="canceled", result=_ev,
+                        state={"text": body, "think": think, "turn_trace": trace})
+            _run_pub(run_id, _ev)
+            _runst.release_cancel(run_id)
+            return
+
+
+
+
         _final_text, _finish_set = "", False
         _hop_calls, _hop_items = _calls1, _got1
         _round = 1
         while _round < _AGENT_MAX_HOPS:
             _round += 1
+            if _runst.is_canceled(run_id):
+
+
+                print(f"[agent-loop] 第 {_round} 跳前发现用户已叫停，停止循环", flush=True)
+                break
             _msgs = list(messages)
             _msgs.append({"role": "assistant", "content": body or "",
                           "tool_calls": [{"id": c["id"], "type": "function",
@@ -5094,6 +5272,23 @@ def _agent_run_pipeline(run_id, messages, session_id, plan_armed=False):
             _hop_items = _got_n
             items.extend(_got_n)
             body = _txt or body
+            if _runst.is_canceled(run_id):
+
+                print(f"[agent-loop] 第 {_round} 跳工具执行中被叫停，停止循环", flush=True)
+                break
+
+        if _runst.is_canceled(run_id):
+
+            _turn_pub(run_id, "tools", "skipped", trace, label="已停止",
+                      detail="用户叫停，剩余未执行", kind="tool", round_no=_round)
+            _turn_pub(run_id, "finish", "done", trace, round_no=_round)
+            _ev = _agent_canceled_payload(items, _final_text or body, think, _round)
+            _ev["turn"] = trace
+            _runst.mark(run_id, status="canceled", result=_ev,
+                        state={"text": body, "think": think, "turn_trace": trace})
+            _run_pub(run_id, _ev)
+            _runst.release_cancel(run_id)
+            return
 
         if not _finish_set:
 
@@ -5123,13 +5318,21 @@ def _agent_run_pipeline(run_id, messages, session_id, plan_armed=False):
 
         _run_pub(run_id, done_ev)
     except Exception as e:
-        err = f"助手任务异常：{type(e).__name__}: {e}"
-        try:
-            _runst.mark(run_id, status="error", error=err)
-        except Exception:
-            pass
-        _run_pub(run_id, {"type": "error", "error": err})
+        if _runst.is_canceled(run_id):
+
+
+            print(f"[agent] 回合 {run_id} 在叫停过程中异常退出（按已停止处理）：{e}", flush=True)
+            _run_pub(run_id, {"type": "canceled", "run_id": run_id,
+                              "text": "已按你的要求停止"})
+        else:
+            err = f"助手任务异常：{type(e).__name__}: {e}"
+            try:
+                _runst.mark(run_id, status="error", error=err)
+            except Exception:
+                pass
+            _run_pub(run_id, {"type": "error", "error": err})
     finally:
+        _runst.release_cancel(run_id)
         _run_pub(run_id, None)
 
 
@@ -5137,6 +5340,11 @@ def _agent_run_resume(run_id):
     
     row = _runst.get(run_id)
     if not row:
+        return
+
+
+    if (row.get("status") or "") in _runst.TERMINAL:
+        print(f"[agent-runs] 回合 {run_id} 已是终态（{row.get('status')}），不再续跑", flush=True)
         return
     st = row.get("state") or {}
     body, think = st.get("text") or "", st.get("think") or ""
@@ -5260,6 +5468,58 @@ def api_agent_stream():
             _run_unsub(run_id, q)
 
     return Response(gen(), headers=_SSE_HEADERS)
+
+
+@app.route("/api/agent_run/<run_id>/cancel", methods=["POST"])
+def api_agent_run_cancel(run_id):
+    
+    row = _runst.get(run_id)
+    if not row:
+        return jsonify({"error": "回合不存在或已过期"}), 404
+    st = row.get("status")
+    if st in _runst.TERMINAL:
+        return jsonify({"ok": True, "status": st, "note": "回合已终结，无需叫停"})
+    _runst.cancel(run_id)
+    _mark_task_canceled(run_id)
+
+
+
+
+
+
+    _kids = cancel_child_tasks(run_id)
+
+
+
+    _state = ((_runst.get(run_id) or {}).get("state") or {})
+    _remote = []
+    for _v in list(_state.get("videos") or []):
+        _vid, _m = _v.get("video_id"), str(_v.get("model") or "")
+        if not _vid:
+            continue
+        try:
+            if _rhprov.is_video_model(_m):
+                _ok, _err = _rhprov.cancel(_vid)
+                _remote.append({"video_id": _vid, "upstream": "runninghub",
+                                "ok": bool(_ok), "error": None if _ok else _err})
+            else:
+                _remote.append({"video_id": _vid, "upstream": _v.get("upstream") or _m,
+                                "ok": False,
+                                "error": "该视频上游没有任务撤回接口，已提交的那次无法收回"})
+        except Exception as _e:
+            _remote.append({"video_id": _vid, "upstream": _m, "ok": False,
+                            "error": "%s: %s" % (type(_e).__name__, _e)})
+    _n_pulled = sum(1 for r in _remote if r.get("ok"))
+    _runst.mark(run_id, status="canceled", error="用户已停止（服务端已终止，不再提交新任务）")
+
+    _run_pub(run_id, {"type": "canceled", "run_id": run_id,
+                      "text": "已按你的要求停止：后续不再提交、不再轮询上游",
+                      "children_canceled": [{"tid": _t, "kind": _k} for _t, _k in _kids],
+                      "remote_cancel": _remote})
+    return jsonify({"ok": True, "status": "canceled",
+                    "children_canceled": [{"tid": _t, "kind": _k} for _t, _k in _kids],
+                    "remote_cancel": _remote,
+                    "remote_pulled": _n_pulled})
 
 
 @app.route("/api/agent_run/<run_id>/stream", methods=["GET"])

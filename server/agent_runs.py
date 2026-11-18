@@ -12,7 +12,47 @@ _DB_FILE = os.environ.get("APP_DB_PATH") or os.path.join(_ROOT, "data", "app.db"
 _LOCK = threading.RLock()
 
 
-TERMINAL = ("done", "error", "interrupted")
+
+
+TERMINAL = ("done", "error", "interrupted", "canceled")
+
+
+
+
+
+
+
+
+
+
+_CANCELED_RUNS = set()
+_CANCELED_LOCK = threading.Lock()
+
+
+def cancel(run_id):
+    
+    if not run_id:
+        return False
+    with _CANCELED_LOCK:
+        _CANCELED_RUNS.add(str(run_id))
+    return True
+
+
+def is_canceled(run_id):
+    
+    if not run_id:
+        return False
+    with _CANCELED_LOCK:
+        return str(run_id) in _CANCELED_RUNS
+
+
+def release_cancel(run_id):
+    
+    if not run_id:
+        return False
+    with _CANCELED_LOCK:
+        _CANCELED_RUNS.discard(str(run_id))
+    return True
 
 
 def _conn():
