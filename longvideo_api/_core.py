@@ -1906,7 +1906,7 @@ def _optimize(script: str, rows, llm_model: str = LLM_MODEL, video_model: str = 
             r = _llm.chat("storyboard", messages=payload["messages"], model=llm_model,
                           tools=payload.get("tools"), tool_choice=payload.get("tool_choice"),
                           temperature=0.2, max_tokens=payload.get("max_tokens"),
-                          timeout=(10, 900))
+                          timeout=(60, 900))
         except Exception as e:
 
             last_err = f"网络异常 {type(e).__name__}"
@@ -3089,7 +3089,7 @@ def _ark_create_video(images_urls, audio_urls, prompt, seconds, mode="reference"
             f"{base}/contents/generations/tasks",
             json=payload,
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            timeout=(10, 120),
+            timeout=(60, 120),
         )
     except requests.RequestException as e:
         return _FakeResp(503, {"error": {"message": f"请求方舟失败：{e}"}})
@@ -3153,7 +3153,7 @@ def _wan_create_video(images_urls, audio_urls, prompt, seconds, mode="reference"
         headers["X-DashScope-OssResourceResolve"] = "enable"
     try:
         return requests.post(_wan.create_url(), json=payload, headers=headers,
-                             timeout=(10, 3600))
+                             timeout=(60, 3600))
     except requests.RequestException as e:
         return _FakeResp(503, {"error": {"message": f"请求百炼失败：{e}"}})
 
@@ -3208,7 +3208,7 @@ def _agnes_create_video(images_urls, audio_urls, prompt, seconds, attempt=0, mod
     resp = requests.post(
         f"{_cfg_base()}/videos",
         headers={"Authorization": f"Bearer {_cfg_key()}", "Content-Type": "application/json"},
-        json=payload, timeout=(10, 300),
+        json=payload, timeout=(60, 300),
     )
     return resp
 
@@ -4682,7 +4682,7 @@ def _h3_optimize_core(prompt, materials, on_delta=None):
     if on_delta is None:
 
         try:
-            r = _llm.chat("storyboard", messages=messages, temperature=0.2, timeout=(10, 900))
+            r = _llm.chat("storyboard", messages=messages, temperature=0.2, timeout=(60, 900))
         except Exception as e:
             return None, _shot_opt_err(e)
         if r.status_code != 200:
@@ -4696,7 +4696,7 @@ def _h3_optimize_core(prompt, materials, on_delta=None):
 
         try:
             r = _llm.chat("storyboard", messages=messages, temperature=0.2,
-                          stream=True, timeout=(10, 900))
+                          stream=True, timeout=(60, 900))
         except Exception as e:
             return None, _shot_opt_err(e)
         if r.status_code != 200:
@@ -5783,16 +5783,8 @@ def _purge_session_refs(job_id):
                         continue
                     hit = [msgs[i] for i in idxs]
                     _drop = set(idxs)
-                    keep = [m for i, m in enumerate(msgs) if i not in _drop]
-                    tomb = obj.get("deletedMsgs")
-                    if not isinstance(tomb, list):
-                        tomb = []
-                    for m in hit:
-                        fp = _js_num_str(m.get("time")) + "|" + (m.get("type") or "")
-                        if fp not in tomb:
-                            tomb.append(fp)
-                    obj["messages"] = keep
-                    obj["deletedMsgs"] = tomb
+                    obj["messages"] = [m for i, m in enumerate(msgs) if i not in _drop]
+                    obj.pop("deletedMsgs", None)
                     con.execute("UPDATE %s SET data=? WHERE id=?" % tbl,
                                 (json.dumps(obj, ensure_ascii=False), r["id"]))
                     removed += len(hit)
@@ -5874,6 +5866,48 @@ def _delete_job(job_id):
     n_ref = _purge_session_refs(job_id)
     return 200, {"ok": True, "job_id": job_id, "sessionRefsRemoved": n_ref,
                  "assetsMigrated": migrated, "assetsKept": kept}
+
+
+def sweep_orphan_job_dirs(jobs_dir=None, db_path=None, dry_run=True, verbose=True):
+    
+    root = jobs_dir or JOBS_DIR
+    dbp = db_path or (os.getenv("APP_DB_PATH") or os.path.join(_ROOT, "data", "app.db"))
+    if not os.path.isdir(root):
+        return {"dirs": [], "count": 0, "dry_run": dry_run}
+    live = set()
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % dbp.replace("\\", "/"), uri=True, timeout=30)
+        try:
+            live = {r[0] for r in con.execute("SELECT id FROM lv_jobs")}
+        finally:
+            con.close()
+    except Exception as e:
+        logging.getLogger(__name__).warning("扫孤儿任务目录：打不开库 %s: %s", dbp, e)
+        return {"dirs": [], "count": 0, "dry_run": dry_run}
+    root_real = os.path.realpath(root)
+    orphans = []
+    for name in sorted(os.listdir(root)):
+        d = os.path.join(root, name)
+        if not os.path.isdir(d):
+            continue
+        if name in live:
+            continue
+        if os.path.basename(d) != name:
+            continue
+        if os.path.dirname(os.path.realpath(d)) != root_real:
+            continue
+        orphans.append(name)
+    if not dry_run:
+        for name in orphans:
+            d = os.path.join(root, name)
+            try:
+                shutil.rmtree(d)
+            except Exception as e:
+                logging.getLogger(__name__).warning("清孤儿任务目录失败 %s: %s", d, e)
+    if verbose and orphans:
+        print("  %s %d 个孤儿任务目录: %s"
+              % ("[dry-run]" if dry_run else "[apply]", len(orphans), ", ".join(orphans[:8])))
+    return {"dirs": orphans, "count": len(orphans), "dry_run": dry_run}
 
 
 @lv_bp.route("/jobs/<job_id>", methods=["DELETE"])

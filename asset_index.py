@@ -9,7 +9,9 @@ _ROOT = os.path.dirname(os.path.abspath(__file__))
 _DATA_DIR = os.path.join(_ROOT, "data")
 
 
-_DB_PATH = os.path.join(_DATA_DIR, "app.db")
+
+
+_DB_PATH = os.getenv("APP_DB_PATH") or os.path.join(_DATA_DIR, "app.db")
 
 _CHUNK = 1 << 20
 

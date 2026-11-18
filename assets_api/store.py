@@ -1014,6 +1014,62 @@ def _strip_job_reference(con, job_id, name):
         return False
 
 
+def _strip_audio_job_refs(con, name, url=None):
+    
+    try:
+
+
+        key_name = str(name or "").strip()
+        key_url = str(url or "").strip()
+        if not key_name:
+            return 0, 0
+        rows = con.execute("SELECT id, candidates, ref_path FROM jobs").fetchall()
+        removed = 0
+        affected = 0
+        for row in rows:
+            jid = row[0]
+            try:
+                arr = json.loads(row[1] or "[]")
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(arr, list):
+                continue
+            keep = []
+            changed = False
+            for c in arr:
+                if isinstance(c, dict):
+                    cp = str(c.get("path") or "").strip()
+                    cu = str(c.get("url") or "").strip()
+                    hit = (cp == key_name) or (key_url and cu == key_url)
+                else:
+                    hit = False
+                if hit:
+                    removed += 1
+                    changed = True
+                else:
+                    keep.append(c)
+            if changed:
+                con.execute("UPDATE jobs SET candidates=?, updated_at=? WHERE id=?",
+                            (json.dumps(keep, ensure_ascii=False), time.time(), jid))
+                affected += 1
+
+
+
+        refs_removed = 0
+        if key_name.startswith("tts_ref/"):
+            for row in rows:
+                if str(row[2] or "").strip() == key_name:
+                    con.execute("UPDATE jobs SET ref_path='', updated_at=? WHERE id=?",
+                                (time.time(), row[0]))
+                    refs_removed += 1
+        return removed, affected, refs_removed
+    except sqlite3.OperationalError:
+        return 0, 0, 0
+    except Exception as e:
+        logging.getLogger(__name__).warning("摘除 jobs 音频引用失败 %s: %s", name, e)
+        return 0, 0, 0
+
+
 def _delete_one(name, from_job=None):
     
     con = _db()
@@ -1026,6 +1082,11 @@ def _delete_one(name, from_job=None):
         con.execute("DELETE FROM assets WHERE name=?", (name,))
         if from_job:
             _strip_job_reference(con, from_job, name)
+
+
+
+        if "/" in str(name) and str(name).split("/", 1)[0] in ("tts_out", "tts_ref", "voices"):
+            _strip_audio_job_refs(con, name, url)
 
         try:
             prune_orphan_subjects(con)

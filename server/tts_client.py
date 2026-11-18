@@ -30,7 +30,17 @@ _REF_DIR = os.path.join(_STORAGE, "tts_ref")
 _PUBLIC_DIRS = ("voices", "tts_out", "tts_ref")
 
 
-_JOBS_KEEP = 300
+
+
+
+
+
+
+
+
+
+
+
 
 
 SPEED_MIN, SPEED_MAX, SPEED_STEP, SPEED_DEFAULT = 0.25, 4.0, 0.25, 1.0
@@ -505,11 +515,8 @@ def create_job(text, speed=SPEED_DEFAULT, voice_name="", ref_path="", count=2, m
                  (preset_voice or "").strip(), (origin_view or "").strip()),
             )
 
-            conn.execute(
-                "DELETE FROM jobs WHERE id NOT IN "
-                "(SELECT id FROM jobs ORDER BY created_at DESC LIMIT ?)",
-                (_JOBS_KEEP,),
-            )
+
+
             conn.commit()
         finally:
             conn.close()

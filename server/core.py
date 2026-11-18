@@ -125,7 +125,7 @@ _NO_RETRY_SESSION = _build_no_retry_session()
 
 def _llm_chat_completions(messages, tools=None, tool_choice="auto",
                           model=None, temperature=0.2,
-                          max_tokens=4096, timeout=(10, 300), extra=None,
+                          max_tokens=4096, timeout=(60, 300), extra=None,
                           use_case="assistant"):
     
     try:
@@ -322,43 +322,12 @@ def _init_db():
 
             conn.execute("CREATE TABLE IF NOT EXISTS agent_sessions (id TEXT PRIMARY KEY, name TEXT, created_at INTEGER, data TEXT)")
 
-            conn.execute("CREATE TABLE IF NOT EXISTS deleted_sessions "
-                         "(id TEXT PRIMARY KEY, deleted_at INTEGER)")
+
+
+            conn.execute("DROP TABLE IF EXISTS deleted_sessions")
             conn.commit()
         finally:
             conn.close()
-
-
-def _tombstoned_session_ids(conn):
-    
-    try:
-        return {r[0] for r in conn.execute("SELECT id FROM deleted_sessions")}
-    except sqlite3.Error:
-        return set()
-
-
-def _server_tombstones():
-    
-    _ensure_db()
-    try:
-        conn = _db_conn()
-        try:
-            return [r[0] for r in conn.execute("SELECT id FROM deleted_sessions")]
-        finally:
-            conn.close()
-    except Exception:
-        return []
-
-
-def _mark_session_deleted(conn, ids):
-    
-    now = int(time.time() * 1000)
-    for sid in (ids or []):
-        if not sid:
-            continue
-        conn.execute(
-            "INSERT INTO deleted_sessions(id, deleted_at) VALUES(?,?) "
-            "ON CONFLICT(id) DO UPDATE SET deleted_at=excluded.deleted_at", (sid, now))
 
 
 def _ensure_db():
@@ -1442,6 +1411,14 @@ _WORKER_LOCK = threading.Lock()
 
 
 
+
+_GC_STARTED = False
+_GC_INTERVAL = max(300, int(os.getenv("ORPHAN_GC_INTERVAL", "1800") or 1800))
+_GC_ENABLED = str(os.getenv("ORPHAN_GC_ENABLED", "0") or "0") in ("1", "true", "yes")
+
+
+
+
 _TASK_PROGRESS_LOCKS = {}
 _TASK_PROGRESS_LOCKS_LOCK = threading.Lock()
 
@@ -1704,13 +1681,34 @@ def _progress_one(tid, rec):
         lock.release()
 
 
+def _orphan_gc_worker():
+    
+    import time as _t
+    while True:
+        _t.sleep(_GC_INTERVAL)
+        try:
+            import orphan_gc
+            res = orphan_gc.sweep_all(dry_run=False, include_null=False, verbose=False)
+            fr = res.get("files") or {}
+            if fr.get("count"):
+                print("[gc] 回收孤儿文件 %d 个 / %.1f MB"
+                      % (fr["count"], fr.get("bytes", 0) / 1048576.0))
+        except Exception as e:
+            print("[warn] orphan GC tick 异常：%s" % e)
+
+
 def _start_worker_once():
-    global _WORKER_STARTED
+    global _WORKER_STARTED, _GC_STARTED
     with _WORKER_LOCK:
         if _WORKER_STARTED:
             return
         t = threading.Thread(target=_task_worker, name="task-worker", daemon=True)
         t.start()
+        if _GC_ENABLED and not _GC_STARTED:
+            g = threading.Thread(target=_orphan_gc_worker, name="orphan-gc", daemon=True)
+            g.start()
+            _GC_STARTED = True
+            print("[info] 孤儿 GC 已启动（每 %d 秒）" % _GC_INTERVAL)
         _WORKER_STARTED = True
         print("[info] 任务持久化 worker 已启动")
 
@@ -1782,23 +1780,6 @@ def _load_sessions():
     return {"sessions": sessions, "currentId": current_id}
 
 
-def _merge_tombstones(sess, stored_tombs):
-    
-    try:
-        old = stored_tombs.get(sess.get("id")) or []
-        if not old:
-            return sess
-        cur = sess.get("deletedMsgs")
-        cur = list(cur) if isinstance(cur, list) else []
-        merged = cur + [f for f in old if f not in cur]
-        if len(merged) != len(cur):
-            sess = dict(sess)
-            sess["deletedMsgs"] = merged
-    except Exception:
-        pass
-    return sess
-
-
 def _purge_history_rows(conn, sids):
     
     if not conn or not sids:
@@ -1817,6 +1798,32 @@ def _purge_history_rows(conn, sids):
     for i in dead:
         conn.execute("DELETE FROM history WHERE id=?", (i,))
     return urls
+
+
+def _purge_session_children(conn, sid, removed_tids=()):
+    
+    out = {"image_jobs": 0, "asset_content": 0}
+    if not conn:
+        return out
+    tids = [str(t) for t in (removed_tids or []) if t]
+    if tids:
+        q = ",".join("?" * len(tids))
+        try:
+            cur = conn.execute(
+                "DELETE FROM image_jobs WHERE task_id IN (%s)" % q, tids)
+            out["image_jobs"] = cur.rowcount or 0
+        except sqlite3.OperationalError:
+            pass
+
+    try:
+        import asset_index
+        names = [r[0] for r in conn.execute("SELECT name FROM assets WHERE origin_session=?",
+                                            (sid,))]
+        if names:
+            out["asset_content"] = asset_index.forget_many(names)
+    except Exception:
+        pass
+    return out
 
 
 def _save_sessions(data):
@@ -1839,47 +1846,30 @@ def _save_sessions(data):
 
 
 
-
     with _DB_LOCK:
         conn = _db_conn()
         try:
-            stored_tombs, stored_msgs = {}, {}
 
 
-            _tomb = _tombstoned_session_ids(conn)
+
+
+            stored_msgs = {}
             if not force:
                 for row in conn.execute("SELECT id, data FROM sessions"):
                     try:
                         obj = json.loads(row[1])
                         ms = obj.get("messages")
                         stored_msgs[row[0]] = ms if isinstance(ms, list) else []
-                        tm = obj.get("deletedMsgs")
-                        stored_tombs[row[0]] = tm if isinstance(tm, list) else []
                     except Exception:
                         stored_msgs[row[0]] = []
             for s in sessions:
                 if not isinstance(s, dict) or "id" not in s:
                     continue
-
-
-
-                if s["id"] in _tomb:
-                    continue
-                s = _merge_tombstones(s, stored_tombs)
                 incoming = s.get("messages") or []
-
-
-
-
-
-
-
-
-
                 if not force:
                     stored = stored_msgs.get(s["id"]) or []
                     if stored:
-                        merged = _msgst.merge_messages(incoming, stored, tombstones=s.get("deletedMsgs"))
+                        merged = _msgst.merge_messages(incoming, stored)
                         if len(merged) != len(incoming):
                             print(f"[sessions] {s['id']} 消息级合并：客户端 {len(incoming)} 条 + 服务端独有 "
                                   f"{len(merged) - len(incoming)} 条（含兜底写回的结果消息）")
@@ -1889,9 +1879,6 @@ def _save_sessions(data):
                     "ON CONFLICT(id) DO UPDATE SET name=excluded.name, created_at=excluded.created_at, data=excluded.data",
                     (s["id"], s.get("name"), s.get("createdAt"), json.dumps(s, ensure_ascii=False)),
                 )
-
-
-
             if current_id is not None:
                 conn.execute(
                     "INSERT INTO meta(key, value) VALUES('currentId', ?) "
@@ -1917,28 +1904,22 @@ def _load_agent_sessions():
         try:
             rows = conn.execute("SELECT data FROM agent_sessions").fetchall()
             cur = conn.execute("SELECT value FROM meta WHERE key='agentCurrentId'").fetchone()
-            tomb = _tombstoned_session_ids(conn)
         finally:
             conn.close()
     out = []
     for r in rows:
         try:
-            obj = json.loads(r["data"])
+            out.append(json.loads(r["data"]))
         except Exception:
             continue
-        if isinstance(obj, dict) and obj.get("id") in tomb:
-            continue
-        out.append(obj)
     cur_id = cur["value"] if cur else None
-    if cur_id in tomb:
-        cur_id = out[0]["id"] if out else None
     return {"sessions": out, "currentId": cur_id}
 
 
 def _delete_agent_session(sid):
     
     _ensure_db()
-    ntask, nhist = 0, 0
+    ntask, nhist, nrun = 0, 0, 0
     with _DB_LOCK:
         conn = _db_conn()
         try:
@@ -1954,16 +1935,20 @@ def _delete_agent_session(sid):
             for t in tids:
                 conn.execute("DELETE FROM tasks WHERE tid=?", (t,))
             ntask = len(tids)
+
+
+            _purge_session_children(conn, sid, tids)
+            cur_run = conn.execute(
+                "DELETE FROM agent_runs WHERE session_id=?", (sid,))
+            nrun = cur_run.rowcount or 0
             _h0 = conn.execute("SELECT COUNT(*) AS c FROM history").fetchone()["c"]
             _purge_history_rows(conn, [sid])
             nhist = _h0 - conn.execute("SELECT COUNT(*) AS c FROM history").fetchone()["c"]
             conn.execute("DELETE FROM agent_sessions WHERE id=?", (sid,))
-            _mark_session_deleted(conn, [sid])
             cur = conn.execute("SELECT value FROM meta WHERE key='agentCurrentId'").fetchone()
             if cur and cur["value"] == sid:
                 first = conn.execute(
-                    "SELECT id FROM agent_sessions WHERE id NOT IN "
-                    "(SELECT id FROM deleted_sessions) ORDER BY created_at DESC LIMIT 1"
+                    "SELECT id FROM agent_sessions ORDER BY created_at DESC LIMIT 1"
                 ).fetchone()
                 new_cur = first["id"] if first else None
                 conn.execute(
@@ -1972,7 +1957,8 @@ def _delete_agent_session(sid):
             conn.commit()
         finally:
             conn.close()
-    return {"ok": True, "existed": existed, "tasks": ntask, "history": nhist}
+    return {"ok": True, "existed": existed, "tasks": ntask, "history": nhist,
+            "agentRuns": nrun}
 
 
 def _save_agent_sessions(data):
@@ -1984,33 +1970,25 @@ def _save_agent_sessions(data):
     with _DB_LOCK:
         conn = _db_conn()
         try:
-            stored_msgs, stored_tombs = {}, {}
+            stored_msgs = {}
 
-            _tomb = _tombstoned_session_ids(conn)
             if not force:
                 for row in conn.execute("SELECT id, data FROM agent_sessions"):
                     try:
                         obj = json.loads(row[1])
                         ms = obj.get("messages")
                         stored_msgs[row[0]] = ms if isinstance(ms, list) else []
-                        tm = obj.get("deletedMsgs")
-                        stored_tombs[row[0]] = tm if isinstance(tm, list) else []
                     except Exception:
                         stored_msgs[row[0]] = []
             for s in sessions:
                 if not isinstance(s, dict) or "id" not in s:
                     continue
-
-                if s["id"] in _tomb:
-                    continue
-                s = _merge_tombstones(s, stored_tombs)
                 incoming = s.get("messages") or []
-
 
                 if not force:
                     stored = stored_msgs.get(s["id"]) or []
                     if stored:
-                        merged = _msgst.merge_messages(incoming, stored, tombstones=s.get("deletedMsgs"))
+                        merged = _msgst.merge_messages(incoming, stored)
                         if len(merged) != len(incoming):
                             print(f"[agent_sessions] {s['id']} 消息级合并：客户端 {len(incoming)} 条 + "
                                   f"服务端独有 {len(merged) - len(incoming)} 条")

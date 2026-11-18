@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import time
 import unicodedata
 from urllib.parse import unquote
 
@@ -31,6 +32,7 @@ import thumbs as _thumbs
 
 import server.tts_client as _ttsclient
 import server.msg_store as _msgst
+import server.session_crud as _scrud
 import assets_api.store as _assets_store
 import server.depth as _depthmod
 import server.depth_env as _depth_env
@@ -52,10 +54,10 @@ from server.core import (
     _cfg_base, _cfg_key, _cfg_poll, _create_task, _db_conn, _delete_agent_session,
     _ensure_db,
     _get_task, _infer_ext_and_mime, _llm_chat_completions, _load_agent_sessions,
-    _load_history, _load_sessions, _load_tasks, _mark_session_deleted,
+    _load_history, _load_sessions, _load_tasks,
     _mark_task_canceled, _persist_generated_video, _public_base, _register_generated_video,
     _safe_name, _save_agent_sessions, _save_history, _save_sessions,
-    _server_tombstones, _sync_result_to_session, _to_b64_if_local,
+    _sync_result_to_session, _to_b64_if_local,
     _task_stage, _queue_depth,
     _update_task,
     app,
@@ -1751,7 +1753,7 @@ def _screenplay_second_pass(messages, call, stage, on_progress=None,
         body, err = _llm_chat_completions(
             msgs, tools=None, tool_choice=None,
             max_tokens=_max_tok,
-            timeout=(10, 900))
+            timeout=(60, 900))
         if err:
             raise RuntimeError(err)
         msg = (body.get("choices") or [{}])[0].get("message") or {}
@@ -1762,7 +1764,7 @@ def _screenplay_second_pass(messages, call, stage, on_progress=None,
         return content, think
 
     r = _llm.chat("assistant", msgs, tools=None, tool_choice=None, stream=True,
-                  max_tokens=_max_tok, timeout=(10, 900))
+                  max_tokens=_max_tok, timeout=(60, 900))
     if r.status_code != 200:
         try:
             _d = r.json()
@@ -1867,7 +1869,7 @@ def _agent_tool_second_pass(messages, calls, items, first_content="",
     if on_reasoning is None and on_delta is None:
         body, err = _llm_chat_completions(
             msgs, tools=None, tool_choice=None,
-            max_tokens=_max_tok, timeout=(10, 900))
+            max_tokens=_max_tok, timeout=(60, 900))
         if err:
             raise RuntimeError(err)
         msg = (body.get("choices") or [{}])[0].get("message") or {}
@@ -1877,7 +1879,7 @@ def _agent_tool_second_pass(messages, calls, items, first_content="",
             think, content = _agent_split_think(content)
         return content, think
     r = _llm.chat("assistant", msgs, tools=None, tool_choice=None, stream=True,
-                  max_tokens=_max_tok, timeout=(10, 900))
+                  max_tokens=_max_tok, timeout=(60, 900))
     if r.status_code != 200:
         try:
             _d = r.json()
@@ -1945,6 +1947,299 @@ AGENT_PLAN_HEAD = "先跟你对一下，还没开始跑："
 AGENT_PLAN_ASK = "要改吗，确认就开始"
 
 
+
+
+
+
+
+
+
+
+
+
+_AGENT_MAX_HOPS = 5
+_AGENT_REDO_FIELD = "redo_reason"
+
+
+def _agent_args_key(name, args):
+    
+    try:
+        s = json.dumps(args or {}, ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:
+        s = str(args)
+    return (name or "") + "|" + s
+
+
+def _agent_ledger_add(ledger, name, items):
+    
+    if not name or not isinstance(items, list):
+        return
+    ok = err = reused = 0
+    failed = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        if it.get("kind") == "dedup":
+            reused += 1
+            continue
+        if it.get("kind") in ("error", "need_reason"):
+            err += 1
+            if it.get("error"):
+                failed.append(str(it["error"])[:40])
+            continue
+        assets = it.get("assets")
+        if isinstance(assets, list) and assets:
+            ok += len(assets)
+        elif it.get("kind"):
+            ok += 1
+        for f in (it.get("failed") or []):
+            if isinstance(f, dict):
+                err += 1
+                failed.append(str(f.get("label") or f.get("name") or "未命名")[:24])
+    ledger.append({"tool": name, "ok": ok, "err": err,
+                   "failed_labels": failed[:8], "reused": reused})
+
+
+def _agent_ledger_text(ledger, round_no):
+    
+    if not ledger:
+        return ""
+    lines = ["【本回合已执行】"]
+    for i, e in enumerate(ledger, 1):
+        bits = [e.get("tool") or "?", "成功 %d" % e.get("ok", 0)]
+        if e.get("err"):
+            bits.append("失败 %d" % e["err"])
+        line = "%d. %s" % (i, " · ".join(bits))
+        if e.get("failed_labels"):
+            line += "（失败项：%s）" % "、".join(e["failed_labels"][:8])
+        if e.get("reused"):
+            line += " · 复用上次结果 %d 项" % e["reused"]
+        lines.append(line)
+    lines.append("【轮次】当前第 %d 跳，上限 %d 跳" % (round_no, _AGENT_MAX_HOPS))
+    return "\n".join(lines)
+
+
+def _agent_hop_stream(msgs, on_reasoning=None, on_delta=None, on_tool=None, tools="default"):
+    
+    _r = _llm.chat("assistant", msgs,
+                   tools=(_agent_tools() if tools == "default" else tools),
+                   tool_choice=("auto" if tools == "default" else None),
+                   stream=True,
+                   max_tokens=_llm.max_output_for("assistant", AGENT_MAX_TOKENS),
+                   timeout=(60, 600))
+    if _r.status_code != 200:
+        try:
+            _d = _r.json()
+            _msg = _d.get("detail") or (_d.get("error") or {}).get("message") or _d
+        except Exception:
+            _msg = _r.content.decode("utf-8", errors="replace")[:300]
+        raise RuntimeError("LLM 拒绝请求（%s）：%s" % (_r.status_code, _msg))
+    _on_r = on_reasoning or (lambda inc: None)
+    _on_d = on_delta or (lambda inc: None)
+    acc = think_acc = ""
+    tc_buf = {}
+    announced = False
+
+
+    for raw in _r.iter_lines(decode_unicode=False):
+        if not raw:
+            continue
+        line = raw.decode("utf-8", errors="replace").strip()
+        if not line.startswith("data:"):
+            continue
+        chunk = line[5:].strip()
+        if chunk == "[DONE]":
+            break
+        try:
+            obj = json.loads(chunk)
+        except Exception:
+            continue
+        delta = ((obj.get("choices") or [{}])[0].get("delta") or {})
+        rc = delta.get("reasoning_content")
+        if rc:
+            if think_acc and rc.startswith(think_acc) and len(rc) > len(think_acc):
+                inc = rc[len(think_acc):]
+            elif think_acc and rc == think_acc and len(think_acc) >= 64:
+                inc = ""
+            else:
+                inc = rc
+            if inc:
+                think_acc += inc
+                _on_r(inc)
+        c = delta.get("content")
+        if c:
+            if acc and c.startswith(acc) and len(c) > len(acc):
+                inc = c[len(acc):]
+            elif acc and c == acc and len(acc) >= 64:
+                inc = ""
+            else:
+                inc = c
+            if inc:
+                acc += inc
+                _on_d(inc)
+        for tc in (delta.get("tool_calls") or []):
+            idx = tc.get("index", 0)
+            b = tc_buf.setdefault(idx, {"id": "", "name": "", "args": ""})
+            if tc.get("id"):
+                b["id"] = tc["id"]
+            fn = tc.get("function") or {}
+            if fn.get("name"):
+                b["name"] = fn["name"]
+                if not announced:
+                    announced = True
+                    if on_tool:
+                        on_tool(fn["name"])
+            if fn.get("arguments"):
+                b["args"] += fn["arguments"]
+    content = acc.strip()
+    think = think_acc.strip()
+    if not think:
+        think, content = _agent_split_think(content)
+    calls = [{"id": tc_buf[i].get("id") or ("call_%d" % i),
+              "name": tc_buf[i].get("name") or "",
+              "arguments": tc_buf[i].get("args") or "{}"}
+             for i in sorted(tc_buf.keys())]
+    return content, think, calls
+
+
+def _agent_parse_calls(calls):
+    
+    parsed = []
+    for c in calls:
+        name = c.get("name") or ""
+        try:
+            args = json.loads(c.get("arguments") or "{}")
+            if not isinstance(args, dict):
+                args = {}
+            parsed.append((name, args, None))
+        except Exception as e:
+            parsed.append((name, None, {"kind": "error", "tool": name,
+                                        "error": "参数解析失败：%s" % str(e)[:120]}))
+    return parsed
+
+
+def _agent_exec_batch(run_id, parsed, session_id, trace, round_no, dedup, gen_counts,
+                      ledger=None):
+    
+    _tool_names = sorted({n for n, _a, _e in parsed if n})
+    _single = (len(_tool_names) == 1)
+
+    def _lbl(st):
+
+
+        return _turn_label("tools", st)
+
+    _args0 = next((a for n, a, _e in parsed if n == _tool_names[0]), None) if _single else None
+    _params = _turn_params(_tool_names[0], _args0) if _single else None
+    _run_detail = _turn_params_text(_params) if _single else "%d 个工具" % len(_tool_names)
+    _turn_pub(run_id, "tools", "running", trace, label=_lbl("running"),
+              detail=_run_detail,
+              kind="tool", params=_params, round_no=round_no,
+              raw=_tool_names[0] if _single else " ".join(_tool_names))
+    _run_pub(run_id, {"type": "tool_running", "text": _lbl("running"),
+                      "tools": _tool_names, "phase": "tool"})
+
+    items, _opt_text = [], None
+
+
+    for _idx, (_name, _args, _pre_err) in enumerate(parsed):
+        if _name == "optimize_h3_prompt" and not _pre_err:
+            _got = _run_tool_phase(run_id, _name, _args, session_id, trace=trace,
+                                   round_no=round_no, item_level=_single,
+                                   call_no=_idx + 1)
+            items.extend(_got)
+            _it = next((i for i in _got if i.get("kind") == "h3_optimize"), None)
+            if _it and _it.get("text"):
+                _opt_text = _it["text"]
+    for _idx, (_name, _args, _pre_err) in enumerate(parsed):
+        if _name == "optimize_h3_prompt":
+            continue
+        if _name == "generate_video" and _opt_text:
+            _args = dict(_args)
+            _args["prompt"] = _opt_text
+        if _pre_err:
+            items.append(_pre_err)
+            if ledger is not None:
+                _agent_ledger_add(ledger, _name, [_pre_err])
+            if trace is not None:
+                _turn_pub(run_id, _tool_turn_key(_name, _idx + 1), "error", trace,
+                          label=_tool_label(_name, "error"), raw=_name or "",
+                          detail="参数解析失败", kind="tool",
+                          parent=_turn_id("tools", round_no), round_no=round_no,
+                          result={"ok": False, "error": str(_pre_err.get("error") or "")[:120]})
+            continue
+
+        _k = _agent_args_key(_name, _args)
+        if dedup is not None and _k in dedup:
+            _prev = dedup[_k]
+            _d = {"kind": "dedup", "tool": _name, "reused": _prev}
+            items.append(_d)
+            if ledger is not None:
+                _agent_ledger_add(ledger, _name, [_d])
+            if trace is not None:
+                _turn_pub(run_id, _tool_turn_key(_name, _idx + 1), "skipped", trace,
+                          label=_tool_label(_name, "skipped"), raw=_name or "",
+                          detail="已复用上次结果", kind="tool",
+                          parent=_turn_id("tools", round_no), round_no=round_no,
+                          result={"ok": True, "dedup": True})
+            print(f"[agent-loop] 同参去重命中 {_name}，复用上次结果，不发上游", flush=True)
+            continue
+
+        if _name in AGENT_CONFIRM_TOOLS and (gen_counts or {}).get(_name, 0) >= 1:
+            if not str((_args or {}).get(_AGENT_REDO_FIELD) or "").strip():
+                _nr = {"kind": "need_reason", "tool": _name,
+                       "error": "本回合已提交过%s：再次生成必须在参数里写明 `%s`（这次为什么重做），否则不会执行。"
+                                % (_tool_label(_name, "running").replace("正在", ""),
+                                   _AGENT_REDO_FIELD)}
+                items.append(_nr)
+                if ledger is not None:
+                    _agent_ledger_add(ledger, _name, [_nr])
+                if trace is not None:
+                    _turn_pub(run_id, _tool_turn_key(_name, _idx + 1), "warn", trace,
+                              label=_tool_label(_name, "warn"), raw=_name or "",
+                              detail="需要说明重做理由", kind="tool",
+                              parent=_turn_id("tools", round_no), round_no=round_no,
+                              result={"ok": False, "needReason": True})
+                print(f"[agent-loop] {_name} 二次生成缺 {_AGENT_REDO_FIELD}，退回让模型补", flush=True)
+                continue
+        _got = _run_tool_phase(run_id, _name, _args, session_id, trace=trace,
+                               round_no=round_no, item_level=_single,
+                               call_no=_idx + 1)
+        items.extend(_got)
+        if dedup is not None:
+            _ok_item = next((i for i in _got if i.get("kind") not in ("error", "need_reason")), None)
+            if _ok_item is not None:
+                dedup[_k] = _ok_item
+        if gen_counts is not None and _name in AGENT_CONFIRM_TOOLS:
+            if any(i.get("kind") not in ("error", "need_reason") for i in _got):
+                gen_counts[_name] = gen_counts.get(_name, 0) + 1
+        if ledger is not None:
+            _agent_ledger_add(ledger, _name, _got)
+
+    _n_err = sum(1 for i in items if i.get("kind") == "error")
+    _n_reason = sum(1 for i in items if i.get("kind") == "need_reason")
+    _n_ok = sum(1 for i in items if i.get("kind") not in ("error", "need_reason"))
+    if _n_reason and not _n_ok and not _n_err:
+
+        _tools_state, _tools_detail = "warn", "需要说明重做理由"
+    elif _n_err and not _n_ok:
+        _tools_state, _tools_detail = "error", _tools_verdict(0, _n_err)
+    elif _n_err or _n_reason:
+        _tools_state, _tools_detail = "warn", _tools_verdict(_n_ok, _n_err + _n_reason)
+    else:
+        _tools_state, _tools_detail = "done", _tools_verdict(_n_ok, 0)
+    _turn_pub(run_id, "tools", _tools_state, trace, label=_lbl(_tools_state),
+
+
+              detail=_run_detail, kind="tool",
+              round_no=round_no,
+              raw=_tool_names[0] if _single else " ".join(_tool_names),
+              result={"ok": _n_err == 0 and _n_reason == 0, "okCount": _n_ok,
+                      "errorCount": _n_err, "needReasonCount": _n_reason,
+                      "verdict": _tools_detail})
+    return items, _tool_names, _single
+
+
 def _agent_plan_armed(hist):
     
     if not isinstance(hist, list):
@@ -1962,13 +2257,13 @@ _AGENT_PLAN_LABEL = {
     "generate_image": "生成图片",
     "generate_audio": "生成音频",
     "generate_multi_angle": "换机位重拍",
-    "generate_longvideo_assets": "生成长视频素材图",
-    "generate_longvideo_audio": "生成长视频角色声线",
+    "generate_longvideo_assets": "生成素材图",
+    "generate_longvideo_audio": "生成角色声线",
     "submit_longvideo_job": "提交长视频任务",
 
 
     "optimize_h3_prompt": "优化 H3 提示词",
-    "read_screenplay_rules": "读取剧本规则",
+    "read_screenplay_rules": "读取创作规则",
     "register_assets": "登记素材",
 }
 _AGENT_PLAN_FIELDS = {
@@ -2118,7 +2413,17 @@ AGENT_SYSTEM_PROMPT = (
     "同时必须填 name 参数给任务命名：剧本有名称（第1/2步的剧名 / 剧本标题）就原样使用剧本名称；"
     "没有剧本名称就用一句与剧本内容相关的简短概述（不超过 20 字）命名。"
     "严禁用时间、日期、「任务」「未命名」等占位名，也严禁用「任务 M/D HH:MM」这类默认名。\n"
-    "   严禁在未获用户明确确认前调用 generate_longvideo_assets / generate_longvideo_audio / submit_longvideo_job。"
+    "   严禁在未获用户明确确认前调用 generate_longvideo_assets / generate_longvideo_audio / submit_longvideo_job。\n"
+    "\n【什么时候该停：每次打算再调工具前，先自检这三条】\n"
+    "   1. 这一轮的目标达成了没有？达成即停 —— 哪怕还有轮次可用。多调一次不会更好，只会更慢。\n"
+    "   2. 要调的这个工具 + 这组参数，本回合是不是已经成功过？成功过就别再调：完全相同的调用会被直接复用上次结果、"
+    "不会真的重做，白占一轮，用户还得多等。\n"
+    "   3. 同一个失败项是不是已经原样重试过？试过就停手 —— 把失败项和原因如实说给用户，等他决定。"
+    "不要拿一样的参数反复撞，那不是努力，是浪费。\n"
+    "【能自己补的就自己补】失败项如果改参数就能解决（换机位、改提示词、去掉参考图、只传需重生的项），"
+    "直接在同一回合里补做一次，不要停下来问「要我重试吗」；补完还是失败，再如实汇报哪里没成。\n"
+    "【重做要说明理由】本回合已经提交过的生成类工具，若确实需要再做一次（例如补那几张失败的），"
+    "必须在参数里填 redo_reason（一句话说明为什么重做）。没填就不会执行，工具会把这条要求回给你。\n"
 )
 
 
@@ -2460,6 +2765,19 @@ def _agent_tools():
     if _video_provider_state().get("winner") != "runninghub":
         tools = [t for t in tools
                  if (t.get("function") or {}).get("name") != "optimize_h3_prompt"]
+
+
+
+    for _t in tools:
+        _fn = _t.get("function") or {}
+        if _fn.get("name") in AGENT_CONFIRM_TOOLS:
+            _props = _fn.setdefault("parameters", {}).setdefault("properties", {})
+            if isinstance(_props, dict):
+                _props[_AGENT_REDO_FIELD] = {
+                    "type": "string",
+                    "description": ("本回合已提交过本工具时必填：一句话说明这次为什么重做"
+                                    "（例如：补 3 张失败的素材）。本回合首次调用不要填。"),
+                }
     return tools
 
 
@@ -2662,6 +2980,8 @@ AGENT_TOOLS = [
             "description": "（仅当当前视频模型是 MiniMax H3 / RunningHub 时调用）把用户的需求提示词优化为 H3 官方「六段全参考」格式。"
                            "在调用 generate_video 之前必须先调用本工具：把用户原始需求（可含 <Picture N>/<Audio N>/<Video N> 编号）传进 prompt，"
                            "本工具返回优化后的六段提示词。**返回结果会自动用于随后的 generate_video**（无需你再手工回填）；"
+                           "六段全文由结果卡片直接展示给用户——调用后正文只做简短确认（如「已按 H3 格式优化，可以开始生成」），"
+                           "**不要在正文里手写、复述或改写同一份六段内容**，避免与卡片重复且两份不一致；"
                            "若当前视频模型不是 H3（Agnes / 方舟），不要调用本工具。",
             "parameters": {
                 "type": "object",
@@ -3439,11 +3759,11 @@ def _agent_tool_events(name, args, session_id, holder, on_item=None):
 
 
     _idle_hint = {
-        "generate_longvideo_assets": "已提交长视频素材生成，等待上游返回…",
-        "generate_audio": "已提交音频生成，等待上游返回…",
-        "submit_longvideo_job": "已提交长视频任务，等待上游返回…",
-        "optimize_h3_prompt": "已提交 H3 提示词优化，等待上游返回…",
-    }.get(name, "已提交工具调用，等待上游返回…")
+        "generate_longvideo_assets": "已提交素材生成，等待上游",
+        "generate_audio": "已提交音频生成，等待上游",
+        "submit_longvideo_job": "已提交视频任务，等待上游",
+        "optimize_h3_prompt": "已提交提示词优化，等待上游",
+    }.get(name, "已提交，等待上游")
 
     def _work():
         try:
@@ -3473,7 +3793,7 @@ def _agent_tool_events(name, args, session_id, holder, on_item=None):
             continue
         if kind == "p":
             done, total, label = payload
-            txt = f"正在生成素材 {done}/{total}" + (f"：{label}" if label else "")
+            txt = "正在生成素材 %d/%d" % (done, total) + ((" · " + label) if label else "")
             yield {"type": "tool_progress", "done": done, "total": total,
                    "label": label, "text": txt}
             continue
@@ -3482,7 +3802,7 @@ def _agent_tool_events(name, args, session_id, holder, on_item=None):
             yield {"type": "h3_delta", "text": payload}
             continue
         if kind == "e":
-            holder["error"] = f"工具 {name} 执行失败：{payload}"
+            holder["error"] = "%s失败：%s" % (_tool_label(name, "error"), payload)
         else:
             holder["item"] = payload
         return
@@ -4045,13 +4365,69 @@ def _run_pub(run_id, ev):
 
 
 
-_AGENT_TURN_STEPS = {
-    "think":  "已完成需求理解",
-    "rules":  "已读取创作规则",
-    "write":  "按规则撰写",
-    "tools":  "整理并执行工具",
-    "finish": "整理回复",
+
+
+
+
+
+
+
+
+
+
+_TURN_STEP_BASE = {
+    "think":  "理解需求",
+
+
+
+    "reason": "推理",
+    "followup": "处理结果",
+    "rules":  "读取规则",
+    "read":   "读取规则",
+    "plan":   "规划内容",
+
+
+
+
+
+    "write":  ("处理", "完成"),
+    "tools":  "执行工具",
+    "finish": "生成回复",
 }
+
+
+def _turn_label(key, state):
+    
+    b = _TURN_STEP_BASE.get(key)
+    if not b:
+        return key
+    doing, done_root = b if isinstance(b, tuple) else (b, b)
+    if state in ("running", "pending"):
+        return "正在" + doing
+    if state == "done":
+        return "已" + done_root
+    return done_root
+
+
+def _tool_label(name, state="done"):
+    
+    t = _AGENT_PLAN_LABEL.get(name or "") or "工具"
+    if state in ("running", "pending"):
+        return "正在" + t
+    if state == "done":
+        return "已" + t
+    return t
+
+
+def _tools_verdict(n_ok, n_err):
+    
+    if not n_err:
+        return "全部成功"
+    if not n_ok:
+        return "全部失败"
+    return "成功 %d · 失败 %d" % (n_ok, n_err)
+
+
 _SCREENPLAY_STEP_NO = {"story_idea": (1, "写故事大纲"), "story_script": (2, "写分场剧本"),
                        "assets": (3, "素材清单"), "script_chunk": (4, "分镜表"),
                        "story_ref_gen": (5, "生图提示词")}
@@ -4060,36 +4436,82 @@ _SCREENPLAY_STEP_ACT = {"story_idea": "故事大纲", "story_script": "分场剧
                         "story_ref_gen": "生图提示词"}
 
 
-_SCREENPLAY_PHASE_RUN = {"read": "正在阅读规则...", "plan": "正在按要求规划内容..."}
-_SCREENPLAY_PHASE_DONE = {"read": "已完成阅读规则", "plan": "已完成按要求规划内容"}
 
 
-def _turn_ev(key, state, label=None, detail=""):
+_TURN_STATES = ("pending", "running", "done", "warn", "error", "skipped")
+
+
+
+_TURN_MAX_NODES = 200
+
+
+def _turn_id(key, round_no=1):
     
-    return {"type": "turn_step", "key": key, "state": state,
-            "label": label or _AGENT_TURN_STEPS.get(key, key), "detail": detail}
+    return "r%d.%s" % (round_no, key)
 
 
-def _turn_pub(run_id, key, state, trace, label=None, detail=""):
+def _tool_turn_key(name, call_no=None):
     
-    ev = _turn_ev(key, state, label, detail)
+    return ("tool:%02d:%s" % (call_no, name or "?")) if call_no else ("tool:%s" % (name or "?"))
+
+
+def _item_turn_key(index, call_no=None):
+    
+    return ("item:%02d:%d" % (call_no, index)) if call_no else ("item:%d" % index)
+
+
+def _turn_ev(key, state, label=None, detail="", round_no=1, kind=None,
+             params=None, result=None, parent=None, ts=None, raw=None):
+    
+    ev = {"type": "turn_step",
+          "id": _turn_id(key, round_no),
+          "key": key,
+          "round": round_no,
+          "state": state,
+          "label": label or _turn_label(key, state),
+          "detail": detail,
+          "ts": ts if ts is not None else time.time()}
+    if kind:
+        ev["kind"] = kind
+    if parent:
+        ev["parent"] = parent
+    if raw:
+        ev["raw"] = raw
+    if params is not None:
+        ev["params"] = params
+    if result is not None:
+        ev["result"] = result
+    return ev
+
+
+def _turn_pub(run_id, key, state, trace, label=None, detail="", **kw):
+    
+    ev = _turn_ev(key, state, label, detail, **kw)
     if trace is not None:
+        if len(trace) >= _TURN_MAX_NODES:
+            if not any(isinstance(x, dict) and x.get("key") == "_truncated" for x in trace):
+                note = _turn_ev("_truncated", "warn", "已截断",
+                                "单回合上限 %d 步" % _TURN_MAX_NODES)
+                trace.append(note)
+                _run_pub(run_id, note)
+            return ev
         trace.append(ev)
     _run_pub(run_id, ev)
     return ev
 
 
-def _turn_label_rules(stage):
-    no, title = _SCREENPLAY_STEP_NO.get(stage, (0, "剧本"))
-    return "正在读取第%d步「%s」创作规则…" % (no, title)
+def _turn_detail_rules(stage):
+    
+    no, title = _SCREENPLAY_STEP_NO.get(stage, (0, ""))
+    return ("第 %d 步 · %s" % (no, title)) if title else ""
 
 
 def _turn_label_write(stage):
-    return "完整规划，按要求撰写%s..." % _SCREENPLAY_STEP_ACT.get(stage, "内容")
+    return "正在撰写%s" % _SCREENPLAY_STEP_ACT.get(stage, "内容")
 
 
 def _turn_label_write_done(stage):
-    return "已完成按要求撰写%s" % _SCREENPLAY_STEP_ACT.get(stage, "内容")
+    return "已撰写%s" % _SCREENPLAY_STEP_ACT.get(stage, "内容")
 
 
 _SSE_HEADERS = {
@@ -4134,7 +4556,8 @@ def _run_snapshot_events(row):
         _lbl = prog.get("label") or ""
         evs.append({"type": "tool_progress", "done": prog.get("done"), "total": total,
                     "label": _lbl,
-                    "text": f"正在生成素材 {prog.get('done')}/{total}" + (f"：{_lbl}" if _lbl else "")})
+                    "text": "正在生成素材 %d/%d" % (prog.get("done"), total)
+                            + ((" · " + _lbl) if _lbl else "")})
     if status == "done":
 
 
@@ -4188,12 +4611,67 @@ def _agent_done_payload(items, body, think):
             "backend": _llm.route("assistant"), "model": _llm.default_model("assistant")}
 
 
-def _run_tool_phase(run_id, name, args, session_id):
+_TURN_PARAM_KEYS = ("stage", "seconds", "size", "count", "resolution", "ratio",
+                    "duration", "mode", "speed", "voice_name", "quality")
+
+
+def _turn_params(name, args):
     
+    if not isinstance(args, dict):
+        return None
+    out = {}
+    for k in _TURN_PARAM_KEYS:
+        v = args.get(k)
+        if v in (None, "", [], {}):
+            continue
+        s = str(v)
+        out[k] = s[:40] + "…" if len(s) > 40 else v
+    for k in ("assets", "audios"):
+        if isinstance(args.get(k), list):
+            out[k] = len(args[k])
+    p = args.get("prompt")
+    if isinstance(p, str) and p.strip():
+        p = p.strip()
+        out["prompt"] = p[:40] + ("…" if len(p) > 40 else "")
+    return out or None
+
+
+def _turn_params_text(p):
+    
+    if not p:
+        return ""
+    parts = []
+    if "assets" in p:
+        parts.append("%d 张" % p["assets"])
+    if "audios" in p:
+        parts.append("%d 条" % p["audios"])
+    for k in ("seconds", "size", "count", "resolution", "ratio", "duration"):
+        if k in p:
+            parts.append("%s=%s" % (k, p[k]))
+    if "stage" in p:
+        parts.append(str(p["stage"]))
+    return " · ".join(parts)
+
+
+def _run_tool_phase(run_id, name, args, session_id, trace=None, round_no=1,
+                    parent_key="tools", item_level=False, call_no=None):
+    
+    _tools_parent = _turn_id(parent_key, round_no) if trace is not None else None
+    _tool_key = _tool_turn_key(name, call_no)
+    _parent = _turn_id(_tool_key, round_no) if trace is not None else None
+    _params = _turn_params(name, args)
+    _turn_pub(run_id, _tool_key, "running", trace,
+              label=_tool_label(name, "running"), raw=name,
+              detail=_turn_params_text(_params), round_no=round_no,
+              kind="tool", parent=_tools_parent, params=_params)
+
 
 
 
     _asset_total = 0
+    _manifest_items = None
+    _item_keys = {}
+    _item_done = set()
     if name == "generate_longvideo_assets" and isinstance(args.get("assets"), list):
         _assets = args["assets"]
         _asset_total = len(_assets)
@@ -4223,6 +4701,19 @@ def _run_tool_phase(run_id, name, args, session_id):
         _runst.merge_state(run_id, manifest_items=_manifest_items, manifest_labels=[m["label"] for m in _manifest_items])
         _run_pub(run_id, {"type": "tool_manifest", "items": _manifest_items})
 
+    if item_level and trace is not None and _manifest_items:
+
+
+        for _m in _manifest_items:
+            _k = _item_turn_key(_m["index"], call_no)
+            _item_keys[_m["index"]] = _k
+            _has = bool(_m.get("url"))
+            if _has:
+                _item_done.add(_m["index"])
+            _turn_pub(run_id, _k, "skipped" if _has else "pending", trace,
+                      label=_m["label"], detail="已复用" if _has else "排队中",
+                      round_no=round_no, kind="item", parent=_parent)
+
     def _on_item(i, it, seq=None):
 
 
@@ -4233,9 +4724,20 @@ def _run_tool_phase(run_id, name, args, session_id):
 
         _done = (seq if seq is not None else i) + 1
 
+        if trace is not None and item_level:
+            _ik = _item_keys.get(i) or _item_turn_key(i, call_no)
+            _item_keys[i] = _ik
+            _item_done.add(i)
+            _turn_pub(run_id, _ik, "done", trace,
+                      label=it.get("label") or ("素材%d" % (_done)),
+                      detail="%d/%d" % (_done, _asset_total or _done),
+                      round_no=round_no, kind="item", parent=_parent,
+                      result={"url": it.get("url") or "", "name": it.get("name") or ""})
+
         _run_pub(run_id, {"type": "tool_progress", "done": _done, "total": _asset_total or _done,
                           "label": it.get("label") or "",
-                          "text": f"正在生成素材 {_done}/{_asset_total or _done}" + (f"：{it.get('label')}" if it.get("label") else ""),
+                          "text": "正在生成素材 %d/%d" % (_done, _asset_total or _done)
+                                  + ((" · " + it["label"]) if it.get("label") else ""),
                           "items": [{"index": i, "name": it.get("name"), "url": it.get("url"),
                                      "label": it.get("label"), "kind": it.get("kind")}]})
 
@@ -4247,7 +4749,34 @@ def _run_tool_phase(run_id, name, args, session_id):
                                                  "label": _ev.get("label")})
     item = _holder.get("item")
     if item is None:
-        item = {"kind": "error", "error": _holder.get("error") or f"工具 {name} 未返回结果"}
+        item = {"kind": "error",
+                "error": _holder.get("error") or ("%s未返回结果" % _tool_label(name, "error"))}
+    _failed = (item.get("kind") == "error")
+    _err_text = str(item.get("error") or "")[:120]
+
+
+
+
+    if trace is not None:
+        _pt = _turn_params_text(_params)
+        if _tool_key:
+            _turn_pub(run_id, _tool_key, "error" if _failed else "done", trace,
+                      label=_tool_label(name, "error" if _failed else "done"), raw=name,
+                      detail=(("失败 · " + _pt) if _pt else "失败") if _failed else _pt,
+                      round_no=round_no, kind="tool", parent=_tools_parent, params=_params,
+                      result={"ok": not _failed, "error": _err_text} if _failed
+                             else {"ok": True})
+        if item_level:
+
+
+            for _idx, _k in _item_keys.items():
+                if _idx in _item_done:
+                    continue
+                _turn_pub(run_id, _k, "error" if _failed else "skipped", trace,
+                          detail="失败" if _failed else "已跳过", round_no=round_no,
+                          kind="item", parent=_parent,
+                          result={"ok": False, "error": _err_text} if _failed else None)
+
 
 
     item = dict(item)
@@ -4258,10 +4787,6 @@ def _run_tool_phase(run_id, name, args, session_id):
 
 def _agent_run_pipeline(run_id, messages, session_id, plan_armed=False):
     
-    acc = ""
-    think_acc = ""
-    tc_buf = {}
-    tc_announced = False
     trace = []
     try:
         _runst.mark(run_id, status="streaming")
@@ -4270,6 +4795,8 @@ def _agent_run_pipeline(run_id, messages, session_id, plan_armed=False):
         if not _llm.caps("assistant", "tools"):
             msg = ("当前助手模型未声明支持工具调用 —— 猫灵助手依赖工具编排执行任务。"
                    "请在「服务商设置」更换支持工具调用的模型（或勾选该模型的能力声明）。")
+            _turn_pub(run_id, "think", "error", trace, label="检查模型能力",
+                      detail="模型不支持工具调用", result={"ok": False, "error": msg[:120]})
             _runst.mark(run_id, status="error", error=msg)
             _run_pub(run_id, {"type": "error", "error": msg})
             return
@@ -4281,103 +4808,87 @@ def _agent_run_pipeline(run_id, messages, session_id, plan_armed=False):
         if _has_img and not _llm.caps("assistant", "vision"):
             msg = ("当前助手模型未声明支持图片识别 —— 请在「服务商设置」勾选该模型的能力声明，"
                    "或去掉消息里的图片后重发。")
+            _turn_pub(run_id, "think", "error", trace, label="检查模型能力",
+                      detail="模型不支持图片识别", result={"ok": False, "error": msg[:120]})
             _runst.mark(run_id, status="error", error=msg)
             _run_pub(run_id, {"type": "error", "error": msg})
             return
 
 
-        _turn_pub(run_id, "think", "running", trace, label="正在理解需求并思考…")
+        _turn_pub(run_id, "think", "running", trace)
 
 
-        r = _llm.chat("assistant", messages, tools=_agent_tools(), tool_choice="auto",
-                      stream=True, max_tokens=_llm.max_output_for("assistant", AGENT_MAX_TOKENS),
-                      timeout=(10, 600))
-        if r.status_code != 200:
-            try:
-                d = r.json()
-                msg = d.get("detail") or (d.get("error") or {}).get("message") or d
-            except Exception:
-                msg = r.content.decode("utf-8", errors="replace")[:300]
-            _runst.mark(run_id, status="error", error=f"LLM 拒绝请求（{r.status_code}）：{msg}")
-            _run_pub(run_id, {"type": "error", "error": f"LLM 拒绝请求（{r.status_code}）：{msg}"})
+
+
+        _out = {"reason": False, "delta": False}
+
+        def _turn_close_prior():
+
+
+            if _out["reason"]:
+                _turn_pub(run_id, "reason", "done", trace)
+            else:
+                _turn_pub(run_id, "think", "done", trace)
+
+        def _hop1_delta(inc):
+            if not _out["delta"]:
+
+
+                _turn_close_prior()
+                _out["delta"] = True
+                _turn_pub(run_id, "write", "running", trace)
+            _run_pub(run_id, {"type": "delta", "text": inc})
+
+        def _hop1_reason(inc):
+            if not _out["reason"] and not _out["delta"]:
+                _out["reason"] = True
+
+                _turn_pub(run_id, "think", "done", trace)
+                _turn_pub(run_id, "reason", "running", trace)
+            _run_pub(run_id, {"type": "reasoning", "text": inc})
+
+        def _hop1_tool(name):
+
+
+
+            if _out["delta"]:
+                _turn_pub(run_id, "write", "done", trace)
+            else:
+                _turn_close_prior()
+
+            if name == "read_screenplay_rules":
+                _msg = _turn_label("rules", "running")
+                _turn_pub(run_id, "rules", "running", trace)
+            else:
+                _msg = _tool_label(name, "running")
+                _turn_pub(run_id, "tools", "running", trace,
+                          label=_msg, kind="tool", raw=name)
+
+            _run_pub(run_id, {"type": "tool_running", "phase": "tool", "text": _msg})
+
+
+        try:
+            body, think, _calls1 = _agent_hop_stream(messages, _hop1_reason,
+                                                     _hop1_delta, _hop1_tool)
+        except RuntimeError as e:
+            _raw = str(e)
+            _code = _raw.split("（", 1)[1].split("）", 1)[0] if "（" in _raw else ""
+            _turn_pub(run_id, "think", "error", trace,
+                      detail="模型请求被拒绝 · HTTP %s" % _code,
+                      result={"ok": False, "error": _raw[:120]})
+            _errmsg = "模型请求被拒绝 · HTTP %s：%s" % (_code, _raw)
+            _runst.mark(run_id, status="error", error=_errmsg)
+            _run_pub(run_id, {"type": "error", "error": _errmsg})
             return
 
-
-        for raw in r.iter_lines(decode_unicode=False):
-            if not raw:
-                continue
-            line = raw.decode("utf-8", errors="replace").strip()
-            if not line.startswith("data:"):
-                continue
-            chunk = line[5:].strip()
-            if chunk == "[DONE]":
-                break
-            try:
-                obj = json.loads(chunk)
-            except Exception:
-                continue
-            delta = ((obj.get("choices") or [{}])[0].get("delta") or {})
-
-            rc = delta.get("reasoning_content")
-            if rc:
-                if think_acc and rc.startswith(think_acc) and len(rc) > len(think_acc):
-                    inc = rc[len(think_acc):]
-                elif think_acc and rc == think_acc and len(think_acc) >= 64:
-                    inc = ""
-                else:
-                    inc = rc
-                if inc:
-                    think_acc += inc
-                    _run_pub(run_id, {"type": "reasoning", "text": inc})
-            c = delta.get("content")
-            if c:
-                if acc and c.startswith(acc) and len(c) > len(acc):
-                    inc = c[len(acc):]
-                elif acc and c == acc and len(acc) >= 64:
-                    inc = ""
-                else:
-                    inc = c
-                if inc:
-                    acc += inc
-                    _run_pub(run_id, {"type": "delta", "text": inc})
-
-            for tc in (delta.get("tool_calls") or []):
-                idx = tc.get("index", 0)
-                b = tc_buf.setdefault(idx, {"id": "", "name": "", "args": ""})
-                if tc.get("id"):
-                    b["id"] = tc["id"]
-                fn = tc.get("function") or {}
-                if fn.get("name"):
-                    b["name"] = fn["name"]
-
-
-                    if not tc_announced:
-                        tc_announced = True
-                        _turn_pub(run_id, "think", "done", trace)
-                        if b["name"] == "read_screenplay_rules":
-                            _tool_msg = "正在读取创作规则…"
-                            _turn_pub(run_id, "rules", "running", trace, label=_tool_msg)
-                        else:
-                            _tool_msg = "正在整理生成任务…"
-                            _turn_pub(run_id, "tools", "running", trace, label=_tool_msg)
-
-                        _run_pub(run_id, {"type": "tool_running", "phase": "tool",
-                                          "text": _tool_msg})
-                if fn.get("arguments"):
-                    b["args"] += fn["arguments"]
-
-
-        think = think_acc.strip()
-        if think:
-            body = acc.strip()
-        else:
-            think, body = _agent_split_think(acc)
-
-
-        if not tc_buf:
-            _turn_pub(run_id, "think", "done", trace)
-            _turn_pub(run_id, "finish", "done", trace)
+        if not _calls1:
+            if _out["delta"]:
+                _turn_pub(run_id, "write", "done", trace)
+            else:
+                _turn_pub(run_id, "reason" if _out["reason"] else "think", "done", trace)
+                _turn_pub(run_id, "finish", "done", trace)
             done_ev = _agent_done_payload([], body, think)
+            done_ev["hops"] = 1
             done_ev["turn"] = trace
             _runst.mark(run_id, status="done", result=done_ev,
                         state={"text": body, "think": think, "turn_trace": trace})
@@ -4385,17 +4896,7 @@ def _agent_run_pipeline(run_id, messages, session_id, plan_armed=False):
             return
 
 
-        parsed = []
-        for idx in sorted(tc_buf.keys()):
-            b = tc_buf[idx]
-            _name = b.get("name") or ""
-            try:
-                _args = json.loads(b.get("args") or "{}")
-            except Exception:
-                parsed.append((None, None, {"kind": "error",
-                                            "error": f"参数解析失败：{str(b.get('args'))[:120]}"}))
-                continue
-            parsed.append((_name, _args, None))
+        parsed = _agent_parse_calls(_calls1)
 
 
 
@@ -4413,36 +4914,32 @@ def _agent_run_pipeline(run_id, messages, session_id, plan_armed=False):
                 _rules_file = os.path.basename(_SCREENPLAY_RULES[_stage])
                 _rules_name = os.path.splitext(_rules_file)[0]
                 _turn_pub(run_id, "rules", "running", trace,
-                          label=_turn_label_rules(_stage), detail=_rules_name)
+                          detail=_turn_detail_rules(_stage), raw=_rules_name)
 
 
 
                 _phase = {"reasoning": False, "delta": False}
 
                 def _on_rules_loaded(st):
-                    _turn_pub(run_id, "rules", "done", trace,
-                              detail="已读取 %s" % _rules_name)
-                    _turn_pub(run_id, "read", "running", trace,
-                              label=_SCREENPLAY_PHASE_RUN["read"])
+
+
+                    _turn_pub(run_id, "rules", "done", trace)
+                    _turn_pub(run_id, "read", "running", trace)
 
                 def _on_phase_reasoning(inc):
                     if not _phase["reasoning"]:
                         _phase["reasoning"] = True
-                        _turn_pub(run_id, "read", "done", trace,
-                                  label=_SCREENPLAY_PHASE_DONE["read"])
-                        _turn_pub(run_id, "plan", "running", trace,
-                                  label=_SCREENPLAY_PHASE_RUN["plan"])
+                        _turn_pub(run_id, "read", "done", trace)
+                        _turn_pub(run_id, "plan", "running", trace)
                     _run_pub(run_id, {"type": "reasoning", "text": inc})
 
                 def _on_phase_delta(inc):
                     if not _phase["delta"]:
                         _phase["delta"] = True
                         if _phase["reasoning"]:
-                            _turn_pub(run_id, "plan", "done", trace,
-                                      label=_SCREENPLAY_PHASE_DONE["plan"])
+                            _turn_pub(run_id, "plan", "done", trace)
                         else:
-                            _turn_pub(run_id, "read", "done", trace,
-                                      label=_SCREENPLAY_PHASE_DONE["read"])
+                            _turn_pub(run_id, "read", "done", trace)
                         _turn_pub(run_id, "write", "running", trace,
                                   label=_turn_label_write(_stage))
                     _run_pub(run_id, {"type": "delta", "text": inc})
@@ -4453,7 +4950,11 @@ def _agent_run_pipeline(run_id, messages, session_id, plan_armed=False):
                     on_reasoning=_on_phase_reasoning,
                     on_delta=_on_phase_delta)
             except Exception as e:
-                err = "读取剧本规则失败：%s" % e
+                err = "读取创作规则失败：%s" % e
+
+
+                _turn_pub(run_id, "rules", "error", trace, detail="失败",
+                          result={"ok": False, "error": str(e)[:120]})
                 _runst.mark(run_id, status="error", error=err)
                 _run_pub(run_id, {"type": "error", "error": err})
                 return
@@ -4462,14 +4963,13 @@ def _agent_run_pipeline(run_id, messages, session_id, plan_armed=False):
                 _turn_pub(run_id, "write", "done", trace,
                           label=_turn_label_write_done(_stage))
             elif _phase["reasoning"]:
-                _turn_pub(run_id, "plan", "done", trace,
-                          label=_SCREENPLAY_PHASE_DONE["plan"])
+                _turn_pub(run_id, "plan", "done", trace)
             else:
-                _turn_pub(run_id, "read", "done", trace,
-                          label=_SCREENPLAY_PHASE_DONE["read"])
+                _turn_pub(run_id, "read", "done", trace)
 
 
             done_ev = _agent_done_payload([], _say, _think2)
+            done_ev["hops"] = 1
             done_ev["stage"] = _stage
             done_ev["turn"] = trace
             _runst.mark(run_id, status="done", result=done_ev,
@@ -4482,9 +4982,14 @@ def _agent_run_pipeline(run_id, messages, session_id, plan_armed=False):
 
         if any(n in AGENT_CONFIRM_TOOLS for n, _a, _e in parsed) and not plan_armed:
             _plan = _agent_plan_text(parsed)
-            _turn_pub(run_id, "tools", "done", trace, label="等你点头")
+
+
+            _turn_pub(run_id, "tools", "pending", trace, label="等待确认",
+                      detail="%d 个工具待执行" % len([n for n, _a, _e in parsed if n]),
+                      kind="tool")
             _turn_pub(run_id, "finish", "done", trace)
             done_ev = _agent_done_payload([], _plan, think)
+            done_ev["hops"] = 1
             done_ev["turn"] = trace
             _runst.mark(run_id, status="done", result=done_ev,
                         state={"text": _plan, "think": think, "turn_trace": trace})
@@ -4492,65 +4997,130 @@ def _agent_run_pipeline(run_id, messages, session_id, plan_armed=False):
             return
 
         _tool_names = sorted({n for n, _a, _e in parsed if n})
-        if "generate_longvideo_assets" in _tool_names:
-            _tool_msg = "正在生成长视频素材图…"
-        elif "generate_audio" in _tool_names:
-            _tool_msg = "正在生成音频…"
-        else:
-            _tool_msg = "正在调用工具执行任务…"
         _resumable = next(((n, a) for n, a, _e in parsed if n == "generate_longvideo_assets"), None)
+        _single_tool = (len(_tool_names) == 1)
+        _tool_msg = (_tool_label(_tool_names[0], "running") if _single_tool
+                     else _turn_label("tools", "running"))
 
-        _turn_pub(run_id, "tools", "running", trace, label=_tool_msg,
-                  detail=", ".join(_tool_names))
         _runst.mark(run_id, status="tooling", tool_name=",".join(_tool_names),
                     args=(_resumable[1] if _resumable else None),
                     state={"text": body, "think": think, "tool_running_text": _tool_msg,
                            "turn_trace": trace})
-        _run_pub(run_id, {"type": "tool_running", "text": _tool_msg,
-                          "tools": _tool_names, "phase": "tool"})
-        items = []
-        _opt_text = None
 
-        for _name, _args, _pre_err in parsed:
-            if _name == "optimize_h3_prompt" and not _pre_err:
-                items.extend(_run_tool_phase(run_id, _name, _args, session_id))
-                _it = next((i for i in items if i.get("kind") == "h3_optimize"), None)
-                if _it and _it.get("text"):
-                    _opt_text = _it["text"]
-
-        for _name, _args, _pre_err in parsed:
-            if _name == "optimize_h3_prompt":
-                continue
-            if _name == "generate_video" and _opt_text:
-                _args = dict(_args)
-                _args["prompt"] = _opt_text
-            if _pre_err:
-                items.append(_pre_err)
-                continue
-            items.extend(_run_tool_phase(run_id, _name, _args, session_id))
-        _turn_pub(run_id, "tools", "done", trace, detail="已执行 %d 个工具" % len(_tool_names))
+        _ledger, _dedup, _gen_counts = [], {}, {}
+        _got1, _, _ = _agent_exec_batch(run_id, parsed, session_id, trace, 1,
+                                        _dedup, _gen_counts, ledger=_ledger)
+        items = list(_got1)
 
 
-        _second_text = ""
-        if _agent_need_tool_second_pass(_tool_names):
-            _calls = [{"id": tc_buf[i].get("id") or ("call_%d" % i),
-                       "name": tc_buf[i].get("name") or "",
-                       "arguments": tc_buf[i].get("args") or "{}"}
-                      for i in sorted(tc_buf.keys())]
-            _turn_pub(run_id, "finish", "running", trace)
+
+
+        _final_text, _finish_set = "", False
+        _hop_calls, _hop_items = _calls1, _got1
+        _round = 1
+        while _round < _AGENT_MAX_HOPS:
+            _round += 1
+            _msgs = list(messages)
+            _msgs.append({"role": "assistant", "content": body or "",
+                          "tool_calls": [{"id": c["id"], "type": "function",
+                                          "function": {"name": c["name"],
+                                                       "arguments": c["arguments"]}}
+                                         for c in _hop_calls]})
+            for _i, c in enumerate(_hop_calls):
+                _it = _hop_items[_i] if _i < len(_hop_items) else {}
+                _msgs.append({"role": "tool", "tool_call_id": c["id"],
+                              "content": json.dumps(_agent_tool_result_brief(_it),
+                                                    ensure_ascii=False)})
+            _led = _agent_ledger_text(_ledger, _round)
+            if _led and len(_msgs) > 1:
+
+                _msgs[-1]["content"] = _msgs[-1]["content"] + "\n\n" + _led
+            _turn_pub(run_id, "followup", "running", trace, round_no=_round)
+            _hst = {"reason": False, "delta": False}
+
+            def _mk_hooks(_rnd, _hst):
+                def _d(inc):
+                    if not _hst["delta"]:
+                        _hst["delta"] = True
+
+                        _turn_pub(run_id, "reason" if _hst["reason"] else "followup",
+                                  "done", trace, round_no=_rnd)
+                        _turn_pub(run_id, "write", "running", trace, round_no=_rnd)
+                    _run_pub(run_id, {"type": "delta", "text": inc})
+
+                def _r(inc):
+                    if not _hst["reason"] and not _hst["delta"]:
+                        _hst["reason"] = True
+                        _turn_pub(run_id, "followup", "done", trace, round_no=_rnd)
+                        _turn_pub(run_id, "reason", "running", trace, round_no=_rnd)
+                    _run_pub(run_id, {"type": "reasoning", "text": inc})
+
+                def _t(name):
+                    if _hst["delta"]:
+                        _turn_pub(run_id, "write", "done", trace, round_no=_rnd)
+                    else:
+                        _turn_pub(run_id, "reason" if _hst["reason"] else "followup",
+                                  "done", trace, round_no=_rnd)
+                return _d, _r, _t
+
+            _d, _r, _t = _mk_hooks(_round, _hst)
             try:
-                _second_text, _ = _agent_tool_second_pass(
-                    messages, _calls, items, first_content=body,
+                _txt, _thk, _calls_n = _agent_hop_stream(_msgs, _r, _d, _t)
+            except RuntimeError as e:
+
+                _finish_set = True
+                _turn_pub(run_id, "finish", "warn", trace, round_no=_round,
+                          detail="已降级为本地摘要",
+                          result={"ok": True, "degraded": True, "error": str(e)[:120]})
+                print(f"[agent-loop] 第 {_round} 跳失败，回退 summary：{e}", flush=True)
+                break
+            if not _calls_n:
+                _final_text = _txt
+                _finish_set = True
+                if _hst["delta"]:
+
+
+                    _turn_pub(run_id, "write", "done", trace, round_no=_round)
+                else:
+                    _turn_pub(run_id, "reason" if _hst["reason"] else "followup",
+                              "done", trace, round_no=_round)
+                    _turn_pub(run_id, "finish", "done", trace, round_no=_round)
+                break
+
+            _hop_calls = _calls_n
+            _parsed_n = _agent_parse_calls(_calls_n)
+            _got_n, _, _ = _agent_exec_batch(run_id, _parsed_n, session_id, trace,
+                                            _round, _dedup, _gen_counts, ledger=_ledger)
+            _hop_items = _got_n
+            items.extend(_got_n)
+            body = _txt or body
+
+        if not _finish_set:
+
+            _turn_pub(run_id, "finish", "running", trace, round_no=_round)
+            _cap = "达到轮次上限 %d 跳" % _AGENT_MAX_HOPS
+            try:
+                _final_text, _ = _agent_tool_second_pass(
+                    messages, _hop_calls, _hop_items, first_content=body,
                     on_reasoning=lambda inc: _run_pub(run_id, {"type": "reasoning", "text": inc}),
                     on_delta=lambda inc: _run_pub(run_id, {"type": "delta", "text": inc}))
+                _turn_pub(run_id, "finish", "warn", trace, round_no=_round,
+                          detail=_cap + " · 已收尾",
+                          result={"ok": True, "hopLimit": True})
             except Exception as e:
-
-                _second_text = ""
-                print(f"[agent] 工具轮第二跳失败，回退 summary：{e}", flush=True)
-        _turn_pub(run_id, "finish", "done", trace)
-        done_ev = _agent_done_payload(items, _second_text or body, think)
+                _turn_pub(run_id, "finish", "warn", trace, round_no=_round,
+                          detail=_cap + " · 已降级为本地摘要",
+                          result={"ok": True, "hopLimit": True, "degraded": True,
+                                  "error": str(e)[:120]})
+                print(f"[agent-loop] 达到轮次上限后收尾失败，回退 summary：{e}", flush=True)
+        done_ev = _agent_done_payload(items, _final_text or body, think)
         done_ev["turn"] = trace
-        _runst.mark(run_id, status="done", result=done_ev)
+        done_ev["hops"] = _round
+        _runst.mark(run_id, status="done", result=done_ev,
+                    state={"text": body, "think": think, "turn_trace": trace})
+
+
+
         _run_pub(run_id, done_ev)
     except Exception as e:
         err = f"助手任务异常：{type(e).__name__}: {e}"
@@ -4577,9 +5147,9 @@ def _agent_run_resume(run_id):
     try:
         if name != "generate_longvideo_assets" or not isinstance(args.get("assets"), list):
             _runst.mark(run_id, status="interrupted",
-                        error="服务重启导致任务中断（该工具不支持断点续跑），请重新发送。")
+                        error="服务重启导致任务中断（该工具不支持继续执行），请重新发送。")
             _run_pub(run_id, {"type": "error",
-                              "error": "服务重启导致任务中断（该工具不支持断点续跑），请重新发送。"})
+                              "error": "服务重启导致任务中断（该工具不支持继续执行），请重新发送。"})
             return
         done_items = st.get("items_done") or {}
         resumed = 0
@@ -4590,13 +5160,21 @@ def _agent_run_resume(run_id):
                 resumed += 1
         print(f"[agent-runs] 续跑 {run_id}：{resumed}/{len(args['assets'])} 张已完成，跳过重复生成",
               flush=True)
-        _tool_msg2 = st.get("tool_running_text") or "正在生成长视频素材图…"
-        _turn_pub(run_id, "tools", "running", trace, label=_tool_msg2, detail="断点续跑")
+        _tool_msg2 = st.get("tool_running_text") or _tool_label(name, "running")
+        _turn_pub(run_id, "tools", "running", trace, label=_tool_label(name, "running"),
+                  detail="继续执行 · 复用 %d 张" % resumed, kind="tool", raw=name)
         _run_pub(run_id, {"type": "tool_running", "phase": "tool", "text": _tool_msg2})
-        items = _run_tool_phase(run_id, name, args, session_id)
-        _turn_pub(run_id, "tools", "done", trace, detail="续跑完成")
+
+        items = _run_tool_phase(run_id, name, args, session_id, trace=trace,
+                                round_no=1, item_level=True)
+        _n_err = sum(1 for i in items if i.get("kind") == "error")
+        _turn_pub(run_id, "tools", "error" if _n_err else "done", trace,
+                  label=_tool_label(name, "error" if _n_err else "done"),
+                  detail="继续执行失败" if _n_err else "继续执行 · 复用 %d 张" % resumed,
+                  kind="tool", raw=name, result={"ok": _n_err == 0})
         _turn_pub(run_id, "finish", "done", trace)
         done_ev = _agent_done_payload(items, body, think)
+        done_ev["hops"] = 1
         done_ev["turn"] = trace
         _runst.mark(run_id, status="done", result=done_ev)
         _run_pub(run_id, done_ev)
@@ -4754,7 +5332,7 @@ def api_agent():
     _agent_history_messages(messages, data.get("history"))
     messages.append({"role": "user", "content": _agent_user_message(text, assets)})
 
-    trace = [_turn_ev("think", "running", label="正在理解需求并思考…")]
+    trace = [_turn_ev("think", "running")]
 
 
 
@@ -4767,7 +5345,7 @@ def api_agent():
     body, err = _llm_chat_completions(messages, tools=_agent_tools() if _allow_tools else None,
                                       tool_choice="auto" if _allow_tools else None,
                                       max_tokens=_llm.max_output_for("assistant", AGENT_MAX_TOKENS),
-                                      timeout=(10, 900))
+                                      timeout=(60, 900))
     if err:
         return jsonify({"error": err}), 502
 
@@ -4794,17 +5372,16 @@ def api_agent():
             _rules_file = os.path.basename(_SCREENPLAY_RULES[_stage])
             _rules_name = os.path.splitext(_rules_file)[0]
             trace.append(_turn_ev("think", "done"))
-            trace.append(_turn_ev("rules", "running", label=_turn_label_rules(_stage),
-                                  detail=_rules_name))
+            trace.append(_turn_ev("rules", "running", detail=_turn_detail_rules(_stage),
+                                  raw=_rules_name))
 
             def _on_rules_loaded_nonstream(st):
-                trace.append(_turn_ev("rules", "done",
-                                      detail="已读取 %s" % _rules_name))
+                trace.append(_turn_ev("rules", "done"))
                 trace.append(_turn_ev("write", "running", label=_turn_label_write(st)))
 
             _say, _think2 = _screenplay_second_pass(messages, _sp, _stage, _on_rules_loaded_nonstream)
         except Exception as e:
-            return jsonify({"error": "读取剧本规则失败：%s" % e}), 502
+            return jsonify({"error": "读取创作规则失败：%s" % e}), 502
 
 
         trace.append(_turn_ev("write", "done", label=_turn_label_write_done(_stage)))
@@ -4816,8 +5393,10 @@ def api_agent():
 
 
     if not tool_calls:
+
+
         trace.append(_turn_ev("think", "done"))
-        trace.append(_turn_ev("finish", "done"))
+        trace.append(_turn_ev("write", "done"))
         return jsonify({
             "ok": True, "kind": "text",
             "text": content or "（模型没有返回内容。若想生成，可把需求说得更具体，或切到手动模式。）",
@@ -4830,8 +5409,10 @@ def api_agent():
 
     _names = [((tc.get("function") or {}).get("name") or "") for tc in tool_calls]
     trace.append(_turn_ev("think", "done"))
-    trace.append(_turn_ev("tools", "running", label="正在执行 %d 个工具…" % len(tool_calls),
-                          detail=", ".join(n for n in _names if n)))
+    trace.append(_turn_ev("tools", "running",
+                          label=_turn_label("tools", "running"),
+                          detail="%d 个工具" % len(tool_calls),
+                          raw=" ".join(n for n in _names if n)))
 
     parsed = []
     for tc in tool_calls:
@@ -4851,7 +5432,9 @@ def api_agent():
     if any(n in AGENT_CONFIRM_TOOLS for n, _a, _e in parsed) \
             and not _agent_plan_armed(data.get("history")):
         _plan = _agent_plan_text(parsed)
-        trace.append(_turn_ev("tools", "done", label="等你点头"))
+
+        trace.append(_turn_ev("tools", "pending", label="等待确认", kind="tool",
+                              detail="%d 个工具待执行" % len([n for n, _a, _e in parsed if n])))
         trace.append(_turn_ev("finish", "done"))
         return jsonify({"ok": True, "kind": "text", "text": _plan, "think": think,
                         "summary": "", "items": [], "turn": trace,
@@ -4859,26 +5442,62 @@ def api_agent():
                         "model": _llm.default_model("assistant")})
     items = []
     _opt_text = None
-    for _name, _args, _pre_err in parsed:
-        if _name == "optimize_h3_prompt" and not _pre_err:
-            _it, _ok = _agent_run_tool(_name, _args, session_id)
+
+    def _tool_call_ev(idx, name, args, pre_err=None):
+        
+        _key = _tool_turn_key(name, idx + 1)
+        _parent = _turn_id("tools")
+        _pt = _turn_params(name, args or {})
+        if pre_err is not None:
+            trace.append(_turn_ev(_key, "error", label=_tool_label(name, "error"),
+                                  raw=name or "", detail="参数解析失败", kind="tool",
+                                  parent=_parent,
+                                  result={"ok": False,
+                                          "error": str(pre_err.get("error") or "")[:120]}))
+            return pre_err
+        trace.append(_turn_ev(_key, "running", label=_tool_label(name, "running"),
+                              raw=name or "", detail=_turn_params_text(_pt), kind="tool",
+                              parent=_parent, params=_pt))
+        _it, _ok = _agent_run_tool(name, args, session_id)
+        _failed = (not _ok) or (isinstance(_it, dict) and _it.get("kind") == "error")
+        _err = str((_it or {}).get("error") or "")[:120]
+        trace.append(_turn_ev(_key, "error" if _failed else "done",
+                              label=_tool_label(name, "error" if _failed else "done"),
+                              raw=name or "",
+                              detail=(("失败 · " + _turn_params_text(_pt)) if _pt else "失败")
+                                     if _failed else _turn_params_text(_pt),
+                              kind="tool", parent=_parent, params=_pt,
+                              result={"ok": not _failed, "error": _err} if _failed
+                                     else {"ok": True}))
+        return _it
+
+
+    for _idx, (_name, _args, _pre_err) in enumerate(parsed):
+        if _name == "optimize_h3_prompt" and _pre_err is None:
+            _it = _tool_call_ev(_idx, _name, _args)
             if _it and _it.get("kind") == "h3_optimize" and _it.get("text"):
                 _opt_text = _it["text"]
             items.append(_it)
-    for _name, _args, _pre_err in parsed:
-        if _name == "optimize_h3_prompt":
+    for _idx, (_name, _args, _pre_err) in enumerate(parsed):
+        if _name == "optimize_h3_prompt" and _pre_err is None:
             continue
         if _name == "generate_video" and _opt_text:
             _args = dict(_args)
             _args["prompt"] = _opt_text
-        if _pre_err:
-            items.append(_pre_err)
-            continue
-        _it, _ok = _agent_run_tool(_name, _args, session_id)
-        items.append(_it)
-    trace.append(_turn_ev("tools", "done", detail="已执行 %d 个工具" % len(items)))
+        items.append(_tool_call_ev(_idx, _name, _args, _pre_err))
+
+    _n_err = sum(1 for i in items if i.get("kind") == "error")
+    _n_ok = sum(1 for i in items if i.get("kind") != "error")
+    _t_state = "error" if (_n_err and not _n_ok) else ("warn" if _n_err else "done")
+    _t_verdict = _tools_verdict(_n_ok, _n_err)
+    trace.append(_turn_ev("tools", _t_state, detail="%d 个工具" % len(tool_calls), kind="tool",
+                          label=_turn_label("tools", _t_state),
+                          raw=" ".join(n for n in _names if n),
+                          result={"ok": _n_err == 0, "okCount": _n_ok,
+                                  "errorCount": _n_err, "verdict": _t_verdict}))
 
     _second_text = ""
+    _finish_set = False
     if _agent_need_tool_second_pass(_names):
         _calls = [{"id": tc.get("id") or ("call_%d" % i),
                    "name": ((tc.get("function") or {}).get("name") or ""),
@@ -4890,8 +5509,12 @@ def api_agent():
                                                       first_content=content)
         except Exception as e:
             _second_text = ""
+            _finish_set = True
+            trace.append(_turn_ev("finish", "warn", detail="已降级为本地摘要",
+                                  result={"ok": True, "degraded": True, "error": str(e)[:120]}))
             print(f"[agent] 非流式工具轮第二跳失败，回退 summary：{e}", flush=True)
-    trace.append(_turn_ev("finish", "done"))
+    if not _finish_set:
+        trace.append(_turn_ev("finish", "done"))
 
     ok_items = [i for i in items if i.get("kind") in ("video", "image", "audio", "longvideo_job", "longvideo_assets", "h3_optimize")]
     if len(ok_items) == 1 and len(items) == 1:
@@ -5382,12 +6005,9 @@ def api_result(rid):
     return jsonify({"error": "未找到该生成记录。"}), 404
 @app.route("/api/sessions", methods=["GET"])
 def api_get_sessions():
-    payload = _load_sessions()
 
 
-
-    payload["deletedIds"] = _server_tombstones()
-    return jsonify(payload)
+    return jsonify(_load_sessions())
 @app.route("/api/sessions", methods=["POST"])
 def api_post_sessions():
     data = request.get_json(silent=True) or {}
@@ -5427,6 +6047,7 @@ def api_delete_session(sid):
     _ensure_db()
     with_assets = str(request.args.get("with_assets") or "") in ("1", "true", "yes")
     _urls, _ntask, _nhist = [], 0, 0
+    _child = {"image_jobs": 0, "asset_content": 0}
     _asset_names, _assets_res = [], None
     with _DB_LOCK:
         conn = _db_conn()
@@ -5449,13 +6070,15 @@ def api_delete_session(sid):
                 conn.execute("DELETE FROM tasks WHERE tid=?", (t,))
             _ntask = len(tids)
 
+
+            _child = _core_mod._purge_session_children(conn, sid, tids)
+
             _h0 = conn.execute("SELECT COUNT(*) AS c FROM history").fetchone()["c"]
             _urls.extend(_core_mod._purge_history_rows(conn, [sid]))
             _nhist = _h0 - conn.execute("SELECT COUNT(*) AS c FROM history").fetchone()["c"]
             conn.execute("DELETE FROM sessions WHERE id=?", (sid,))
 
 
-            _mark_session_deleted(conn, [sid])
             cur = conn.execute("SELECT value FROM meta WHERE key='currentId'").fetchone()
             new_cur = cur["value"] if cur else None
             if new_cur == sid:
@@ -5486,6 +6109,7 @@ def api_delete_session(sid):
             print(f"[warn] 删会话时移除资产库条目失败（不影响删会话）：{e}")
     return jsonify({"ok": True, "deleted": existed, "currentId": new_cur,
                     "tasksRemoved": _ntask, "historyRemoved": _nhist,
+                    "childrenRemoved": _child,
                     "filesRemoved": _freed_n, "bytesFreed": _freed,
                     "assetsRemoved": (_assets_res or {}).get("count", 0),
                     "assetsFilesPurged": (_assets_res or {}).get("purged_count", 0),
@@ -5594,6 +6218,39 @@ def api_media_purge():
         "removed": [{"kind": k, "name": n, "size": s} for k, n, s in r["removed"]],
         "kept": len(r["kept"]),
         "bytesFreed": sum(s for _k, _n, s in r["removed"]),
+    })
+
+
+@app.route("/api/media/gc/scan", methods=["GET"])
+def api_media_gc_scan():
+    
+    try:
+        import orphan_gc
+        rep = orphan_gc.scan(include_null=str(request.args.get("include_null") or "")
+                             in ("1", "true", "yes"))
+    except Exception as e:
+        return jsonify({"error": "孤儿盘点失败：%s" % e}), 500
+    return jsonify({"ok": True, "report": rep})
+
+
+@app.route("/api/media/gc", methods=["POST"])
+def api_media_gc():
+    
+    data = request.get_json(silent=True) or {}
+    include_null = bool(data.get("include_null"))
+    try:
+        import orphan_gc
+        res = orphan_gc.sweep_all(dry_run=False, include_null=include_null)
+    except Exception as e:
+        return jsonify({"ok": False, "error": "孤儿治理失败：%s" % e}), 500
+    rep = res.get("report") or {}
+    fr = res.get("files") or {}
+    return jsonify({
+        "ok": True,
+        "removedRecords": res.get("removed_records", {}),
+        "filesRemoved": fr.get("count", 0),
+        "bytesFreed": fr.get("bytes", 0),
+        "report": rep.get("counts", {}),
     })
 
 
@@ -7095,3 +7752,225 @@ def api_tts_file(rel):
     resp = make_response(send_file(p, mimetype=mime, conditional=True))
     resp.headers["Accept-Ranges"] = "bytes"
     return resp
+
+
+
+
+
+
+
+
+
+def _scrud_kind(kind_arg):
+    
+    return "agent" if str(kind_arg).lower() in ("agent", "assistant", "ag") else "main"
+
+
+def _scrud_conn():
+    _ensure_db()
+    return _db_conn()
+
+
+@app.route("/api/session/<kind>/create", methods=["POST"])
+def api_scrud_create(kind):
+    
+    data = request.get_json(silent=True) or {}
+    k = _scrud_kind(kind)
+    sid = data.get("id") or (("ag_" if k == "agent" else "s_") +
+                             time.strftime("%Y%m%d%H%M%S") + "_" + uuid.uuid4().hex[:4])
+    with _DB_LOCK:
+        conn = _scrud_conn()
+        try:
+            ok, doc = _scrud.create_session(conn, k, sid, data.get("name"))
+            if not ok:
+                return jsonify({"error": "会话 id 已存在。"}), 409
+            conn.commit()
+        finally:
+            conn.close()
+    return jsonify({"ok": True, "id": sid, "session": doc})
+
+
+@app.route("/api/session/<kind>/<sid>/rename", methods=["PATCH"])
+def api_scrud_rename(kind, sid):
+    data = request.get_json(silent=True) or {}
+    with _DB_LOCK:
+        conn = _scrud_conn()
+        try:
+            ok = _scrud.rename_session(conn, _scrud_kind(kind), sid, data.get("name"))
+            if ok:
+                conn.commit()
+        finally:
+            conn.close()
+    if not ok:
+        return jsonify({"error": "会话不存在。"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/session/<kind>/<sid>/current", methods=["PATCH"])
+def api_scrud_set_current(kind, sid):
+    with _DB_LOCK:
+        conn = _scrud_conn()
+        try:
+            ok = _scrud.set_current_session(conn, _scrud_kind(kind), sid)
+            if ok:
+                conn.commit()
+        finally:
+            conn.close()
+    if not ok:
+        return jsonify({"error": "会话不存在。"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/session/<kind>/<sid>/messages", methods=["POST"])
+def api_scrud_append(kind, sid):
+    
+    data = request.get_json(silent=True) or {}
+    msgs = data.get("messages")
+    if not isinstance(msgs, list):
+        return jsonify({"error": "messages 必须是数组。"}), 400
+    with _DB_LOCK:
+        conn = _scrud_conn()
+        try:
+            added = _scrud.append_messages(conn, _scrud_kind(kind), sid, msgs)
+            if added is None:
+                return jsonify({"error": "会话不存在。"}), 404
+            conn.commit()
+        finally:
+            conn.close()
+    return jsonify({"ok": True, "added": added})
+
+
+@app.route("/api/session/<kind>/<sid>/messages/<int:index>", methods=["PATCH"])
+def api_scrud_patch(kind, sid, index):
+    
+    data = request.get_json(silent=True) or {}
+    patch = data.get("patch")
+    if not isinstance(patch, dict):
+        return jsonify({"error": "patch 必须是对象。"}), 400
+    with _DB_LOCK:
+        conn = _scrud_conn()
+        try:
+            ok = _scrud.patch_message(conn, _scrud_kind(kind), sid, index, patch, data.get("anchor"))
+            if ok:
+                conn.commit()
+        finally:
+            conn.close()
+    if not ok:
+        return jsonify({"error": "会话或消息不存在（或锚点不符）。"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/session/<kind>/<sid>/messages/<int:index>", methods=["PUT"])
+def api_scrud_replace(kind, sid, index):
+    
+    data = request.get_json(silent=True) or {}
+    msg = data.get("message")
+    if not isinstance(msg, dict):
+        return jsonify({"error": "message 必须是对象。"}), 400
+    with _DB_LOCK:
+        conn = _scrud_conn()
+        try:
+            ok = _scrud.replace_message(conn, _scrud_kind(kind), sid, index, msg, data.get("anchor"))
+            if ok:
+                conn.commit()
+        finally:
+            conn.close()
+    if not ok:
+        return jsonify({"error": "会话或消息不存在（或锚点不符）。"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/session/<kind>/<sid>/messages/delete", methods=["POST"])
+def api_scrud_delete_msgs(kind, sid):
+    
+    data = request.get_json(silent=True) or {}
+    indices = data.get("indices")
+    if not isinstance(indices, list):
+        return jsonify({"error": "indices 必须是数组。"}), 400
+    with _DB_LOCK:
+        conn = _scrud_conn()
+        try:
+            removed = _scrud.delete_messages(conn, _scrud_kind(kind), sid, indices, data.get("anchors"))
+            if removed is None:
+                return jsonify({"error": "会话不存在。"}), 404
+            conn.commit()
+        finally:
+            conn.close()
+    return jsonify({"ok": True, "removed": removed})
+
+
+
+
+@app.route("/api/session/<kind>/<sid>/message/upsert", methods=["POST"])
+def api_scrud_upsert_msg(kind, sid):
+    
+    data = request.get_json(silent=True) or {}
+    msg = data.get("message")
+    if not isinstance(msg, dict):
+        return jsonify({"error": "message 必须是对象。"}), 400
+    with _DB_LOCK:
+        conn = _scrud_conn()
+        try:
+            result = _scrud.upsert_message_by_key(conn, _scrud_kind(kind), sid, msg)
+            if result is None:
+                return jsonify({"error": "会话不存在。"}), 404
+            conn.commit()
+        finally:
+            conn.close()
+    action, index = result
+    return jsonify({"ok": True, "action": action, "index": index})
+
+
+@app.route("/api/session/<kind>/<sid>/messages/sync", methods=["POST"])
+def api_scrud_sync_msgs(kind, sid):
+    
+    data = request.get_json(silent=True) or {}
+    msgs = data.get("messages")
+    if not isinstance(msgs, list):
+        return jsonify({"error": "messages 必须是数组。"}), 400
+    with _DB_LOCK:
+        conn = _scrud_conn()
+        try:
+            result = _scrud.sync_messages(conn, _scrud_kind(kind), sid, msgs)
+            if result is None:
+                return jsonify({"error": "会话不存在。"}), 404
+            conn.commit()
+        finally:
+            conn.close()
+    return jsonify({"ok": True, **result})
+
+
+@app.route("/api/session/<kind>/<sid>/message/delete", methods=["POST"])
+def api_scrud_delete_msg_by_key(kind, sid):
+    
+    data = request.get_json(silent=True) or {}
+    key = data.get("key")
+    if not isinstance(key, str) or not key:
+        return jsonify({"error": "key 必须是非空字符串。"}), 400
+    with _DB_LOCK:
+        conn = _scrud_conn()
+        try:
+            removed = _scrud.delete_message_by_key(conn, _scrud_kind(kind), sid, key)
+            if removed is None:
+                return jsonify({"error": "会话不存在。"}), 404
+            conn.commit()
+        finally:
+            conn.close()
+    return jsonify({"ok": True, "removed": removed})
+
+
+@app.route("/api/session/<kind>/<sid>/message/find", methods=["GET"])
+def api_scrud_find_msg(kind, sid):
+    
+    key = request.args.get("key")
+    if not key:
+        return jsonify({"error": "缺 key 参数。"}), 400
+    with _DB_LOCK:
+        conn = _scrud_conn()
+        try:
+            index = _scrud.find_message_index(conn, _scrud_kind(kind), sid, key)
+        finally:
+            conn.close()
+    if index is None:
+        return jsonify({"error": "会话不存在。"}), 404
+    return jsonify({"ok": True, "index": index})

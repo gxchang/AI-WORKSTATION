@@ -227,9 +227,10 @@ a.candidates=job.candidates||[];a.errors=job.errors||[];a.status=job.status||"pr
 async function audioDeleteMsg(msg,el){if(!confirmDeleteMsg("音频"))return;var a=_am(msg);if(a.jobId&&AS.polls[a.jobId]){clearTimeout(AS.polls[a.jobId]);delete AS.polls[a.jobId];}
 if(el){el.querySelectorAll(".ac-audio").forEach(function(au){try{au.pause();}catch(e){}});el.remove();}
 if(AS.resultAudio)AS.resultAudio=null;try{AS.elByMsg.delete(msg);}catch(e){}
-var _media=(typeof _mediaUrlsOf==="function")?_mediaUrlsOf(msg):[];var _jobs=(a&&a.jobId)?[a.jobId]:[];var sess=_sess();if(sess&&Array.isArray(sess.messages)){var i=sess.messages.indexOf(msg);if(i>=0)sess.messages.splice(i,1);if(!Array.isArray(sess.deletedMsgs))sess.deletedMsgs=[];sess.deletedMsgs.push(_fp(msg));}
-var _okSave=true;try{if(typeof saveSessions==="function")_okSave=await saveSessions(true);}catch(e){_okSave=false;}
-if(_okSave){if(typeof _purgeMedia==="function")_purgeMedia({urls:_media,ttsJobIds:_jobs});else if(typeof _reclaimMedia==="function")_reclaimMedia(_media);}
+var _media=(typeof _mediaUrlsOf==="function")?_mediaUrlsOf(msg):[];var _jobs=(a&&a.jobId)?[a.jobId]:[];var sess=_sess();var _okSave=false;if(sess){var _key=(typeof _msgKey==="function")?_msgKey(msg):_fp(msg);try{_okSave=(typeof apiDeleteMsg==="function")?await apiDeleteMsg(sess,_key):false;}
+catch(e){_okSave=false;}}
+if(_okSave){if(sess&&Array.isArray(sess.messages)){var i=sess.messages.indexOf(msg);if(i>=0)sess.messages.splice(i,1);}
+if(typeof _purgeMedia==="function")_purgeMedia({urls:_media,ttsJobIds:_jobs});else if(typeof _reclaimMedia==="function")_reclaimMedia(_media);}
 var stream=$("stream");if(stream&&!stream.querySelectorAll(".msg").length){var w=$("welcome");if(w)w.style.setProperty("display","");}}
 function audioRenderBotMsg(msg){var el=audioBuildSession(msg);var a=_am(msg);if(a.status==="processing"&&a.jobId)audioPollJob(msg);return el;}
 window.audioRenderBotMsg=audioRenderBotMsg;window.audioCardHtml=audioCardHtml;window.audioWireCards=audioWireCards;window.audioPlaceholderHtml=audioPlaceholderHtml;window.audioErrorCardHtml=audioErrorCardHtml;var AC_COLORS=["#d9d6ff","#c9f0ee","#ffd9e6","#ffe7c2","#d6ecff","#ffd8d8","#d5f2dd","#f0dcff"];var AC_PLAY_SVG='<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7.5 4.8 L19 12 L7.5 19.2 Z"/></svg>';var AC_PAUSE_SVG='<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="7" y="5" width="3.8" height="14" rx="1.2"/><rect x="13.2" y="5" width="3.8" height="14" rx="1.2"/></svg>';function _acColor(){return AC_COLORS[Math.floor(Math.random()*AC_COLORS.length)];}

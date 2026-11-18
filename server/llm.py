@@ -280,7 +280,7 @@ def max_output_for(use_case=None, default=None):
 
 def chat(use_case, messages, model=None, tools=None, tool_choice=None,
          stream=False, max_tokens=None, temperature=0.2,
-         timeout=(10, 300)):
+         timeout=(60, 300)):
     
     if use_case is not None and use_case not in _USE_CASES:
         raise ValueError(f"未知 LLM 用例：{use_case!r}")

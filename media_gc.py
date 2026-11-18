@@ -38,7 +38,11 @@ _REF_SOURCES = (
     ("history",        "id",  ("data",),                                    "blob"),
     ("jobs",           "id",  ("ref_path",),                                "path"),
     ("jobs",           "id",  ("candidates",),                              "blob"),
-    ("voices",         "id",  ("audio_path", "preview_path"),               "path"),
+
+
+
+
+    ("voices",         "id",  ("audio_path",),                              "path"),
     ("assets",         "id",  ("name", "url"),                              "path"),
     ("lv_segments",    "id",  ("images_keys", "images_urls", "audio_urls"), "blob"),
     ("lv_jobs",        "id",  ("assets_json", "shots_json"),                "blob"),
