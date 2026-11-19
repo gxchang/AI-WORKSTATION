@@ -17,7 +17,7 @@ import ipaddress
 from urllib.parse import urlparse
 
 import requests
-from flask import Blueprint, request, jsonify, current_app, send_file
+from flask import Blueprint, request, jsonify, current_app, send_file, has_request_context
 
 import assets_api.store as _assets_store
 
@@ -1165,6 +1165,37 @@ def _recognize_visual(url: str, label: str = "", kind: str = "character", llm_mo
     return last
 
 
+
+
+
+
+
+
+
+_OPT_PROGRESS = {}
+_OPT_PROGRESS_LOCK = threading.Lock()
+_OPT_PROGRESS_TTL = 900
+
+
+def _opt_progress_set(req_id, stage, detail=None):
+    if not req_id:
+        return
+    with _OPT_PROGRESS_LOCK:
+        _OPT_PROGRESS[str(req_id)] = {"stage": stage, "detail": detail or {}, "ts": time.time()}
+
+        if len(_OPT_PROGRESS) > 128:
+            _now = time.time()
+            for _k in list(_OPT_PROGRESS):
+                if _now - _OPT_PROGRESS[_k].get("ts", 0) > _OPT_PROGRESS_TTL:
+                    _OPT_PROGRESS.pop(_k, None)
+
+
+def _opt_progress_get(req_id):
+    with _OPT_PROGRESS_LOCK:
+        _v = _OPT_PROGRESS.get(str(req_id or ""))
+        return dict(_v) if _v else None
+
+
 def _clear_tail_frames(job_id):
     
     con = _db()
@@ -1717,6 +1748,13 @@ def _render_system_prompt(video_model=None, path=None):
 def _optimize(script: str, rows, llm_model: str = LLM_MODEL, video_model: str = None,
               feedback: str = "") -> dict:
     
+    def _opt_stage(stage, detail=None):
+        
+        if not has_request_context():
+            return
+        _rid = (request.headers.get("X-Opt-Req-Id") or "").strip()
+        if _rid:
+            _opt_progress_set(_rid, stage, detail)
     import server.llm as _llm
     from concurrent.futures import ThreadPoolExecutor
 
@@ -1744,6 +1782,14 @@ def _optimize(script: str, rows, llm_model: str = LLM_MODEL, video_model: str = 
     missing = [r for r in img_rows if _need_rec(r)]
     if missing:
 
+
+
+
+
+
+        _opt_stage("recognize")
+
+
         def _rec(r):
             ap = _recognize_visual(r["url"], r.get("label") or r.get("name") or "",
                                    r.get("kind") or _DEFAULT_RECOGNITION_KIND,
@@ -1762,6 +1808,9 @@ def _optimize(script: str, rows, llm_model: str = LLM_MODEL, video_model: str = 
             return r
         with ThreadPoolExecutor(max_workers=min(2, len(missing))) as ex:
             list(ex.map(_rec, missing))
+
+
+    _opt_stage("storyboard")
 
 
 
@@ -4782,6 +4831,12 @@ def api_optimizer():
     job_id = (data.get("job_id") or "").strip() or None
 
 
+    _req_id = (request.headers.get("X-Opt-Req-Id") or "").strip()
+    def _progress(stage, detail=None):
+        _opt_progress_set(_req_id, stage, detail)
+    _progress("prepare", {})
+
+
     llm_model = _llm.default_model()
     print(f"[OPT-诊断] 统一模型后端={_llm.route()} -> 实际采用={llm_model!r}", flush=True)
     if not script:
@@ -4796,11 +4851,15 @@ def api_optimizer():
         video_model = None
     rows = _load_registry_rows(job_id)
     try:
+
+
         result = _optimize_checked(script, rows, llm_model, video_model)
     except ShotBudgetViolation as e:
+        _progress("error", {"error": str(e)[:200]})
 
         return jsonify(error=str(e)), 400
     except RuntimeError as e:
+        _progress("error", {"error": str(e)[:200]})
 
         import traceback as _tb
         return jsonify(error=str(e),
@@ -4808,6 +4867,7 @@ def api_optimizer():
                               "若反复出现可缩短脚本或拆段提交。",
                        trace=_tb.format_exc(limit=4)), 502
     except Exception as e:
+        _progress("error", {"error": str(e)[:200]})
         import traceback as _tb
         return jsonify(error=f"优化失败：{e}", trace=_tb.format_exc(limit=4)), 500
 
@@ -4821,8 +4881,19 @@ def api_optimizer():
         _assign_group_no(result.get("shots"), result["video_model"])
         _gate = _shot_budget_gate(result.get("shots"), result["video_model"])
         if _gate:
+            _progress("error", {"error": _gate[:200]})
             return jsonify(error=_gate), 400
+    _progress("done", {"shots": len(result.get("shots") or []) if isinstance(result, dict) else 0})
     return jsonify(result)
+
+
+@lv_bp.route("/optimizer/progress", methods=["GET"])
+def api_optimizer_progress():
+    
+    _rid = (request.args.get("req_id") or "").strip()
+    if not _rid:
+        return jsonify(error="缺少 req_id"), 400
+    return jsonify(_opt_progress_get(_rid) or {"stage": "prepare", "detail": {}})
 
 
 @lv_bp.route("/jobs", methods=["POST"])

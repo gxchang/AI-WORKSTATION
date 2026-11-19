@@ -3267,7 +3267,7 @@ def _lv_upsert_assets(con, job_id, assets):
 
 
 def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None,
-                        local_tid=None):
+                        local_tid=None, on_start=None, on_inflight=None):
     
     norm, failed = [], []
     _assets = list(assets or [])
@@ -3339,6 +3339,20 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None,
               f"prompt_len={len(str(a.get('prompt') or ''))}", flush=True)
 
 
+
+        if a.get("_resume_stalled"):
+            print(f"[lv-assets] #{_i} 「{label}」重启前已提交（同步上游无续查句柄），不重提", flush=True)
+            failed.append({"label": label,
+                           "error": "服务重启前已提交该素材，但此上游没有可续查的任务号；"
+                                    "为避免重复计费未重新提交，请检查上游是否已出图后再决定是否重试"})
+            if on_progress:
+                try:
+                    on_progress(_seq + 1, _total, (label or "?") + "（重启待确认）")
+                except Exception:
+                    pass
+            continue
+
+
         if a.get("url"):
             _resolved[_i] = a.get("url")
             norm.append({
@@ -3378,6 +3392,18 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None,
 
 
 
+
+
+
+
+
+
+
+        if on_start:
+            try:
+                on_start(_i, _seq)
+            except Exception:
+                pass
         print(f"[lv-assets] #{_i} 构造 payload …", flush=True)
 
         _refs = []
@@ -3444,10 +3470,29 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None,
             while True:
                 if _stopped():
                     break
-                print(f"[lv-assets] #{_i} 提交（第 {_attempt + 1} 次尝试）→ {_upstream or 'agnes'}", flush=True)
+
+
+
+                _resume_id = a.get("_resume_task_id")
+                if _resume_id and a.get("_resume_upstream") != _upstream:
+                    print(f"[lv-assets] #{_i} 续查 task_id 的上游已变（{a.get('_resume_upstream')}"
+                          f"→{_upstream}），不复用旧句柄", flush=True)
+                    _resume_id = None
+
+
+
+                def _on_submitted(_tid, _i=_i, _up=_upstream):
+                    if on_inflight:
+                        try:
+                            on_inflight(_i, _up, _tid)
+                        except Exception as e:
+                            print(f"[warn] inflight 落库失败（task_id 已拿到，轮询继续）：{e}", flush=True)
+                print(f"[lv-assets] #{_i} 提交（第 {_attempt + 1} 次尝试）→ {_upstream or 'agnes'} "
+                      f"resume_tid={str(_resume_id)[:12] or '-'}", flush=True)
 
                 ok, urls, err, _ms_tid = _core_mod._submit_image(
-                    _payload, _upstream, local_tid=local_tid)
+                    _payload, _upstream, _resume_id, on_submitted=_on_submitted,
+                    local_tid=local_tid)
                 print(f"[lv-assets] #{_i} 返回 ok={ok} urls={[str(u)[-24:] for u in (urls or [])][:2]} "
                       f"err={str(err)[:120] if err else ''} ms_tid={str(_ms_tid)[:12]}", flush=True)
 
@@ -3672,7 +3717,8 @@ def _lv_submit_job(script, assets_with_url, job_id=None, session_id=None, name=N
     return job_id, default_name, len(norm), failed
 
 
-def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None, local_tid=None):
+def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None, local_tid=None,
+                       on_start=None):
     
     norm, failed = [], []
     _audios = list(audios or [])
@@ -3773,6 +3819,13 @@ def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None, 
         if local_tid and _is_task_canceled(local_tid):
             print(f"[lv-audio] 已按用户要求停止：剩 {_total - _seq} 条声线不再合成", flush=True)
             break
+
+
+        if on_start:
+            try:
+                on_start(_i, _seq)
+            except Exception:
+                pass
         try:
             _c = _ttsclient.synthesize_candidate(
                 _txt_spoken, speed=a.get("speed") or 1,
@@ -3822,7 +3875,8 @@ def _lv_generate_audio(audios, on_progress=None, on_item=None, session_id=None, 
     return norm, failed
 
 
-def _agent_tool_events(name, args, session_id, holder, on_item=None, local_tid=None):
+def _agent_tool_events(name, args, session_id, holder, on_item=None, local_tid=None,
+                       on_start=None, on_inflight=None):
     
     q = _queue.Queue()
 
@@ -3840,6 +3894,8 @@ def _agent_tool_events(name, args, session_id, holder, on_item=None, local_tid=N
                 name, args, session_id,
                 on_progress=lambda done, total, label: q.put(("p", (done, total, label))),
                 on_item=on_item,
+                on_start=(lambda i, seq: q.put(("s", (i, seq)))) if on_start else None,
+                on_inflight=on_inflight,
                 on_delta=lambda inc: q.put(("d", inc)),
                 local_tid=local_tid,
             )
@@ -3867,6 +3923,12 @@ def _agent_tool_events(name, args, session_id, holder, on_item=None, local_tid=N
             yield {"type": "tool_progress", "done": done, "total": total,
                    "label": label, "text": txt}
             continue
+        if kind == "s":
+
+
+            i, seq = payload
+            yield {"type": "item_start", "index": i, "seq": seq}
+            continue
         if kind == "d":
 
             yield {"type": "h3_delta", "text": payload}
@@ -3879,7 +3941,7 @@ def _agent_tool_events(name, args, session_id, holder, on_item=None, local_tid=N
 
 
 def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None, on_delta=None,
-                    local_tid=None):
+                    local_tid=None, on_start=None, on_inflight=None):
     
     def _st():
         
@@ -4088,7 +4150,8 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None, on_d
                     "error": "generate_longvideo_assets 需要非空的 assets 素材清单（每项含 label/kind/prompt）。"
                              "请先规划角色/场景/道具的生成提示词，待用户确认后再调用本工具，不要发空参数。"}, False
         norm, failed = _lv_generate_assets(assets, on_progress=on_progress, on_item=on_item,
-                                           session_id=session_id, local_tid=local_tid)
+                                           session_id=session_id, local_tid=local_tid,
+                                           on_start=on_start, on_inflight=on_inflight)
         if local_tid and _is_task_canceled(local_tid):
 
 
@@ -4120,7 +4183,8 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None, on_d
                     "error": "generate_longvideo_audio 需要非空的 audios 声线清单（每项含 owner/text）。"
                              "请先规划角色声线（归属角色 + 台词），待用户确认图后再调用本工具，不要发空参数。"}, False
         norm, failed = _lv_generate_audio(audios, on_progress=on_progress, on_item=on_item,
-                                           session_id=session_id, local_tid=local_tid)
+                                           session_id=session_id, local_tid=local_tid,
+                                           on_start=on_start)
         if not norm:
             first = next((f.get("error") for f in failed if f.get("error")), "未知原因")
             return {"kind": "error",
@@ -4535,6 +4599,28 @@ def _tool_label(name, state="done"):
     return t
 
 
+
+
+
+
+
+_AGENT_PLAN_PREPARE = {
+    "generate_video": "准备视频",
+    "generate_image": "准备图片",
+    "generate_audio": "准备音频",
+    "generate_multi_angle": "准备机位重拍",
+    "generate_longvideo_assets": "准备素材",
+    "generate_longvideo_audio": "准备角色声线",
+    "submit_longvideo_job": "准备提交视频任务",
+}
+
+
+def _tool_prepare_label(name):
+    
+    p = _AGENT_PLAN_PREPARE.get(name or "")
+    return ("正在" + p) if p else None
+
+
 def _tools_verdict(n_ok, n_err):
     
     if not n_err:
@@ -4811,6 +4897,14 @@ def _run_tool_phase(run_id, name, args, session_id, trace=None, round_no=1,
 
 
 
+    if trace is not None and _tool_prepare_label(name):
+        _turn_pub(run_id, parent_key, "running", trace,
+                  label=_tool_label(name, "running"), kind="tool", raw=name,
+                  round_no=round_no)
+
+
+
+
     _asset_total = 0
     _manifest_items = None
     _item_keys = {}
@@ -4857,12 +4951,40 @@ def _run_tool_phase(run_id, name, args, session_id, trace=None, round_no=1,
                       label=_m["label"], detail="已复用" if _has else "排队中",
                       round_no=round_no, kind="item", parent=_parent)
 
+    def _on_inflight(i, upstream, task_id):
+        
+        if not task_id:
+
+            _runst.merge_state_sub(run_id, "inflight", str(i),
+                                   {"upstream": upstream or "agnes", "task_id": None,
+                                    "ts": time.time(), "sync": True})
+            return
+        _runst.merge_state_sub(run_id, "inflight", str(i),
+                               {"upstream": upstream or "agnes", "task_id": task_id,
+                                "ts": time.time()})
+
+    def _on_start(i, seq=None):
+        
+        if trace is None or not item_level or not _manifest_items:
+            return
+        _ik = _item_keys.get(i) or _item_turn_key(i, call_no)
+        _item_keys[i] = _ik
+        _label = ""
+        if 0 <= i < len(_manifest_items):
+            _label = _manifest_items[i].get("label") or ""
+        _turn_pub(run_id, _ik, "running", trace,
+                  label=_label or ("素材%d" % ((seq if seq is not None else i) + 1)),
+                  detail="生成中", round_no=round_no, kind="item", parent=_parent)
+
     def _on_item(i, it, seq=None):
 
 
         _runst.merge_state_sub(run_id, "items_done", str(i),
                                {"name": it.get("name"), "url": it.get("url"),
                                 "label": it.get("label"), "kind": it.get("kind")})
+
+
+        _runst.merge_state_sub(run_id, "inflight", str(i), None)
 
 
         _done = (seq if seq is not None else i) + 1
@@ -4886,7 +5008,12 @@ def _run_tool_phase(run_id, name, args, session_id, trace=None, round_no=1,
 
     _holder = {}
     for _ev in _agent_tool_events(name, args, session_id, _holder, on_item=_on_item,
-                                  local_tid=run_id):
+                                  local_tid=run_id, on_start=_on_start, on_inflight=_on_inflight):
+        if _ev.get("type") == "item_start":
+
+
+            _on_start(_ev.get("index"), _ev.get("seq"))
+            continue
         _run_pub(run_id, _ev)
         if _ev.get("type") == "tool_progress" and _ev.get("total"):
             _runst.merge_state(run_id, progress={"done": _ev.get("done"), "total": _ev.get("total"),
@@ -5018,7 +5145,11 @@ def _agent_run_pipeline(run_id, messages, session_id, plan_armed=False):
                 _msg = _turn_label("rules", "running")
                 _turn_pub(run_id, "rules", "running", trace)
             else:
-                _msg = _tool_label(name, "running")
+
+
+
+
+                _msg = _tool_prepare_label(name) or _tool_label(name, "running")
                 _turn_pub(run_id, "tools", "running", trace,
                           label=_msg, kind="tool", raw=name)
 
@@ -5360,25 +5491,59 @@ def _agent_run_resume(run_id):
                               "error": "服务重启导致任务中断（该工具不支持继续执行），请重新发送。"})
             return
         done_items = st.get("items_done") or {}
+        inflight = st.get("inflight") or {}
         resumed = 0
+        rechecked = 0
+        stalled = 0
         for i, a in enumerate(args["assets"]):
+            if not isinstance(a, dict):
+                continue
+
+            a.pop("_resume_task_id", None)
+            a.pop("_resume_upstream", None)
+            a.pop("_resume_stalled", None)
             it = done_items.get(str(i)) or {}
-            if it.get("url") and not (a or {}).get("url"):
-                a["url"] = it["url"]
+            if it.get("url"):
+
+                if not a.get("url"):
+                    a["url"] = it["url"]
                 resumed += 1
-        print(f"[agent-runs] 续跑 {run_id}：{resumed}/{len(args['assets'])} 张已完成，跳过重复生成",
+                continue
+            if a.get("url"):
+
+                resumed += 1
+                continue
+
+            inf = inflight.get(str(i)) or {}
+            if inf.get("task_id"):
+                a["_resume_task_id"] = inf["task_id"]
+                a["_resume_upstream"] = inf.get("upstream")
+                rechecked += 1
+            elif inf.get("sync") or inf.get("ts"):
+
+
+                a["_resume_stalled"] = True
+                stalled += 1
+        print(f"[agent-runs] 续跑 {run_id}：{resumed}/{len(args['assets'])} 张已完成跳过；"
+              f"{rechecked} 张带旧 task_id 只轮询不重提；{stalled} 张同步上游标中断待确认",
               flush=True)
+        _resume_detail = "继续执行 · 复用 %d 张" % resumed
+        if rechecked:
+            _resume_detail += " · %d 张续查旧任务（不重提）" % rechecked
+        if stalled:
+            _resume_detail += " · %d 张待确认（未重提）" % stalled
         _tool_msg2 = st.get("tool_running_text") or _tool_label(name, "running")
         _turn_pub(run_id, "tools", "running", trace, label=_tool_label(name, "running"),
-                  detail="继续执行 · 复用 %d 张" % resumed, kind="tool", raw=name)
+                  detail=_resume_detail, kind="tool", raw=name)
         _run_pub(run_id, {"type": "tool_running", "phase": "tool", "text": _tool_msg2})
+
 
         items = _run_tool_phase(run_id, name, args, session_id, trace=trace,
                                 round_no=1, item_level=True)
         _n_err = sum(1 for i in items if i.get("kind") == "error")
         _turn_pub(run_id, "tools", "error" if _n_err else "done", trace,
                   label=_tool_label(name, "error" if _n_err else "done"),
-                  detail="继续执行失败" if _n_err else "继续执行 · 复用 %d 张" % resumed,
+                  detail="继续执行失败" if _n_err else _resume_detail,
                   kind="tool", raw=name, result={"ok": _n_err == 0})
         _turn_pub(run_id, "finish", "done", trace)
         done_ev = _agent_done_payload(items, body, think)

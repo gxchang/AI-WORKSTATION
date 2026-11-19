@@ -356,8 +356,57 @@
   function setOptHint(html) { if (optHint) optHint.innerHTML = html || ""; }
   function clearOptHint() { if (optHint) optHint.innerHTML = ""; }
   
-  function _optWaitHint(sec, tail) {
-    setOptHint('<span class="lv-spin"></span>AI 正在分镜…（已等待 ' + sec + " 秒）" + (tail || "，请耐心等候"));
+  
+  
+  const _OPT_STAGE_TEXT = {
+    prepare:    { hint: "正在准备…",         btn: "准备中…" },
+    recognize:  { hint: "正在识别图片素材",   btn: "识别图中…" },
+    storyboard: { hint: "AI 正在分镜…",      btn: "分镜中…" },
+    done:       { hint: "正在整理分镜结果…", btn: "分镜中…" },
+    error:      { hint: "分镜请求失败",       btn: "分镜中…" },
+  };
+  function _optPhaseHint(stage, sec, tail) {
+    const s = _OPT_STAGE_TEXT[stage] || _OPT_STAGE_TEXT.prepare;
+    
+    
+    
+    setOptHint('<span class="lv-spin"></span>' + s.hint + `（已等待 ${sec} 秒）` +
+               (tail === undefined ? "，请耐心等候" : tail));
+    const b = $("lvOptimize");
+    if (b && b.disabled) b.innerHTML = '<span class="lv-spin"></span>' + s.btn;
+  }
+  
+  function _optWaitHint(sec, tail) { _optPhaseHint("storyboard", sec, tail); }
+  function _stopOptPhasePoller() {
+    if (_optTipTimer) { clearInterval(_optTipTimer); _optTipTimer = null; }
+  }
+  
+  function _startOptPhasePoller(owner) {
+    _stopOptPhasePoller();
+    if (!owner) return;
+    const tick = async () => {
+      if (owner.done || _optActive !== owner || owner.view !== "owner") {
+        _stopOptPhasePoller(); return;
+      }
+      const sec = Math.round((Date.now() - owner.t0) / 1000);
+      let stage = owner.lastStage || "prepare";
+      if (owner.reqId) {
+        try {
+          const r = await fetch(API + "/api/optimizer/progress?req_id=" + encodeURIComponent(owner.reqId));
+          if (r.ok) {
+            const d = await r.json();
+            if (d && d.stage) {
+              stage = d.stage;
+              owner.lastStage = stage;
+            }
+          }
+        } catch (_) {  }
+      }
+      if (owner.done || _optActive !== owner || owner.view !== "owner") return;
+      _optPhaseHint(stage, sec);
+    };
+    _optTipTimer = setInterval(tick, 1500);
+    tick();   
   }
 
   
@@ -546,17 +595,11 @@
   let _optActive = null;
   function _restoreOptimizeLoading() {
     const b = $("lvOptimize");
+    
     if (b) { b.disabled = true; b.innerHTML = '<span class="lv-spin"></span>分镜中…'; }
-    if (_optTipTimer) { clearInterval(_optTipTimer); _optTipTimer = null; }
     const owner = _optActive;
     
-    if (owner) _optWaitHint(Math.round((Date.now() - owner.t0) / 1000));
-    _optTipTimer = setInterval(() => {
-      if (!owner || owner.done || _optActive !== owner || owner.view !== "owner") {
-        clearInterval(_optTipTimer); _optTipTimer = null; return;
-      }
-      _optWaitHint(Math.round((Date.now() - owner.t0) / 1000));
-    }, 7000);
+    if (owner) _startOptPhasePoller(owner);
   }
   function _cancelInFlightOptimize(nextJobId) {
     
@@ -566,7 +609,7 @@
     
     if (_optActive && !_optActive.done) _optActive.view = back ? "owner" : "away";
     if (back) { _restoreOptimizeLoading(); return; }
-    if (_optTipTimer) { clearInterval(_optTipTimer); _optTipTimer = null; }
+    _stopOptPhasePoller();
     
     
     

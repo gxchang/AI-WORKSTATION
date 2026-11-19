@@ -912,6 +912,15 @@ def _submit_image(payload, upstream=None, ms_task_id=None, on_submitted=None, lo
 
 
     _mark_submitted(local_tid)
+
+
+
+
+    if on_submitted:
+        try:
+            on_submitted(None)
+        except Exception as e:
+            print(f"[warn] on_submitted(同步提交) 落库失败：{e}", flush=True)
     try:
         resp = _NO_RETRY_SESSION.post(
             f"{base}/images/generations",

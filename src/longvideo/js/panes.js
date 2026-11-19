@@ -1073,11 +1073,15 @@
     const _t0 = Date.now();
     
     
+    const _reqId = "opt_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+    
+    
     let ownerJobId = _ownerJobIdAtClick || null;
-    _optActive = { jobId: ownerJobId, gen: myGen, t0: _t0, done: false, view: "owner" };
+    _optActive = { jobId: ownerJobId, gen: myGen, t0: _t0, done: false, view: "owner",
+                   reqId: _reqId, lastStage: "prepare" };
     const _isStale = () => myGen !== _optGen || !_optActive ||
                      _optActive.gen !== myGen || _optActive.view !== "owner";
-    withBtn($("lvOptimize"), "分镜中…", async () => {
+    withBtn($("lvOptimize"), "准备中…", async () => {
       const script = _ownerScript;
       if (!script) { err("请先填写脚本"); return; }
       
@@ -1119,31 +1123,29 @@
       
       
       
-      setOptHint('<span class="lv-spin"></span>AI 正在分镜…（通常需要 20 秒到 1 分钟，请稍候）');
       
       
-      const _tipEvery = 7;
-      if (_optTipTimer) { clearInterval(_optTipTimer); _optTipTimer = null; }
-      _optTipTimer = setInterval(() => {
-        if (_isStale()) { clearInterval(_optTipTimer); _optTipTimer = null; return; }
-        _optWaitHint(Math.round((Date.now() - _t0) / 1000));
-      }, _tipEvery * 1000);
+      setOptHint('<span class="lv-spin"></span>正在准备…');
+      
+      
+      _startOptPhasePoller(_optActive);
       let r, j;
       try {
         r = await fetch(API + "/api/optimizer", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "X-Opt-Req-Id": _reqId },
+          
           
           body: JSON.stringify({ script, job_id: ownerJobId || null, video_model: _ownerVideoModel }),
         });
         j = await r.json();
       } catch (e) {
-        if (_optTipTimer) { clearInterval(_optTipTimer); _optTipTimer = null; }
+        _stopOptPhasePoller();
         if (_isStale()) return;
         err("分镜请求异常：网络挂了或服务端崩溃 — " + e.message);
         return;
       }
-      if (_optTipTimer) { clearInterval(_optTipTimer); _optTipTimer = null; }
+      _stopOptPhasePoller();
       if (!r.ok) {
         if (_isStale()) { setMsg("原任务分镜失败，未改动任何任务：" + (j.error || "")); return; }
         err("分镜失败：" + (j.error || "") + (j.detail ? ("\n" + j.detail) : ""));
@@ -1174,7 +1176,7 @@
       setMsg(`已生成 ${lv.shots.length} 个镜头${_basisTx}。点「开始生成」就能出片`);
       
       
-      if (_optTipTimer) { clearInterval(_optTipTimer); _optTipTimer = null; }
+      _stopOptPhasePoller();
       clearOptHint();
       
       if (lv.shots.length) lvShots.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1211,7 +1213,7 @@
       
       
       if (_optActive && _optActive.gen === myGen) { _optActive.done = true; clearOptHint(); }
-      if (_optTipTimer) { clearInterval(_optTipTimer); _optTipTimer = null; }
+      _stopOptPhasePoller();
     });
   });
 
