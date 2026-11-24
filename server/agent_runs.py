@@ -180,16 +180,21 @@ def merge_state_sub(run_id, key, sub, value):
     return True
 
 
-def active_by_session(session_id):
+def active_by_session(session_id, include_terminal=False):
     
     if not session_id:
         return None
     with _LOCK:
         conn = _conn()
         try:
-            r = conn.execute(
-                "SELECT * FROM agent_runs WHERE session_id=? AND status IN ('streaming','tooling') "
-                "ORDER BY created_at DESC LIMIT 1", (session_id,)).fetchone()
+            if include_terminal:
+                r = conn.execute(
+                    "SELECT * FROM agent_runs WHERE session_id=? "
+                    "ORDER BY created_at DESC LIMIT 1", (session_id,)).fetchone()
+            else:
+                r = conn.execute(
+                    "SELECT * FROM agent_runs WHERE session_id=? AND status IN ('streaming','tooling') "
+                    "ORDER BY created_at DESC LIMIT 1", (session_id,)).fetchone()
         finally:
             conn.close()
     return dict(r) if r else None

@@ -596,6 +596,37 @@ def _db():
             con.execute(sql)
         except sqlite3.OperationalError:
             pass
+
+
+
+
+
+
+
+    for sql in (
+        "ALTER TABLE lv_segments ADD COLUMN phase TEXT",
+        "ALTER TABLE lv_segments ADD COLUMN phase_attempt INTEGER DEFAULT 0",
+        "ALTER TABLE lv_jobs ADD COLUMN phase_detail TEXT",
+    ):
+        try:
+            con.execute(sql)
+        except sqlite3.OperationalError:
+            pass
+
+
+
+
+
+
+
+    for sql in (
+        "ALTER TABLE lv_jobs ADD COLUMN started_at REAL",
+        "ALTER TABLE lv_jobs ADD COLUMN finished_at REAL",
+    ):
+        try:
+            con.execute(sql)
+        except sqlite3.OperationalError:
+            pass
     return con
 
 
@@ -3311,35 +3342,32 @@ def _download(url, out_path):
 lv_bp = Blueprint("longvideo", __name__, url_prefix="/api")
 
 
-def _archive_segment_video(job_id, seg_no, ver, keep=3):
+def _archive_segment_video(job_id, seg_no, ver):
     
     if not ver or ver <= 0:
-        return
+        return False
     out_dir = os.path.join(JOBS_DIR, job_id)
     main = os.path.join(out_dir, f"seg_{seg_no:02d}.mp4")
+    if not os.path.isfile(main) or os.path.getsize(main) <= 0:
+        print(f"[WARN] #260 跳过归档 job={job_id} seg#{seg_no}: 主画面不存在或为空", flush=True)
+        return False
+    dst = os.path.join(out_dir, f"seg_{seg_no:02d}_v{ver}.mp4")
+    tmp = dst + ".tmp"
     try:
-        if not os.path.exists(main):
-            return
-        dst = os.path.join(out_dir, f"seg_{seg_no:02d}_v{ver}.mp4")
-        if os.path.exists(dst):
-            os.remove(dst)
-        os.rename(main, dst)
 
-        vers = []
-        if os.path.isdir(out_dir):
-            for f in os.listdir(out_dir):
-                m = re.match(rf"seg_{seg_no:02d}_v(\d+)\.mp4$", f)
-                if m:
-                    vers.append(int(m.group(1)))
-        for v in sorted(vers)[:-keep] if len(vers) > keep else []:
-            try:
-                os.remove(os.path.join(out_dir, f"seg_{seg_no:02d}_v{v}.mp4"))
-            except OSError:
-                pass
-        print(f"[INFO] #260 归档 job={job_id} seg#{seg_no}: 旧画面转存 v{ver}（保留最近 {keep} 版）", flush=True)
+        shutil.copy2(main, tmp)
+        os.replace(tmp, dst)
+        print(f"[INFO] #260 归档 job={job_id} seg#{seg_no}: 旧画面复制到 v{ver}"
+              f"（无上限，主画面保留至新片落盘）", flush=True)
+        return True
     except Exception as e:
-
-        print(f"[WARN] #260 归档失败 job={job_id} seg#{seg_no}: {e}（继续重提，不保留旧版）", flush=True)
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        print(f"[ERROR] #260 归档失败 job={job_id} seg#{seg_no} v{ver}: {e}", flush=True)
+        return False
 
 
 def _job_video_model(job_id):
@@ -3366,7 +3394,7 @@ def _resume_segment(job_id, seg):
     from . import providers as _lvprov
     _sub = _lvprov.get_submitter(_job_video_model(job_id))
     status, video_url = _sub.poll(video_id, timeout=900, should_stop=lambda: _job_cancelled(job_id),
-        on_state=lambda st: _set_job_qstate(job_id, st))
+        on_state=lambda st: _set_job_qstate(job_id, st, seg_no=seg_no))
     if status == "cancelled":
         return False, None, None, "任务已停止（cancel），中止轮询"
     if status != "completed" or not video_url:
@@ -3375,6 +3403,7 @@ def _resume_segment(job_id, seg):
     os.makedirs(out_dir, exist_ok=True)
     local = os.path.join(out_dir, f"seg_{seg_no:02d}.mp4")
 
+    _set_seg_phase(job_id, seg_no, "downloading")
     try:
         _download(video_url, local)
     except Exception as e:
@@ -3404,7 +3433,7 @@ def _resume_group(job_id, group_segs):
     _sub = _lvprov.get_submitter(seg_model)
     status, video_url = _sub.poll(
         video_id, timeout=poll_timeout, should_stop=lambda: _job_cancelled(job_id),
-        on_state=lambda st: _set_job_qstate(job_id, st))
+        on_state=lambda st: [_set_job_qstate(job_id, st, seg_no=_gs["seg_no"]) for _gs in group_segs])
     if status == "cancelled":
         return False, None, None, "任务已停止（cancel），中止轮询"
     if status != "completed" or not video_url:
@@ -3412,6 +3441,8 @@ def _resume_group(job_id, group_segs):
     out_dir = os.path.join(JOBS_DIR, job_id)
     os.makedirs(out_dir, exist_ok=True)
     local = os.path.join(out_dir, f"seg_{anchor['seg_no']:02d}.mp4")
+    for _gs in group_segs:
+        _set_seg_phase(job_id, _gs["seg_no"], "downloading")
     try:
         _download(video_url, local)
     except Exception as e:
@@ -3560,6 +3591,18 @@ def _prov_meta(job_id, seg_no=None):
                     payload["aspect_ratio"] = ratio
         finally:
             con.close()
+
+
+
+
+
+        if payload:
+            try:
+                import server.core as _srvcore
+                _caps = _srvcore._video_caps_for(model)
+                payload = _assets_store.fit_payload(payload, _caps, _srvcore._video_param_cap())
+            except Exception as _e:
+                print(f"[warn] 长视频来历裁剪跳过 job={job_id} seg={seg_no}: {_e}", flush=True)
         return _assets_store.build_provenance(payload=payload or None, model=model, ratio=ratio), sess
     except Exception as e:
         print(f"[warn] 长视频来历组装失败 job={job_id} seg={seg_no}: {e}", flush=True)
@@ -3717,6 +3760,20 @@ def _h3_job_opts(job_id):
 
     return {"instance": inst, "accel": accel, "quality_tier": tier, "selflift": sl,
             "seed": gp.get("seed")}
+
+
+def _mirror_h3_job_cols(con, job_id, gen_params):
+    
+    if not job_id or not isinstance(gen_params, dict):
+        return
+    keys = [k for k in ("instance_tier", "accel", "quality_tier") if k in gen_params]
+    if not keys:
+        return
+    try:
+        con.execute("UPDATE lv_jobs SET %s WHERE id=?" % ",".join(k + "=?" for k in keys),
+                    [gen_params.get(k) for k in keys] + [job_id])
+    except sqlite3.OperationalError:
+        pass
 
 
 def _gen_segment(job_id, seg, prev_tail_b64):
@@ -3910,6 +3967,8 @@ def _gen_segment(job_id, seg, prev_tail_b64):
             "seconds": seconds, "size": size, "aspect_ratio": aspect, "mode": mode,
             "refine": _rf, "face": _fc}
     _req.update(_h3_job_opts(job_id))
+
+    _set_seg_phase(job_id, seg["seg_no"], "submitting")
     for attempt in range(max_attempts):
         if _job_cancelled(job_id):
             return False, None, None, "任务已停止（cancel），中止提交"
@@ -3925,7 +3984,7 @@ def _gen_segment(job_id, seg, prev_tail_b64):
             gap = min(_JOB_GAP.get(job_id, SEG_GAP_SEC) * 2, _GAP_MAX_SEC)
             _JOB_GAP[job_id] = gap
 
-            _set_job_qstate(job_id, "retry")
+            _set_job_qstate(job_id, "retry", seg_no=seg["seg_no"], attempt=attempt + 1)
             wait = gap
             print(f"[WARN] 提交限流(429) job={job_id} seg#{seg['seg_no']} 第{attempt + 1}/{max_attempts}次，"
                   f"{wait}s 后重试（发射间隔自适应→{gap}s）", flush=True)
@@ -3939,11 +3998,19 @@ def _gen_segment(job_id, seg, prev_tail_b64):
                 detail = resp.json()
             except Exception:
                 detail = resp.text
+
+
+
+            _fatal = _fatal_submit_error(detail)
+            if _fatal:
+                print(f"[ERROR] 确定性错误({resp.status_code}) job={job_id} seg#{seg['seg_no']} 不重试: {_fatal}",
+                      flush=True)
+                return False, None, None, f"{_sub.label} 拒绝（{_fatal}）：确定性错误，未重试"
             _last_err = f"{_sub.label} {resp.status_code}: {str(detail)[:200]}"
             gap = min(_JOB_GAP.get(job_id, SEG_GAP_SEC) * 2, _GAP_MAX_SEC)
             _JOB_GAP[job_id] = gap
 
-            _set_job_qstate(job_id, "retry")
+            _set_job_qstate(job_id, "retry", seg_no=seg["seg_no"], attempt=attempt + 1)
             wait = gap
             print(f"[WARN] 平台瞬态({resp.status_code}) job={job_id} seg#{seg['seg_no']} "
                   f"第{attempt + 1}/{max_attempts}次，{wait}s 后重试（发射间隔自适应→{gap}s）: {str(detail)[:160]}", flush=True)
@@ -3967,7 +4034,7 @@ def _gen_segment(job_id, seg, prev_tail_b64):
     if not video_id:
         return False, None, None, f"创建视频任务失败（已自动重试{max_attempts}次）：{_last_err or '限流/网络'}"
 
-    _set_job_qstate(job_id, "running")
+    _set_job_qstate(job_id, "running", seg_no=seg["seg_no"])
 
 
     _JOB_LAST_SUBMIT[job_id] = time.time()
@@ -3984,7 +4051,7 @@ def _gen_segment(job_id, seg, prev_tail_b64):
 
     status, video_url = _sub.poll(video_id, timeout=poll_timeout,
                                   should_stop=lambda: _job_cancelled(job_id),
-        on_state=lambda st: _set_job_qstate(job_id, st))
+        on_state=lambda st: _set_job_qstate(job_id, st, seg_no=seg["seg_no"]))
     if status == "cancelled":
         return False, None, None, "任务已停止（cancel），中止轮询"
     if status != "completed" or not video_url:
@@ -3995,6 +4062,8 @@ def _gen_segment(job_id, seg, prev_tail_b64):
     local = os.path.join(out_dir, f"seg_{seg['seg_no']:02d}.mp4")
 
 
+
+    _set_seg_phase(job_id, seg["seg_no"], "downloading")
     try:
         _download(video_url, local)
     except Exception as e:
@@ -4188,6 +4257,9 @@ def _gen_group(job_id, group_segs, common, sub):
 
     video_id = None
     _last_err = ""
+
+    for _gs in group_segs:
+        _set_seg_phase(job_id, _gs["seg_no"], "submitting")
     for attempt in range(max_attempts):
         if _job_cancelled(job_id):
             return False, None, None, "任务已停止（cancel），中止提交"
@@ -4202,7 +4274,8 @@ def _gen_group(job_id, group_segs, common, sub):
             _last_err = "429 限流"
             gap = min(_JOB_GAP.get(job_id, SEG_GAP_SEC) * 2, _GAP_MAX_SEC)
             _JOB_GAP[job_id] = gap
-            _set_job_qstate(job_id, "retry")
+            for _gs in group_segs:
+                _set_job_qstate(job_id, "retry", seg_no=_gs["seg_no"], attempt=attempt + 1)
             if _cancelable_sleep(job_id, gap):
                 return False, None, None, "任务已停止（cancel），中止重试提交"
             continue
@@ -4211,10 +4284,17 @@ def _gen_group(job_id, group_segs, common, sub):
                 detail = resp.json()
             except Exception:
                 detail = resp.text
+
+            _fatal = _fatal_submit_error(detail)
+            if _fatal:
+                print(f"[ERROR] 确定性错误({resp.status_code}) job={job_id} 续接组seg#"
+                      f"{[s['seg_no'] for s in group_segs]} 不重试: {_fatal}", flush=True)
+                return False, None, None, f"{sub.label} 拒绝（{_fatal}）：确定性错误，未重试"
             _last_err = f"{sub.label} {resp.status_code}: {str(detail)[:200]}"
             gap = min(_JOB_GAP.get(job_id, SEG_GAP_SEC) * 2, _GAP_MAX_SEC)
             _JOB_GAP[job_id] = gap
-            _set_job_qstate(job_id, "retry")
+            for _gs in group_segs:
+                _set_job_qstate(job_id, "retry", seg_no=_gs["seg_no"], attempt=attempt + 1)
             if _cancelable_sleep(job_id, gap):
                 return False, None, None, "任务已停止（cancel），中止重试提交"
             continue
@@ -4230,7 +4310,8 @@ def _gen_group(job_id, group_segs, common, sub):
     if not video_id:
         return False, None, None, f"创建续接组任务失败（已自动重试{max_attempts}次）：{_last_err or '限流/网络'}"
 
-    _set_job_qstate(job_id, "running")
+    for _gs in group_segs:
+        _set_job_qstate(job_id, "running", seg_no=_gs["seg_no"])
 
 
     _JOB_LAST_SUBMIT[job_id] = time.time()
@@ -4240,7 +4321,7 @@ def _gen_group(job_id, group_segs, common, sub):
 
     status, video_url = sub.poll(video_id, timeout=poll_timeout,
                                  should_stop=lambda: _job_cancelled(job_id),
-        on_state=lambda st: _set_job_qstate(job_id, st))
+        on_state=lambda st: [_set_job_qstate(job_id, st, seg_no=_gs["seg_no"]) for _gs in group_segs])
     if status == "cancelled":
         return False, None, None, "任务已停止（cancel），中止轮询"
     if status != "completed" or not video_url:
@@ -4249,6 +4330,9 @@ def _gen_group(job_id, group_segs, common, sub):
     out_dir = os.path.join(JOBS_DIR, job_id)
     os.makedirs(out_dir, exist_ok=True)
     local = os.path.join(out_dir, f"seg_{anchor_no:02d}.mp4")
+
+    for _gs in group_segs:
+        _set_seg_phase(job_id, _gs["seg_no"], "downloading")
     try:
         _download(video_url, local)
     except Exception as e:
@@ -4261,11 +4345,11 @@ def _gen_group(job_id, group_segs, common, sub):
     _register_segment_asset(job_id, anchor_no, local,
                             extra_meta={"cost": getattr(sub, "last_cost", None)})
     _update_seg(job_id, anchor_no, status="completed", local_path=_rel_to_root(local),
-                video_id=video_id, tail_frame=None, finished_at=time.time())
+                video_id=video_id, tail_frame=None, finished_at=time.time(), phase="completed", phase_attempt=0)
 
     for s in group_segs[1:]:
         _update_seg(job_id, s["seg_no"], status="completed", local_path=_rel_to_root(local),
-                    video_id=video_id, tail_frame=None, finished_at=time.time())
+                    video_id=video_id, tail_frame=None, finished_at=time.time(), phase="completed", phase_attempt=0)
     return True, local, None, None
 
 
@@ -4280,10 +4364,81 @@ _JOB_THREADS = {}
 _JOB_QSTATE = {}
 
 
-def _set_job_qstate(job_id, state):
+def _set_job_qstate(job_id, state, seg_no=None, attempt=None):
     
-    if state in ("queued", "retry", "running"):
+    if state in ("queued", "retry", "running", "submitting", "downloading"):
         _JOB_QSTATE[job_id] = state
+    try:
+        con = _db()
+        try:
+            con.execute("UPDATE lv_jobs SET phase_detail=? WHERE id=?", (state, job_id))
+            if seg_no is not None:
+                if attempt is not None:
+                    con.execute("UPDATE lv_segments SET phase=?, phase_attempt=? WHERE job_id=? AND seg_no=?",
+                                (state, int(attempt), job_id, seg_no))
+                else:
+                    con.execute("UPDATE lv_segments SET phase=? WHERE job_id=? AND seg_no=?",
+                                (state, job_id, seg_no))
+            con.commit()
+        finally:
+            con.close()
+    except Exception:
+        pass
+
+
+def _fatal_submit_error(detail):
+    
+    if isinstance(detail, dict):
+        code = str(detail.get("code", "") or "")
+        msg = str(detail.get("msg") or detail.get("message") or detail.get("error") or "")
+
+        if not msg and isinstance(detail.get("data"), dict):
+            msg = str(detail["data"].get("msg") or detail["data"].get("error") or "")
+    else:
+        code, msg = "", str(detail)
+    blob = (code + " " + msg).lower()
+
+    fatal_kw = ("余额不足", "欠费", "积分不足", "额度不足", "付费积分", "insufficient balance",
+                "insufficient credit", "insufficient quota", "out of credit", "out of balance",
+                "balance is insufficient", "quota exceeded", "invalid api key", "api key is invalid",
+                "unauthorized", "invalid token", "authentication failed")
+    hit = any(k in blob for k in fatal_kw) or code in ("821",)
+    if not hit:
+        return None
+
+
+
+    return (_human_error(msg) or _human_error(str(code)) or "确定性业务错误")[:300]
+
+
+def _jobwide_fatal(err):
+    
+    t = str(err or "")
+    if not t:
+        return False
+    import re as _re
+    return bool(_re.search(
+        r"确定性错误|未重试|余额不足|欠费|积分不足|额度不足|付费积分|insufficient|out of credit|"
+        r"quota exceeded|unauthorized|invalid api key|invalid token|authentication failed|"
+        r"密钥|鉴权|未配置|参数非法|invalid parameter", t, _re.I))
+
+
+def _set_seg_phase(job_id, seg_no, phase, attempt=None):
+    
+    try:
+        con = _db()
+        try:
+            if attempt is not None:
+                con.execute("UPDATE lv_segments SET phase=?, phase_attempt=? WHERE job_id=? AND seg_no=?",
+                            (phase, int(attempt), job_id, seg_no))
+            else:
+                con.execute("UPDATE lv_segments SET phase=? WHERE job_id=? AND seg_no=?",
+                            (phase, job_id, seg_no))
+            con.commit()
+        finally:
+            con.close()
+    except Exception:
+        pass
 
 
 
@@ -4293,18 +4448,18 @@ _JOB_LAST_SUBMIT = {}
 _JOB_GAP = {}
 
 
-def _ensure_running(job_id):
+def _ensure_running(job_id, only_nos=None, prev_status=None):
     
     t = _JOB_THREADS.get(job_id)
     if t and t.is_alive():
         return False
-    th = threading.Thread(target=_run_job, args=(job_id,), daemon=True)
+    th = threading.Thread(target=_run_job, args=(job_id, only_nos, prev_status), daemon=True)
     _JOB_THREADS[job_id] = th
     th.start()
     return True
 
 
-def _run_job(job_id):
+def _run_job(job_id, only_nos=None, prev_status=None):
     
     _JOB_THREADS[job_id] = threading.current_thread()
     con = _db()
@@ -4321,6 +4476,18 @@ def _run_job(job_id):
         con.close()
     if not job:
         return
+
+
+    _scope_tx = "全部段"
+    if only_nos is not None:
+        _only = set(int(x) for x in only_nos)
+        seg_list = [s for s in seg_list if s["seg_no"] in _only]
+        _scope_tx = "指定段 " + "/".join(str(n) for n in sorted(_only))
+        print(f"[PIPE] 任务 {job_id} 单卡提交范围：{_scope_tx}（共 {len(seg_list)} 段，不顺带提交其它段）",
+              flush=True)
+        if not seg_list:
+            _JOB_THREADS.pop(job_id, None)
+            return
 
     out_dir = os.path.join(JOBS_DIR, job_id)
     os.makedirs(out_dir, exist_ok=True)
@@ -4438,16 +4605,30 @@ def _run_job(job_id):
             if unit["type"] == "seg":
                 seg = unit["segs"][0]
                 _update_seg(job_id, seg["seg_no"], status="completed",
-                            local_path=_rel_to_root(local), tail_frame=tail, finished_at=time.time())
+                            local_path=_rel_to_root(local), tail_frame=tail, finished_at=time.time(),
+                            phase="completed", phase_attempt=0)
         else:
+            _wide = _jobwide_fatal(err)
             for s in unit["segs"]:
                 results[s["seg_no"]] = {"ok": False, "local": None, "tail": None, "err": err}
 
                 if _cancelled():
-                    _update_seg(job_id, s["seg_no"], status="cancelled", error=err)
+                    _update_seg(job_id, s["seg_no"], status="cancelled", error=err, phase="cancelled")
                 else:
-                    _update_seg(job_id, s["seg_no"], status="failed", error=err)
-                    state["stop_emit"] = True
+                    _update_seg(job_id, s["seg_no"], status="failed", error=err, phase="failed")
+                    if _wide:
+                        state["stop_emit"] = True
+            _nos_txt = "/".join(str(s["seg_no"]) for s in unit["segs"])
+            if _cancelled():
+                pass
+            elif _wide:
+                print(f"[PIPE] ⛔ 整链同因必败 job={job_id} seg#{_nos_txt}：停发剩余段"
+                      f"（继续提交只会同样失败）: {err[:120]}", flush=True)
+            else:
+
+
+                print(f"[PIPE] ⚠ 单段失败（不影响其余镜头） job={job_id} seg#{_nos_txt}："
+                      f"{err[:120]} —— 继续发射其余单元", flush=True)
 
     threads = []
     emitted = set()
@@ -4466,6 +4647,7 @@ def _run_job(job_id):
 
 
     _last_hb = 0.0
+    _idle = 0
     while not state["stop_emit"] and not state["cancelled"]:
         try:
 
@@ -4501,8 +4683,21 @@ def _run_job(job_id):
                         picked = (unit, None)
                 break
             if picked is None:
+
+
+
+                if sum(1 for x in threads if x.is_alive()) == 0:
+                    _idle += 1
+                    if _idle >= 3:
+                        print(f"[PIPE] 无可发射单元且在飞为 0（依赖段已失败）→ 结束调度 job={job_id}，"
+                              f"未发射={sorted(set(x for u in units for x in u['nos']) - (emitted | set(seg_paths)))}",
+                              flush=True)
+                        break
+                else:
+                    _idle = 0
                 time.sleep(2)
                 continue
+            _idle = 0
             unit, prev_tail = picked
             _gate()
             if state["stop_emit"] or state["cancelled"]:
@@ -4544,6 +4739,34 @@ def _run_job(job_id):
 
     failed = [n for n, r in results.items() if not r["ok"]]
     ok = (not failed) and len(seg_paths) == len(seg_list)
+
+
+
+
+
+
+    if ok and only_nos is not None:
+        con = _db()
+        try:
+            _all_segs = con.execute(
+                "SELECT seg_no,local_path,status FROM lv_segments WHERE job_id=?", (job_id,)
+            ).fetchall()
+        finally:
+            con.close()
+        _unfinished = [s for s in _all_segs
+                       if s["status"] != "completed"
+                       and not (s["local_path"] and os.path.exists(_seg_path(s["local_path"])))]
+        if _unfinished:
+
+
+            _back = prev_status if prev_status in ("draft", "failed", "cancelled", "completed") else "failed"
+            _update_job(job_id, status=_back, error=None)
+            print(f"[PIPE] 单镜提交收尾 job={job_id} seg#{sorted(_only) if only_nos else '-'}: "
+                  f"全任务还有 {len(_unfinished)} 段未完成，不拼片，任务回 {_back}", flush=True)
+            ok = False
+            _JOB_THREADS.pop(job_id, None)
+            _JOB_LAST_SUBMIT.pop(job_id, None); _JOB_GAP.pop(job_id, None)
+            return
     if ok:
 
 
@@ -4587,7 +4810,13 @@ def _run_job(job_id):
                 finally:
                     con.close()
     else:
-        _update_job(job_id, status="failed", error="部分片段生成失败")
+
+
+
+        _fail_err = ""
+        for _n in sorted(failed)[:1]:
+            _fail_err = str(results.get(_n, {}).get("err") or "")
+        _update_job(job_id, status="failed", error=_fail_err or "部分片段生成失败")
     _JOB_THREADS.pop(job_id, None)
     _JOB_LAST_SUBMIT.pop(job_id, None); _JOB_GAP.pop(job_id, None)
 
@@ -4619,6 +4848,27 @@ def _seg_jsonl(d, k):
 
 
 def _update_job(job_id, **fields):
+
+
+
+
+
+    _st = fields.get("status")
+    if _st and "finished_at" not in fields:
+        if _st == "processing":
+            fields["finished_at"] = None
+            if "started_at" not in fields:
+                _c = _db()
+                try:
+                    _r = _c.execute("SELECT started_at FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
+                    if not (_r and _r["started_at"]):
+                        fields["started_at"] = time.time()
+                except sqlite3.OperationalError:
+                    fields["started_at"] = time.time()
+                finally:
+                    _c.close()
+        elif _st in ("completed", "failed", "cancelled"):
+            fields["finished_at"] = time.time()
     fields["updated_at"] = time.time()
     cols = ", ".join(f"{k}=?" for k in fields)
     vals = list(fields.values()) + [job_id]
@@ -4896,6 +5146,13 @@ def api_optimizer_progress():
     return jsonify(_opt_progress_get(_rid) or {"stage": "prepare", "detail": {}})
 
 
+def _seg_submitted(row):
+    
+    if row is None:
+        return False
+    return (row["status"] or "") in ("processing", "completed")
+
+
 @lv_bp.route("/jobs", methods=["POST"])
 def api_create_job():
     
@@ -4905,6 +5162,14 @@ def api_create_job():
     script = (data.get("script") or "").strip()
     shots = data.get("shots")
     job_id = (data.get("job_id") or "").strip() or None
+
+
+    _seg_nos_raw = data.get("seg_nos")
+    try:
+        seg_nos = set(int(x) for x in _seg_nos_raw) if isinstance(_seg_nos_raw, list) else None
+    except (TypeError, ValueError):
+        seg_nos = None
+    full_rebuild = str(data.get("full", "")).lower() in ("1", "true", "yes")
 
 
 
@@ -4962,28 +5227,34 @@ def api_create_job():
     _name_provided = "name" in data
     name = None
     _old_hist = {}
+    _touched = 0
+    _incremental = (seg_nos is not None)
+
+
+
+    _prev_status = None
     con = _db()
     try:
         existing = job_id and con.execute(
             "SELECT id,status FROM lv_jobs WHERE id=?", (job_id,)
         ).fetchone()
         if existing:
+            _prev_status = existing["status"]
+
+
+
+
 
 
 
             if existing["status"] == "processing":
                 return jsonify(error="该任务正在生成中，请等待完成后再操作"), 409
-
-
-
             _proc = con.execute(
                 "SELECT COUNT(*) c FROM lv_segments WHERE job_id=? AND status='processing'",
                 (job_id,),
             ).fetchone()["c"]
-            if _proc:
+            if _proc and full_rebuild:
                 return jsonify(error=f"该任务有 {_proc} 个段落正在重提，请等待其完成后再重新生成全部"), 409
-
-
 
 
             for _r in con.execute(
@@ -4992,14 +5263,19 @@ def api_create_job():
             ):
                 if _r["prompt_history"]:
                     _old_hist[_r["seg_no"]] = _r["prompt_history"]
-            con.execute("DELETE FROM lv_segments WHERE job_id=?", (job_id,))
+
+            _existing_segs = {}
+            for _r in con.execute("SELECT * FROM lv_segments WHERE job_id=?", (job_id,)):
+                _existing_segs[_r["seg_no"]] = _r
+            if full_rebuild:
+                con.execute("DELETE FROM lv_segments WHERE job_id=?", (job_id,))
+                _existing_segs = {}
             if _name_provided:
                 name = (data.get("name") or "").strip()[:60] or None
             else:
 
                 _cur = con.execute("SELECT name FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
                 name = _cur["name"] if _cur else None
-
 
 
             con.execute(
@@ -5018,6 +5294,7 @@ def api_create_job():
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (job_id, script, "processing", "生成中", len(shots), assets_json, shots_json, gen_params_json, _ins_name, time.time(), time.time()),
             )
+            _existing_segs = {}
 
 
 
@@ -5032,45 +5309,81 @@ def api_create_job():
 
 
         for idx, s in enumerate(shots, start=1):
+
+            if seg_nos is not None and idx not in seg_nos:
+                continue
+            _old = _existing_segs.get(idx)
+
+            if _old is not None and _seg_submitted(_old):
+                continue
             aspect = (s.get("aspect_ratio") or "").strip() or seg_aspect
             resolution = (s.get("resolution") or "").strip() or seg_resolution
             try:
                 _sec = int(s.get("estimated_seconds") or 5)
             except (TypeError, ValueError):
                 _sec = 5
-            con.execute(
-                """INSERT INTO lv_segments(job_id,seg_no,shot_no,is_continuation,prompt,seconds,
-                   images_keys,images_urls,audio_urls,audio,mode,aspect_ratio,resolution,status,started_at,created_at,updated_at,prompt_history,
-                   post_refine,post_face,group_id)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    job_id, idx, s.get("shot_no", idx),
-                    1 if s.get("is_continuation") else 0,
-                    s.get("prompt", ""), _sec,
-                    json.dumps(s.get("images", []), ensure_ascii=False),
-                    json.dumps(s.get("images_urls", []), ensure_ascii=False),
-                    json.dumps(s.get("audio_urls", []), ensure_ascii=False),
-                    json.dumps(s.get("audio", []), ensure_ascii=False),
-                    s.get("mode", "reference"),
-                    aspect, resolution,
-                    "pending", 0.0, time.time(), time.time(),
-                    _old_hist.get(idx),
+            _post_refine = json.dumps(s.get("post_refine") or {}, ensure_ascii=False) if s.get("post_refine") else None
+            _post_face = json.dumps(s.get("post_face") or {}, ensure_ascii=False) if s.get("post_face") else None
+            _grp = str(s.get("group_no") or idx)
+            if _old is not None:
+
+
+                con.execute(
+                    """UPDATE lv_segments SET shot_no=?,is_continuation=?,prompt=?,seconds=?,
+                       images_keys=?,images_urls=?,audio_urls=?,audio=?,mode=?,aspect_ratio=?,resolution=?,
+                       status='pending',started_at=0,error=NULL,video_id=NULL,video_url=NULL,
+                       local_path=NULL,tail_frame=NULL,updated_at=?,post_refine=?,post_face=?,group_id=?
+                       WHERE job_id=? AND seg_no=?""",
+                    (
+                        s.get("shot_no", idx), 1 if s.get("is_continuation") else 0,
+                        s.get("prompt", ""), _sec,
+                        json.dumps(s.get("images", []), ensure_ascii=False),
+                        json.dumps(s.get("images_urls", []), ensure_ascii=False),
+                        json.dumps(s.get("audio_urls", []), ensure_ascii=False),
+                        json.dumps(s.get("audio", []), ensure_ascii=False),
+                        s.get("mode", "reference"), aspect, resolution,
+                        time.time(), _post_refine, _post_face, _grp, job_id, idx,
+                    ),
+                )
+            else:
+                con.execute(
+                    """INSERT INTO lv_segments(job_id,seg_no,shot_no,is_continuation,prompt,seconds,
+                       images_keys,images_urls,audio_urls,audio,mode,aspect_ratio,resolution,status,started_at,created_at,updated_at,prompt_history,
+                       post_refine,post_face,group_id)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        job_id, idx, s.get("shot_no", idx),
+                        1 if s.get("is_continuation") else 0,
+                        s.get("prompt", ""), _sec,
+                        json.dumps(s.get("images", []), ensure_ascii=False),
+                        json.dumps(s.get("images_urls", []), ensure_ascii=False),
+                        json.dumps(s.get("audio_urls", []), ensure_ascii=False),
+                        json.dumps(s.get("audio", []), ensure_ascii=False),
+                        s.get("mode", "reference"),
+                        aspect, resolution,
+                        "pending", 0.0, time.time(), time.time(),
+                        _old_hist.get(idx),
 
 
 
-                    json.dumps(s.get("post_refine") or {}, ensure_ascii=False) if s.get("post_refine") else None,
-                    json.dumps(s.get("post_face") or {}, ensure_ascii=False) if s.get("post_face") else None,
-                    str(s.get("group_no") or idx),
-                ),
-            )
+                        _post_refine, _post_face, _grp,
+                    ),
+                )
+            _touched += 1
+
+
+        if _incremental and _touched == 0:
+            con.execute("UPDATE lv_jobs SET status=? WHERE id=?", ("completed", job_id))
+
+        if full_rebuild or not _existing_segs:
 
 
 
 
-        try:
-            _purge_stale_seg_files(job_id, len(shots))
-        except Exception as e:
-            logging.getLogger(__name__).warning("清理多余段文件异常 %s: %s", job_id, e)
+            try:
+                _purge_stale_seg_files(job_id, len(shots))
+            except Exception as e:
+                logging.getLogger(__name__).warning("清理多余段文件异常 %s: %s", job_id, e)
 
         _sid = (data.get("session_id") or data.get("sessionId") or "").strip()
         if job_id and _sid:
@@ -5079,8 +5392,16 @@ def api_create_job():
     finally:
         con.close()
 
-    _ensure_running(job_id)
-    return jsonify(job_id=job_id, segment_count=len(shots), status="processing")
+
+
+
+
+    _run_scope = None if (seg_nos is None or full_rebuild) else set(seg_nos)
+    if not (_incremental and _touched == 0):
+        _ensure_running(job_id, _run_scope, _prev_status)
+
+    return jsonify(segment_count=len(shots), status="processing",
+                   **_job_state_payload(job_id))
 
 
 @lv_bp.route("/jobs/draft", methods=["POST"])
@@ -5144,10 +5465,17 @@ def api_save_draft():
         _sid = (data.get("session_id") or data.get("sessionId") or "").strip() if isinstance(data, dict) else ""
         if job_id and _sid:
             con.execute("UPDATE lv_jobs SET session_id=? WHERE id=?", (_sid, job_id))
+
+
+        _mirror_h3_job_cols(con, job_id, gen_params)
         con.commit()
     finally:
         con.close()
-    return jsonify(job_id=job_id, status="draft", stage=stage, gen_params=gen_params)
+
+
+
+    return jsonify(status="draft", stage=stage, gen_params=gen_params,
+                   **_job_state_payload(job_id))
 
 
 @lv_bp.route("/jobs/<job_id>", methods=["GET"])
@@ -5157,11 +5485,11 @@ def api_get_job(job_id):
         job = con.execute("SELECT * FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
         if not job:
             return jsonify(error="not found"), 404
+
+
+
         segs = con.execute(
-            "SELECT seg_no,shot_no,is_continuation,prompt,seconds,status,local_path,video_id,error,mode,"
-            "audio,audio_urls,images_keys,images_urls,started_at,finished_at,real_seconds,created_at,updated_at,prompt_history,"
-            "post_refine,post_face "
-            "FROM lv_segments WHERE job_id=? ORDER BY seg_no", (job_id,)
+            "SELECT " + _SEG_COLS + "FROM lv_segments WHERE job_id=? ORDER BY seg_no", (job_id,)
         ).fetchall()
     finally:
         con.close()
@@ -5229,34 +5557,30 @@ def api_get_job(job_id):
             _s["cost"] = _info["cost"]
 
 
-    _qstate = _JOB_QSTATE.get(job_id)
 
-    try:
-        _sh = json.loads(job.get("shots_history") or "[]")
-        if not isinstance(_sh, list):
-            _sh = []
-    except Exception:
-        _sh = []
-    shots_hist_meta = [
-        {"idx": i, "ts": v.get("ts"), "source": v.get("source") or "",
-         "shot_count": len(v.get("shots") or [])}
-        for i, v in enumerate(_sh)
-    ]
+    _qstate = _JOB_QSTATE.get(job_id) or job.get("phase_detail")
+
+
+
+    _jstate = _job_state(job, seg_norm)
+
+
+    _segments_with_state(job, seg_norm, job_id)
     return jsonify(
         job=job,
         segments=seg_norm,
         final_url=job.get("final_url"),
         script=job.get("script"),
-        stage=_derive_stage(job.get("status"), job.get("stage"),
-                            job.get("segment_count") or len(seg_norm)),
+
+        state=_jstate,
+
+        stage=_jstate["label"],
+
+        queue_state=_qstate,
         assets=_attach_appearance(json.loads(job.get("assets_json") or "[]")),
         shots=_shots,
         shots_budget_error=_shot_budget_gate(_shots, _model),
         gen_params=_norm_gen_params(json.loads(job.get("gen_params_json") or "{}")),
-        shots_history=shots_hist_meta,
-        current_shot_ver=job.get("current_shot_ver"),
-
-        queue_state=_qstate,
     )
 
 
@@ -5280,6 +5604,308 @@ def _derive_stage(status, stored, seg_count=0):
     return "分镜预览" if seg_count else "素材登记"
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+_PHASE_LABEL = {
+    "submitting": "提交中",
+    "queued": "平台排队中",
+    "running": "生成中",
+    "downloading": "下载中",
+    "retry": "退避重试",
+    "failed": "失败",
+    "completed": "已完成",
+    "cancelled": "已停止",
+}
+
+
+def _human_error(raw):
+    
+    import re as _re
+    txt = str(raw or "").strip()
+    if not txt:
+        return ""
+    mark = "（确定性错误，未重试）" if _re.search(r"确定性错误|未重试", txt) else ""
+    msg = ""
+
+    try:
+        o = json.loads(txt)
+        if isinstance(o, dict):
+            for k in ("msg", "message", "error"):
+                v = o.get(k)
+                if isinstance(v, str) and v.strip():
+                    msg = v.strip()
+                    break
+    except Exception:
+        pass
+
+    if not msg:
+        cands = _re.findall(r"[\"']msg[\"']\s*:\s*[\"']([^\"']{2,})[\"']", txt)
+        if not cands:
+            cands = _re.findall(r"[\"'](?:message|error)[\"']\s*:\s*[\"']([^\"']{2,})[\"']", txt)
+        if cands:
+            msg = min(cands, key=len)
+    if msg:
+        out = msg + mark
+        return out[:240] + "…" if len(out) > 240 else out
+
+
+
+    return txt[:300] + "…" if len(txt) > 300 else txt
+
+
+def _seg_state(seg, job_status=None, group_head=None):
+    
+    seg = seg or {}
+    st = (seg.get("status") or "pending")
+    ph = (seg.get("phase") or "").strip()
+
+    if st == "cancelled" or (job_status == "cancelled" and st == "pending"):
+        label = "已停止"
+        ph_eff = "cancelled"
+    elif st == "completed":
+        label, ph_eff = "已完成", "completed"
+    elif st == "failed":
+        label, ph_eff = "失败", "failed"
+    elif st == "processing":
+
+
+        if ph in _PHASE_LABEL and ph not in ("failed", "completed", "cancelled", "skipped"):
+            if ph == "retry":
+                n = seg.get("phase_attempt") or 1
+                try:
+                    n = max(1, int(n))
+                except Exception:
+                    n = 1
+                label = "退避重试 %d/3" % n
+            else:
+                label = _PHASE_LABEL[ph]
+            ph_eff = ph
+        else:
+            label, ph_eff = "生成中", "running"
+    else:
+
+
+
+
+
+        if job_status == "failed":
+            label, ph_eff = "未生成（已中止）", "skipped"
+        else:
+            label, ph_eff = "排队中", "queued"
+
+    _no = seg.get("seg_no")
+    _member = bool(group_head) and group_head != _no
+    _skipped = (st == "pending" and job_status == "failed")
+    _retryable = st in ("failed", "cancelled") or _skipped
+
+    _rlabel = ("重试本段" if st == "failed"
+               else "生成本段" if _skipped
+               else "重新生成本段" if st == "cancelled" else "")
+    return {
+        "status": st,
+        "phase": ph_eff,
+        "phase_attempt": seg.get("phase_attempt"),
+        "label": label,
+
+        "detail": _human_error(seg.get("error")) if st in ("failed", "cancelled") else "",
+        "error": seg.get("error"),
+
+        "can_retry": bool(_retryable and not _member),
+        "retry_label": ("" if _member else _rlabel),
+        "skipped": _skipped,
+
+        "can_regen": bool(not _member),
+        "retry_owner": (group_head if _member else _no),
+        "is_group_member": _member,
+    }
+
+
+def _job_state(job, segs=None):
+    
+    job = job or {}
+    st = (job.get("status") or "draft").strip()
+    phase = (job.get("phase_detail") or "").strip()
+    segs = segs or []
+    total = job.get("segment_count") or len(segs) or 0
+    done = sum(1 for s in segs if (s.get("status") or "") == "completed")
+    _fail_segs = [s for s in segs if (s.get("status") or "") == "failed"]
+    _skip_segs = [s for s in segs if (s.get("status") or "") == "pending"]
+    _fail_nos = sorted({int(s.get("seg_no")) for s in _fail_segs if s.get("seg_no")})
+    if st == "completed":
+        label, ph_eff = "已完成", "completed"
+    elif st == "failed":
+        label, ph_eff = "失败", "failed"
+    elif st == "cancelled":
+        label, ph_eff = "已停止", "cancelled"
+    elif st in ("processing", "pending", "running"):
+        if phase in _PHASE_LABEL and phase not in ("failed", "completed", "cancelled"):
+            if phase == "retry":
+                n = job.get("phase_attempt") or 1
+                try:
+                    n = max(1, int(n))
+                except Exception:
+                    n = 1
+                label = "退避重试 %d/3" % n
+            else:
+                label = _PHASE_LABEL[phase]
+            ph_eff = phase
+        else:
+            label, ph_eff = "生成中", "running"
+    else:
+        label = (job.get("stage") or "").strip()
+        if label not in _DRAFT_STAGES:
+            label = "分镜预览" if total else "素材登记"
+        ph_eff = ""
+
+    terminal = st in ("completed", "failed", "cancelled")
+    _now = time.time()
+    s_at = job.get("started_at") or 0
+    f_at = job.get("finished_at") or 0
+    if not s_at:
+
+
+        _starts = [x.get("started_at") for x in segs if x.get("started_at")]
+        s_at = min(_starts) if _starts else 0
+    if terminal and not f_at:
+        _fin = [(x.get("finished_at") or x.get("updated_at")) for x in segs
+                if (x.get("finished_at") or x.get("updated_at"))]
+        f_at = max(_fin) if _fin else (job.get("updated_at") or 0)
+    elapsed = max(0, int(((f_at if terminal else _now) - s_at))) if s_at else 0
+    eta = None
+    if st in ("processing", "pending", "running"):
+        remain = max(0, total - done)
+        done_timed = [x for x in segs
+                      if x.get("status") == "completed" and x.get("started_at")
+                      and (x.get("finished_at") or x.get("updated_at"))]
+        if remain:
+            avg = (sum((x.get("finished_at") or x.get("updated_at")) - x["started_at"]
+                       for x in done_timed) / len(done_timed)) if done_timed else 95
+            eta = int(remain * avg)
+
+
+
+    _detail = ""
+    if st in ("failed", "cancelled"):
+        _main = _human_error(job.get("error"))
+        if st == "failed" and (not _main or _main.startswith("部分片段")):
+            for _s in _fail_segs:
+                _cand = _human_error(_s.get("error"))
+                if _cand:
+                    _main = _cand
+                    break
+
+
+        if _fail_nos:
+            _head = "第 %s 段" % "、".join(str(n) for n in _fail_nos)
+        else:
+            _head = ""
+        _detail = (_head + "：" + _main) if (_head and _main) else (_main or _head)
+        if _skip_segs:
+            _detail = (_detail + "；" if _detail else "") + "另有 %d 段未生成" % len(_skip_segs)
+    return {
+
+
+
+
+
+        "job_id": job.get("id"),
+        "status": st,
+        "phase": ph_eff,
+        "label": label,
+        "detail": _detail,
+        "done": done,
+        "total": total,
+
+        "failed": len(_fail_segs),
+        "skipped": len(_skip_segs),
+        "error": job.get("error"),
+
+        "started_at": s_at,
+        "finished_at": f_at if terminal else None,
+        "elapsed": elapsed,
+
+
+        "eta": eta,
+    }
+
+
+def _segments_with_state(job, segs, job_id):
+    
+    _grp_head = {}
+    try:
+        _model = _job_video_model(job_id)
+        if not _ref_budget(_model)[2]:
+            for _unit in _group_units([dict(x) for x in segs], _model):
+                _nos = [u.get("seg_no") for u in _unit if isinstance(u, dict) and u.get("seg_no")]
+                if _nos:
+                    for _n in _nos:
+                        _grp_head[_n] = min(_nos)
+    except Exception as _e:
+        print(f"[warn] 组归属计算失败 job={job_id}: {_e}", flush=True)
+    _jst = (job or {}).get("status")
+    for _s in segs:
+        _s["state"] = _seg_state(_s, _jst, _grp_head.get(_s.get("seg_no")))
+    return segs
+
+
+_SEG_COLS = (
+    "seg_no,shot_no,is_continuation,prompt,seconds,status,local_path,video_id,video_url,error,mode,"
+    "audio,audio_urls,images_keys,images_urls,started_at,finished_at,real_seconds,created_at,updated_at,prompt_history,"
+    "post_refine,post_face,phase,phase_attempt,"
+
+
+
+
+    "model,aspect_ratio,resolution,group_id,tail_frame "
+)
+
+
+def _job_state_payload(job_id):
+    
+    con = _db()
+    try:
+        _row = con.execute("SELECT * FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
+        if not _row:
+            return {}
+        job = dict(_row)
+        segs = [dict(s) for s in con.execute(
+            "SELECT " + _SEG_COLS + "FROM lv_segments WHERE job_id=? ORDER BY seg_no", (job_id,)
+        ).fetchall()]
+    finally:
+        con.close()
+    for _s in segs:
+        for _k in ("audio", "audio_urls", "images_keys", "images_urls", "prompt_history"):
+            _v = _s.get(_k)
+            if isinstance(_v, str) and _v:
+                try:
+                    _s[_k] = json.loads(_v)
+                except Exception:
+                    _s[_k] = []
+            elif _v is None:
+                _s[_k] = []
+    _segments_with_state(job, segs, job_id)
+
+
+    return {"job_id": job_id, "state": _job_state(job, segs), "segments": segs}
+
+
 @lv_bp.route("/jobs", methods=["GET"])
 def api_list_jobs():
     
@@ -5287,17 +5913,19 @@ def api_list_jobs():
     con = _db()
     try:
         rows = con.execute(
-            "SELECT id,status,stage,segment_count,created_at,updated_at,error,name "
+            "SELECT id,status,stage,segment_count,created_at,updated_at,error,name,phase_detail "
             "FROM lv_jobs ORDER BY created_at DESC"
         ).fetchall()
         items = []
         for j in rows:
             j = dict(j)
-            segs = con.execute(
-                "SELECT status FROM lv_segments WHERE job_id=?", (j["id"],)
-            ).fetchall()
-            done = sum(1 for s in segs if s["status"] == "completed")
-            stage = _derive_stage(j["status"], j.get("stage"), j.get("segment_count") or 0)
+            _segs = [dict(s) for s in con.execute(
+                "SELECT seg_no,status,error,is_continuation,started_at,finished_at,updated_at "
+                "FROM lv_segments WHERE job_id=?", (j["id"],)
+            ).fetchall()]
+
+
+            state = _job_state(j, _segs)
 
 
             _name = (j.get("name") or "").strip()
@@ -5307,11 +5935,14 @@ def api_list_jobs():
             items.append({
                 "job_id": j["id"],
                 "status": j["status"],
-                "stage": stage,
                 "name": _name,
-                "segment_count": j["segment_count"],
-                "done_count": done,
+                "segment_count": state["total"],
                 "created_at": j["created_at"],
+
+                "state": state,
+
+                "stage": state["label"],
+                "done_count": state["done"],
                 "error": j["error"],
             })
     finally:
@@ -5361,7 +5992,7 @@ def api_resume_job(job_id):
     if job["status"] not in ("processing", "pending", "running"):
         return jsonify(ok=True, skipped=True, status=job["status"])
     _ensure_running(job_id)
-    return jsonify(ok=True, job_id=job_id)
+    return jsonify(ok=True, **_job_state_payload(job_id))
 
 
 @lv_bp.route("/jobs/<job_id>/cancel", methods=["POST"])
@@ -5379,8 +6010,8 @@ def api_cancel_job(job_id):
 
 
 
-        con.execute("UPDATE lv_segments SET status='cancelled', updated_at=? WHERE job_id=? AND status='pending'",
-                    (time.time(), job_id))
+        con.execute("UPDATE lv_segments SET status='cancelled', phase='cancelled', updated_at=? "
+                    "WHERE job_id=? AND status='pending'", (time.time(), job_id))
 
         inflight = con.execute(
             "SELECT COUNT(*) c FROM lv_segments WHERE job_id=? AND status='processing'", (job_id,)
@@ -5418,10 +6049,11 @@ def api_cancel_job(job_id):
                     remote_fail.append({"video_id": _v, "error": _msg or "取消失败"})
         except Exception as _e:
             remote_fail.append({"video_id": "", "error": f"取消调用异常 {type(_e).__name__}: {_e}"})
-    return jsonify(ok=True, job_id=job_id, status="cancelled", inflight=inflight,
+    return jsonify(ok=True, status="cancelled", inflight=inflight,
                    remote_cancelled=remote_ok, remote_failed=remote_fail,
                    remote_unsupported=remote_unsupported,
-                   cancel_supported=_can_cancel)
+                   cancel_supported=_can_cancel,
+                   **_job_state_payload(job_id))
 
 
 @lv_bp.route("/jobs/<job_id>/retry", methods=["POST"])
@@ -5441,36 +6073,23 @@ def api_retry_job(job_id):
             (job_id,)
         ).fetchone()["c"]
         con.execute(
-            "UPDATE lv_segments SET status='pending', error=NULL, started_at=0, video_id=NULL "
+            "UPDATE lv_segments SET status='pending', error=NULL, started_at=0, video_id=NULL, "
+            "phase=NULL, phase_attempt=0 "
             "WHERE job_id=? AND status IN ('failed','pending','cancelled')", (job_id,)
         )
-        con.execute("UPDATE lv_jobs SET status='processing', error=NULL, updated_at=? WHERE id=?", (time.time(), job_id))
+        con.execute("UPDATE lv_jobs SET status='processing', error=NULL, phase_detail=NULL, updated_at=? WHERE id=?",
+                    (time.time(), job_id))
         con.commit()
     finally:
         con.close()
     _ensure_running(job_id)
-    return jsonify(ok=True, job_id=job_id, status="processing", retry_segments=_n_retry)
+    return jsonify(ok=True, status="processing", retry_segments=_n_retry,
+                   **_job_state_payload(job_id))
 
 
-@lv_bp.route("/jobs/<job_id>/reedit", methods=["POST"])
-def api_reedit_job(job_id):
-    
-    con = _db()
-    try:
-        job = con.execute("SELECT id,status,segment_count FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
-        if not job:
-            return jsonify(error="not found"), 404
-        if job["status"] == "processing":
-            return jsonify(error="任务生成中，请等待完成后再重新编排"), 409
-        if job["status"] == "draft":
-            return jsonify(ok=True, skipped=True, status="draft")
 
-        con.execute("UPDATE lv_jobs SET status='draft', stage=?, error=NULL, updated_at=? WHERE id=?",
-                    (_derive_stage("draft", None, job["segment_count"] or 0), time.time(), job_id))
-        con.commit()
-    finally:
-        con.close()
-    return jsonify(ok=True, job_id=job_id, status="draft")
+
+
 
 
 @lv_bp.route("/jobs/<job_id>/shots", methods=["POST"])
@@ -5513,155 +6132,11 @@ def api_save_shots(job_id):
     return jsonify(ok=True, job_id=job_id, shots=len(shots))
 
 
-@lv_bp.route("/jobs/<job_id>/shots/archive", methods=["POST"])
-def api_archive_shots(job_id):
-    
-    data = request.get_json(silent=True) or {}
-    shots = data.get("shots")
-    source = (data.get("source") or "").strip()
-    if not isinstance(shots, list) or not shots:
-        return jsonify(error="shots 必须为非空数组"), 400
-    con = _db()
-    try:
-        job = con.execute("SELECT shots_history, gen_params_json FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
-        if not job:
-            return jsonify(error="not found"), 404
-        _model = _stored_model(job["gen_params_json"])
-        _assign_group_no(shots, _model)
-        _gate = _shot_budget_gate(shots, _model)
-        if _gate:
-            return jsonify(error=_gate), 400
-        try:
-            hist = json.loads(job["shots_history"] or "[]")
-            if not isinstance(hist, list):
-                hist = []
-        except Exception:
-            hist = []
-        new_entry = {"ts": time.time(), "shots": shots, "source": source or "分镜稿", "shot_count": len(shots)}
-        hist.append(new_entry)
-        _CAP = 30
-        if len(hist) > _CAP:
-            hist = hist[-_CAP:]
-        _new_idx = len(hist) - 1
-        con.execute("UPDATE lv_jobs SET shots_history=?, current_shot_ver=? WHERE id=?",
-                    (json.dumps(hist, ensure_ascii=False), _new_idx, job_id))
-        con.commit()
-        return jsonify(ok=True, versions=len(hist), idx=_new_idx)
-    finally:
-        con.close()
 
 
-@lv_bp.route("/jobs/<job_id>/shots_history/current", methods=["PUT"])
-def api_set_current_shots_history(job_id):
-    
-    data = request.get_json(silent=True) or {}
-    idx = data.get("idx")
-    if not isinstance(idx, int):
-        return jsonify(error="idx 必须为整数"), 400
-    con = _db()
-    try:
-        job = con.execute("SELECT shots_history FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
-        if not job:
-            return jsonify(error="not found"), 404
-        try:
-            hist = json.loads(job["shots_history"] or "[]")
-            if not isinstance(hist, list):
-                hist = []
-        except Exception:
-            hist = []
-        if idx < -1 or idx >= len(hist):
-            return jsonify(error="版本不存在"), 404
-        con.execute("UPDATE lv_jobs SET current_shot_ver=? WHERE id=?", (idx, job_id))
-        con.commit()
-        return jsonify(ok=True, idx=idx)
-    finally:
-        con.close()
 
 
-@lv_bp.route("/jobs/<job_id>/shots_history/<int:idx>", methods=["PUT"])
-def api_update_shots_history(job_id, idx):
-    
-    data = request.get_json(silent=True) or {}
-    shots = data.get("shots")
-    if not isinstance(shots, list):
-        return jsonify(error="shots 必须为数组"), 400
-    con = _db()
-    try:
-        job = con.execute("SELECT shots_history, gen_params_json FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
-        if not job:
-            return jsonify(error="not found"), 404
-        _model = _stored_model(job["gen_params_json"])
-        _assign_group_no(shots, _model)
-        _gate = _shot_budget_gate(shots, _model)
-        if _gate:
-            return jsonify(error=_gate), 400
-        try:
-            hist = json.loads(job["shots_history"] or "[]")
-            if not isinstance(hist, list):
-                hist = []
-        except Exception:
-            hist = []
-        if idx < 0 or idx >= len(hist):
-            return jsonify(error="版本不存在"), 404
-        hist[idx]["shots"] = shots
-        hist[idx]["shot_count"] = len(shots)
-        if data.get("source"):
-            hist[idx]["source"] = data["source"]
-        con.execute("UPDATE lv_jobs SET shots_history=? WHERE id=?",
-                    (json.dumps(hist, ensure_ascii=False), job_id))
-        con.commit()
-        return jsonify(ok=True, idx=idx)
-    finally:
-        con.close()
 
-
-@lv_bp.route("/jobs/<job_id>/shots_history/<int:idx>", methods=["GET"])
-def api_get_shots_history(job_id, idx):
-    
-    con = _db()
-    try:
-        job = con.execute("SELECT shots_history, gen_params_json FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
-        if not job:
-            return jsonify(error="not found"), 404
-        try:
-            hist = json.loads(job["shots_history"] or "[]")
-        except Exception:
-            hist = []
-        if idx < 0 or idx >= len(hist):
-            return jsonify(error="版本不存在"), 404
-        _model = _stored_model(job["gen_params_json"])
-        _assign_group_no(hist[idx].get("shots"), _model)
-        _gate = _shot_budget_gate(hist[idx].get("shots"), _model)
-        if _gate:
-            return jsonify(error=_gate), 400
-        return jsonify(ok=True, version=hist[idx])
-    finally:
-        con.close()
-
-
-@lv_bp.route("/jobs/<job_id>/shots_history/<int:idx>", methods=["DELETE"])
-def api_delete_shots_history(job_id, idx):
-    
-    con = _db()
-    try:
-        job = con.execute("SELECT shots_history FROM lv_jobs WHERE id=?", (job_id,)).fetchone()
-        if not job:
-            return jsonify(error="not found"), 404
-        try:
-            hist = json.loads(job["shots_history"] or "[]")
-            if not isinstance(hist, list):
-                hist = []
-        except Exception:
-            hist = []
-        if idx < 0 or idx >= len(hist):
-            return jsonify(error="版本不存在"), 404
-        hist.pop(idx)
-        con.execute("UPDATE lv_jobs SET shots_history=? WHERE id=?",
-                    (json.dumps(hist, ensure_ascii=False), job_id))
-        con.commit()
-        return jsonify(ok=True, versions=len(hist))
-    finally:
-        con.close()
 
 
 @lv_bp.route("/jobs/<job_id>/segment/<int:seg_no>/history/<int:idx>", methods=["DELETE"])
@@ -6006,23 +6481,32 @@ def _regen_segment_worker(job_id, seg_no, seg, prev_tail, archive_ver=0, prev_st
     
     try:
 
-        if archive_ver:
-            _archive_segment_video(job_id, seg_no, archive_ver)
+
+
+
+        if archive_ver and not _archive_segment_video(job_id, seg_no, archive_ver):
+            _msg = "旧画面归档失败，已中止重新生成（旧视频未被覆盖，可重试）"
+            _update_seg(job_id, seg_no, status="failed", error=_msg, phase="failed")
+            _update_job(job_id, status="failed", error=_msg)
+            print(f"[ERROR] 单段重提中止 job={job_id} seg#{seg_no}: {_msg}", flush=True)
+            return
         success, local, tail, err = _gen_segment(job_id, seg, prev_tail)
         if not success:
 
             if _job_cancelled(job_id):
-                _update_seg(job_id, seg_no, status="cancelled", error=err)
+                _update_seg(job_id, seg_no, status="cancelled", error=err, phase="cancelled")
                 print(f"[INFO] 单段重提随任务停止而中止 job={job_id} seg#{seg_no}", flush=True)
                 return
-            _update_seg(job_id, seg_no, status="failed", error=err)
+            _update_seg(job_id, seg_no, status="failed", error=err, phase="failed")
 
 
 
-            _update_job(job_id, status="failed")
+
+            _update_job(job_id, status="failed", error=err)
             print(f"[INFO] 单段重提失败 job={job_id} seg#{seg_no}: {err}", flush=True)
             return
-        _update_seg(job_id, seg_no, status="completed", local_path=_rel_to_root(local), tail_frame=tail, finished_at=time.time())
+        _update_seg(job_id, seg_no, status="completed", local_path=_rel_to_root(local), tail_frame=tail,
+                    finished_at=time.time(), phase="completed", phase_attempt=0)
 
 
 
@@ -6111,6 +6595,29 @@ def api_regen_segment(job_id, seg_no):
 
 
 
+    try:
+        _rows = None
+        con0 = _db()
+        try:
+            _rows = [dict(r) for r in con0.execute(
+                "SELECT seg_no,is_continuation,group_id FROM lv_segments WHERE job_id=? ORDER BY seg_no",
+                (job_id,)).fetchall()]
+        finally:
+            con0.close()
+        if _rows and not _ref_budget(_job_video_model(job_id))[2]:
+            for _u in _group_units(_rows, _job_video_model(job_id)):
+                _nos = [x["seg_no"] for x in _u]
+                if seg_no in _nos and min(_nos) != seg_no:
+                    _h = min(_nos)
+                    return jsonify(
+                        error=f"第 {seg_no} 段属于续接组（整组一次提交，组首为第 {_h} 段），"
+                              f"不能单独重提。请在第 {_h} 段卡片上重试整组。",
+                        group_head=_h, seg_no=seg_no), 409
+    except Exception as _e:
+        print(f"[warn] 续接组重提校验跳过 job={job_id} seg={seg_no}: {_e}", flush=True)
+
+
+
     new_seconds = data.get("seconds")
     _sec_changed = False
     if new_seconds is not None:
@@ -6124,14 +6631,51 @@ def api_regen_segment(job_id, seg_no):
     _prompt_changed = bool(new_prompt) and new_prompt != (seg.get("prompt") or "")
 
 
+
+
+
+
+
+
+    _old_rf, _old_fc = _h3_post_opts(seg)
+    _old_aspect = (seg.get("aspect_ratio") or "").strip()
+    _old_res = (seg.get("resolution") or "").strip()
+    _in_pr, _in_pf = data.get("post_refine"), data.get("post_face")
+    _new_rf, _new_fc = _old_rf, _old_fc
+    if _in_pr is not None or _in_pf is not None:
+
+        _new_rf, _new_fc = _h3_post_opts({
+            "post_refine": _old_rf if _in_pr is None else _in_pr,
+            "post_face": _old_fc if _in_pf is None else _in_pf,
+        })
+    _new_aspect = (data.get("aspect_ratio") or "").strip() if isinstance(data.get("aspect_ratio"), str) else ""
+    _new_res = (data.get("resolution") or "").strip().lower() if isinstance(data.get("resolution"), str) else ""
+
+    _rm = _job_video_model(job_id)
+    _new_aspect = _new_aspect if _new_aspect in _allowed_aspects(_rm) else _old_aspect
+    _new_res = _new_res if _new_res in _allowed_resolutions(_rm) else _old_res.lower()
+    _param_changed = (_new_rf != _old_rf or _new_fc != _old_fc
+                      or _new_aspect != _old_aspect or _new_res != _old_res.lower())
+
+
+
+
+
+
+    _main_mp4 = os.path.join(JOBS_DIR, job_id, f"seg_{seg_no:02d}.mp4")
+    _has_product = (seg.get("status") == "completed"
+                    and os.path.isfile(_main_mp4) and os.path.getsize(_main_mp4) > 0)
     _archive_ver = 0
-    if _prompt_changed or _sec_changed:
+    if _has_product or _prompt_changed or _sec_changed or _param_changed:
         try:
             hist = json.loads(seg.get("prompt_history") or "[]")
             if not isinstance(hist, list):
                 hist = []
         except Exception:
             hist = []
+
+
+
 
 
         hist.append({
@@ -6144,15 +6688,47 @@ def api_regen_segment(job_id, seg_no):
             "images_urls": _seg_jsonl(seg, "images_urls"),
             "audio": _seg_jsonl(seg, "audio"),
             "audio_urls": _seg_jsonl(seg, "audio_urls"),
+
+
+
+            "post_refine": _old_rf,
+            "post_face": _old_fc,
+            "aspect_ratio": _old_aspect,
+            "resolution": _old_res,
         })
         _update_seg(job_id, seg_no, prompt_history=json.dumps(hist, ensure_ascii=False))
-        _archive_ver = hist[-1]["ver"]
+
+        _archive_ver = hist[-1]["ver"] if _has_product else 0
+        print(f"[INFO] 重提留档 job={job_id} seg#{seg_no}: 稿 v{hist[-1]['ver']}，"
+              f"画面归档={'是 v' + str(_archive_ver) if _archive_ver else '否（无产物）'}；"
+              f"改稿={_prompt_changed} 改秒数={_sec_changed} 改参数={_param_changed}", flush=True)
     if new_prompt:
         seg["prompt"] = new_prompt
         _update_seg(job_id, seg_no, prompt=new_prompt)
     if _sec_changed:
         seg["seconds"] = new_seconds
         _update_seg(job_id, seg_no, seconds=new_seconds)
+
+
+
+    if _param_changed:
+        seg["post_refine"], seg["post_face"] = _new_rf, _new_fc
+        seg["aspect_ratio"], seg["resolution"] = _new_aspect, _new_res
+        _update_seg(job_id, seg_no,
+                    post_refine=json.dumps(_new_rf, ensure_ascii=False),
+                    post_face=json.dumps(_new_fc, ensure_ascii=False),
+                    aspect_ratio=_new_aspect, resolution=_new_res)
+
+
+
+    _gp_in = data.get("gen_params")
+    if isinstance(_gp_in, dict) and _gp_in:
+        _con_j = _db()
+        try:
+            _mirror_h3_job_cols(_con_j, job_id, _norm_gen_params(_gp_in))
+            _con_j.commit()
+        finally:
+            _con_j.close()
 
 
     prev_tail = None
@@ -6170,7 +6746,9 @@ def api_regen_segment(job_id, seg_no):
             prev_tail = prev.get("tail_frame") or (prev.get("local_path") and _extract_tail_frame(_seg_path(prev["local_path"])))
 
 
-    _update_seg(job_id, seg_no, status="processing", error=None, started_at=time.time())
+
+    _update_seg(job_id, seg_no, status="processing", error=None, started_at=time.time(),
+                phase="submitting", phase_attempt=0)
 
 
 
@@ -6181,9 +6759,14 @@ def api_regen_segment(job_id, seg_no):
         prev_status = _prev["status"] if _prev else "failed"
     finally:
         con.close()
-    _update_job(job_id, status="processing")
+
+
+
+
+    _update_job(job_id, status="processing", error=None, phase_detail=None)
     threading.Thread(target=_regen_segment_worker, args=(job_id, seg_no, seg, prev_tail, _archive_ver, prev_status), daemon=True).start()
-    return jsonify(ok=True, job_id=job_id, seg_no=seg_no, status="processing")
+    return jsonify(ok=True, seg_no=seg_no, status="processing",
+                   **_job_state_payload(job_id))
 
 
 @lv_bp.route("/jobs/<job_id>/segment/<int:seg_no>/history", methods=["GET"])

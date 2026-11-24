@@ -57,13 +57,8 @@
   
   
   
-  function _normStep(n) { return n === 3 ? 2 : n; }
-  function canGoStep(n) {
-    n = _normStep(n);
-    if (n <= 2) return true;
-    if (n === 4) return lv.jobStatus === "completed" || (lv.segs || []).some((s) => s.status === "completed");   
-    return false;
-  }
+  function _normStep(n) { return (n === 3 || n === 4) ? 2 : n; }
+  function canGoStep(n) { return _normStep(n) <= 2; }
   function goStep(n) {
     n = _normStep(n);   
     overlay.querySelectorAll(".lv-steps button").forEach((b) =>
@@ -77,17 +72,14 @@
     _syncStepLocks();
     
     
-    if (n === 4) buildStrip();
-    
-    
-    
     if (n === 2) {
-      _updateProgSum({ status: lv.jobStatus });
+      _updateProgSum();   
       if (lv.segs.length) _updateShotStatusLines();
+      buildStrip();
     }
-    _syncStartBtn();   
+    _syncStartBtn();
     saveState();
-    loadJobs();       
+    loadJobs();
   }
   
   
@@ -103,8 +95,7 @@
     b.addEventListener("click", () => {
       const n = +b.getAttribute("data-step");
       if (!canGoStep(n)) {
-        const tip = n === 4 ? "该任务尚未生成成片（需先点「开始生成」完成）" : "请先完成「素材上传」与「智能分镜」";
-        err(tip);
+        err("请先完成「素材上传」与「智能分镜」");
         return;
       }
       goStep(n);
@@ -241,24 +232,19 @@
     const postureField = isChar ? _segField(a, "posture", '<option value="">姿态</option>'
         + '<option value="拟人直立">拟人直立</option><option value="四足">四足</option>') : "";
     
-    let labelTip, labelTitle;
+    let labelTitle;
     if (isAudio) {
-      labelTip = "声线靠下方『归属角色』绑定：选对角色即可自动配声，原始脚本无需标注声线；本标签名仅作显示";
       labelTitle = "声线绑定靠素材卡里的『归属角色』下拉（选到对应角色，如橘猫）——系统自动把这条声线配给该角色，原始脚本无需标注声线。本标签名仅作显示，不影响绑定";
     } else if (a.kind === "character") {
-      labelTip = "角色名须与脚本里写的称呼一致（如脚本写『橘猫』就填『橘猫』），否则图加文无法绑定";
       labelTitle = "角色名须与脚本里写的称呼完全一致（如脚本写『橘猫』就填『橘猫』），否则图加文无法把这图绑进分镜";
     } else if (a.kind === "scene") {
-      labelTip = "场景名须与脚本里写的场景一致（如脚本写『客厅』就填『客厅』），否则图加文无法绑定";
       labelTitle = "场景名须与脚本里写的场景完全一致（如脚本写『客厅』就填『客厅』），否则图加文无法把这图绑进分镜";
     } else if (a.kind === "prop") {
-      labelTip = "道具名须与脚本里写的道具一致（如脚本写『毛线球』就填『毛线球』），否则图加文无法绑定";
       labelTitle = "道具名须与脚本里写的道具完全一致（如脚本写『毛线球』就填『毛线球』），否则图加文无法把这图绑进分镜";
     } else {
-      labelTip = "标签须与脚本里的对应称呼一致（先在上方选类型：角色 / 场景 / 道具）";
       labelTitle = "标签名须与脚本中写的对应称呼一致（先在上方选类型：角色 / 场景 / 道具），否则图加文无法绑定";
     }
-    return { isAudio, isChar, typeField, ownerField, voiceField, postureField, labelTip, labelTitle };
+    return { isAudio, isChar, typeField, ownerField, voiceField, postureField, labelTitle };
   }
 
   
@@ -418,6 +404,10 @@
     if (_isH3()) _syncH3JobValues();
     
     if (Array.isArray(lv.shots) && lv.shots.length) { try { renderShots(); } catch (e) {} }
+    
+    if (Array.isArray(lv.segs) && lv.segs.length) {
+      try { _syncSegUI(lv.selSeg || 1); } catch (e) {}
+    }
   });
   
   
@@ -538,7 +528,7 @@
     }
     _list.forEach((a) => {
       const card = document.createElement("div");
-      card.className = "lv-ac";
+      card.className = "lv-ac" + (_selNames.has(a.name) ? " sel" : "");
       
       const th = a.type === "image"
         ? `<div class="lv-th"><img src="${_esc(_thumb(a.url))}" alt="" loading="lazy" decoding="async"></div>`
@@ -548,7 +538,6 @@
         <input type="checkbox" class="lv-i-sel" data-name="${a.name}"${_selNames.has(a.name) ? " checked" : ""}>
         ${th}
         <input class="lv-i-label" title="${f.labelTitle}" placeholder="${f.isAudio ? "标签＝声线名（如 橘猫声线）" : (a.kind === "scene" ? "标签＝场景名（如 客厅）" : a.kind === "prop" ? "标签＝道具名（如 毛线球）" : "标签＝角色名（如 橘猫）")}" value="${esc(a.label)}">
-        <small class="lv-label-tip">${f.labelTip}</small>
         ${f.typeField}
         ${f.ownerField}
         ${f.voiceField}
@@ -582,6 +571,7 @@
       card.querySelector(".lv-i-sel").addEventListener("change", (e) => {
         const n = e.target.getAttribute("data-name");
         if (e.target.checked) _selNames.add(n); else _selNames.delete(n);
+        card.classList.toggle("sel", e.target.checked);
         syncSel();
       });
       _wireAppearance(card, a);
@@ -624,9 +614,72 @@
       c.checked = e.target.checked;
       const n = c.getAttribute("data-name");
       if (e.target.checked) _selNames.add(n); else _selNames.delete(n);
+      c.closest(".lv-ac").classList.toggle("sel", e.target.checked);
     });
     syncSel();
   });
+
+  
+  let _lvMarquee = null;
+  const _lvScroll = $("lvScroll1");
+  function _lvMarqueeDown(e) {
+    if (e.button !== 0) return;
+    const initial = new Map();
+    lvAssets.querySelectorAll(".lv-ac").forEach((card) => {
+      const ck = card.querySelector(".lv-i-sel");
+      if (ck) initial.set(ck, ck.checked);
+    });
+    _lvMarquee = { sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, box: null, started: false, initial };
+  }
+  function _lvMarqueeMove(e) {
+    const m = _lvMarquee;
+    if (!m) return;
+    m.lx = e.clientX; m.ly = e.clientY;
+    if (!m.started) {
+      if (Math.abs(m.lx - m.sx) < 6 && Math.abs(m.ly - m.sy) < 6) return;  
+      m.started = true;
+      e.preventDefault();
+      const sel = window.getSelection(); if (sel) sel.removeAllRanges();
+      m.box = document.createElement("div");
+      m.box.className = "lv-marquee";
+      document.body.appendChild(m.box);
+      _lvScroll.classList.add("lv-marquee-ing");
+    }
+    const x1 = Math.min(m.sx, m.lx), y1 = Math.min(m.sy, m.ly);
+    const x2 = Math.max(m.sx, m.lx), y2 = Math.max(m.sy, m.ly);
+    m.box.style.left = x1 + "px"; m.box.style.top = y1 + "px";
+    m.box.style.width = (x2 - x1) + "px"; m.box.style.height = (y2 - y1) + "px";
+    
+    let changed = false;
+    lvAssets.querySelectorAll(".lv-ac").forEach((card) => {
+      const r = card.getBoundingClientRect();
+      const hit = r.right > x1 && r.left < x2 && r.bottom > y1 && r.top < y2;
+      const ck = card.querySelector(".lv-i-sel");
+      if (!ck) return;
+      const was = !!m.initial.get(ck);
+      const want = hit ? !was : was;
+      card.classList.toggle("sel", want);
+      if (ck.checked !== want) {
+        ck.checked = want;
+        const n = ck.getAttribute("data-name");
+        if (want) _selNames.add(n); else _selNames.delete(n);
+        changed = true;
+      }
+    });
+    if (changed) syncSel();
+  }
+  function _lvMarqueeUp() {
+    const m = _lvMarquee;
+    if (!m) return;
+    if (m.started) {
+      if (m.box && m.box.parentNode) m.box.parentNode.removeChild(m.box);
+      _lvScroll.classList.remove("lv-marquee-ing");
+    }
+    _lvMarquee = null;
+  }
+  _lvScroll.addEventListener("mousedown", _lvMarqueeDown);
+  document.addEventListener("mousemove", _lvMarqueeMove);
+  document.addEventListener("mouseup", _lvMarqueeUp);
 
   async function deleteAsset(name) {
     const a = lv.assets.find((x) => x.name === name);
@@ -705,8 +758,26 @@
   loadLibrary();   
 
   $("lvTo2").addEventListener("click", () => goStep(2));
-  $("lvBack1").addEventListener("click", () => goStep(1));
+  
   $("lvNewTask").addEventListener("click", newTask);
+
+  
+  (function initSideCollapse() {
+    const side = $("lvSide");
+    const collapseBtn = $("lvSideCollapse");
+    const expandBtn = $("lvSideExpand");
+    if (!side) return;
+    function setCollapsed(on) {
+      side.classList.toggle("collapsed", !!on);
+      try { localStorage.setItem("lvSideCollapsed", on ? "1" : "0"); } catch (_) {}
+      const t = on ? "展开任务列表" : "收起任务列表";
+      if (collapseBtn) { collapseBtn.title = t; collapseBtn.setAttribute("aria-label", t); }
+      if (expandBtn) { expandBtn.title = t; expandBtn.setAttribute("aria-label", t); }
+    }
+    try { if (localStorage.getItem("lvSideCollapsed") === "1") side.classList.add("collapsed"); } catch (_) {}
+    if (collapseBtn) collapseBtn.addEventListener("click", (e) => { e.stopPropagation(); setCollapsed(true); });
+    if (expandBtn) expandBtn.addEventListener("click", (e) => { e.stopPropagation(); setCollapsed(false); });
+  })();
   
   $("lvDelJobs").addEventListener("click", () => {
     if ($("lvDelJobs").classList.contains("cancel")) setJobManage(false);
@@ -996,7 +1067,6 @@
     renderShots();          
     saveDraft();
     setMsg(msg);
-    _syncSecStepper();
   }
   [lvOptModel, lvOptAspect, lvOptRes].forEach((el) => {
     el.addEventListener("change", async () => {
@@ -1007,7 +1077,6 @@
         _modelMismatchShown = "";
         _syncResOptions(lv.opts.model);  
         await _checkModelSwitch();       
-        _syncSecStepper();               
       }
       saveState(); saveDraft();
     });
@@ -1018,9 +1087,9 @@
   else _initOptsSegs();
 
   
-  async function _persistDetachedShots(jobId, shots, source, script) {
-    if (!jobId) { setMsg("分镜已完成，但发起时没有任务归属，结果未保存"); return; }
-    if (!shots.length) { setMsg("分镜未产出镜头，原任务未改动"); return; }
+  async function _persistDetachedShots(jobId, shots, script) {
+    if (!jobId) { err("分镜已完成，但发起时没有任务归属，结果未保存"); return; }
+    if (!shots.length) { setMsg("分镜未产出镜头，原任务未改动", "warn"); return; }
     try {
       
       const _body = { shots };
@@ -1030,11 +1099,7 @@
         body: JSON.stringify(_body),
       });
       const rj = await r.json().catch(() => ({}));
-      if (!r.ok) { setMsg(`原任务分镜保存失败：${rj.error || ""}（结果未写入）`); return; }
-      await fetch(API + `/api/jobs/${encodeURIComponent(jobId)}/shots/archive`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shots, source: source || "智能分镜" }),
-      }).catch(() => {});
+      if (!r.ok) { err(`原任务分镜保存失败：${rj.error || ""}（结果未写入）`); return; }
       
       
       if (lv.jobId === jobId) {
@@ -1044,19 +1109,18 @@
           if (g.ok && lv.jobId === jobId) {
             lv.shots = Array.isArray(gj.shots) ? gj.shots : shots;
             if (gj.shots_budget_error) errFold("历史分镜超出模型上限，未阻止载入；该稿不能直接开始生成", gj.shots_budget_error);
-            lv.shotsHist = Array.isArray(gj.shots_history) ? gj.shots_history : lv.shotsHist;
             renderShots();
             lvStep2Act.hidden = lv.shots.length === 0;
             _syncStartBtn();
           }
         } catch (_) {}
-        setMsg(`分镜已保存并刷新到当前任务（${shots.length} 个镜头）`);
+        setMsg(`分镜已保存并刷新到当前任务（${shots.length} 个镜头）`, "warn");
       } else {
-        setMsg(`分镜已保存到原任务（${shots.length} 个镜头），切回并重新打开该任务即可查看`);
+        setMsg(`分镜已保存到原任务（${shots.length} 个镜头），切回并重新打开该任务即可查看`, "warn");
       }
       loadJobs();
     } catch (e) {
-      setMsg("原任务分镜保存异常：" + (e && e.message ? e.message : String(e)));
+      err("原任务分镜保存异常：" + (e && e.message ? e.message : String(e)));
     }
   }
 
@@ -1068,7 +1132,6 @@
     const _ownerStatus = lv.jobStatus;
     
     const _ownerVideoModel = lvStoryboardModel();
-    const _ownerSource = lv.curShotVer >= 0 ? "重新分镜" : "智能分镜";
     const myGen = ++_optGen;
     const _t0 = Date.now();
     
@@ -1097,28 +1160,10 @@
       
       
       
-      const _isReeditEntry = !!(ownerJobId && _ownerStatus && _ownerStatus !== "draft");
-      if (_isReeditEntry) {
-        if (!(await lvConfirm({
-          title: "重新编排",
-          message: "将解锁分镜进入重新编辑（不重新生成镜头）：\n· 分镜恢复可编辑（改提示词/秒数/绑定/删加镜头）\n· 已生成成片保留供对照\n· 需要重新生成镜头时，解锁后再点一次「智能分镜」\n· 改完点「开始生成」才会重新生成（旧视频会自动保留）\n\n进入重新编辑？",
-          okText: "解锁编辑",
-        }))) return;
-        if (_isStale()) return;   
-        try {
-          const rr = await fetch(API + `/api/jobs/${encodeURIComponent(ownerJobId)}/reedit`, { method: "POST" });
-          const rj = await rr.json().catch(() => ({}));
-          if (_isStale()) return;   
-          if (!rr.ok) { err("进入重编失败：" + (rj.error || "")); return; }
-          lv.jobStatus = "draft";
-          _autoJumpOK = false;
-          renderShots();          
-          _syncStartBtn();        
-          _updateProgSum({ status: "draft" });
-          saveState();
-          setMsg("已进入重新编辑：分镜已解锁，可编辑现有分镜；需要重新生成镜头再点「智能分镜」");
-        } catch (e) { err("重编请求异常：" + e.message); return; }
-        return;   
+      
+      if (ownerJobId && _ownerStatus && _ownerStatus !== "draft") {
+        err("分镜已定稿：该任务已开始生成，不能再整份重拆。要改某一镜，直接在分镜卡上改稿后点「重新生成」。");
+        return;
       }
       
       
@@ -1147,14 +1192,14 @@
       }
       _stopOptPhasePoller();
       if (!r.ok) {
-        if (_isStale()) { setMsg("原任务分镜失败，未改动任何任务：" + (j.error || "")); return; }
+        if (_isStale()) { err("原任务分镜失败，未改动任何任务：" + (j.error || "")); return; }
         err("分镜失败：" + (j.error || "") + (j.detail ? ("\n" + j.detail) : ""));
         return;
       }
       
       
       if (_isStale()) {
-        await _persistDetachedShots(ownerJobId, j.shots || [], _ownerSource, _ownerScript);
+        await _persistDetachedShots(ownerJobId, j.shots || [], _ownerScript);
         return;
       }
       lv.shots = j.shots || [];
@@ -1173,7 +1218,8 @@
       
       const _variantTx = j.prompt_variant === "workbench" ? "分镜表版" : "通用版";
       console.info("[长视频] 分镜回声", { 引擎: _usedModel, 规约: _variantTx, 用时秒: _elapsed });
-      setMsg(`已生成 ${lv.shots.length} 个镜头${_basisTx}。点「开始生成」就能出片`);
+      
+      setMsg(`已生成 ${lv.shots.length} 个镜头${_basisTx}。点「开始生成」就能出片`, "warn");
       
       
       _stopOptPhasePoller();
@@ -1181,30 +1227,7 @@
       
       if (lv.shots.length) lvShots.scrollIntoView({ behavior: "smooth", block: "start" });
       saveState();
-      
-      
-      
-      try {
-        if (ownerJobId && lv.shots.length) {
-          const ar = await fetch(API + `/api/jobs/${encodeURIComponent(ownerJobId)}/shots/archive`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ shots: lv.shots, source: _ownerSource }),
-          });
-          const arj = await ar.json().catch(() => ({}));
-          if (_isStale()) return;
-          if (!ar.ok) setMsg("分镜归档失败：" + (arj.error || "") + "（未写入历史）");
-          if (ar.ok && typeof arj.idx === "number") {
-            lv.curShotVer = arj.idx;             
-            const g = await fetch(API + `/api/jobs/${encodeURIComponent(ownerJobId)}`);
-            const gj = await g.json().catch(() => ({}));
-            if (_isStale()) return;
-            if (g.ok && Array.isArray(gj.shots_history)) lv.shotsHist = gj.shots_history;
-          }
-        }
-      } catch (_) {  }
       if (_isStale()) return;   
-      $("lvShotsHist").hidden = !lv.shotsHist.length;
       
       if (lv.shots.length) lvShowOptTip();
       saveDraftNow().then(loadJobs);   
@@ -1271,131 +1294,8 @@
     lvHideOptTip();
   }
 
-  
-  const _unlockBtn = $("lvUnlockEdit");
-  if (_unlockBtn) _unlockBtn.addEventListener("click", () => _enterReedit());
 
   
-  function openShotsHistPanel() {
-    if (!lv.jobId) return;
-    const _existing = document.querySelector(".lv-pk.shots-hist");
-    if (_existing) _existing.remove();   
-    (async () => {
-      
-      let _histMeta = [];
-      try {
-        const r = await fetch(API + `/api/jobs/${lv.jobId}`);
-        const j = await r.json().catch(() => ({}));
-        if (r.ok && Array.isArray(j.shots_history)) { _histMeta = j.shots_history; lv.shotsHist = _histMeta; }
-        else _histMeta = lv.shotsHist || [];
-      } catch (e) { _histMeta = lv.shotsHist || []; }
-      if (!_histMeta.length) { setMsg("暂无分镜历史（每次智能分镜/重新分镜会留下一份）"); return; }
-      const _total = _histMeta.length;
-      const _cur = lv.curShotVer >= 0 ? lv.curShotVer : _total - 1;   
-      const _currentK = _cur + 1;
-      const items = _histMeta.slice().reverse();   
-      const rows = items.map((v, ri) => {
-        const k = items.length - ri;                  
-        const _isCur = (k === _currentK);
-        const t = v.ts ? new Date(v.ts * 1000).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
-        return `<div class="lv-pk-it" data-i="${v.idx}" data-k="${k}" style="justify-content:space-between">
-          <span class="nm">第 ${k} 版分镜<small>${t}${v.source ? " · " + _esc(v.source) : ""} · ${v.shot_count} 镜头</small></span>
-          <span style="display:flex;gap:6px;flex:none">
-            ${_isCur ? '<span class="mini" style="opacity:.6"><span class="ic ic-dot" aria-hidden="true"></span>当前</span>'
-                     : '<button class="mini sh-restore">切换</button>'}
-            <button class="mini sh-del" style="color:var(--err)">删除</button>
-          </span>
-        </div>`;
-      }).join("");
-      const _curTag = _currentK === _total ? "（最新分镜稿）" : "（来自历史，可随时切回最新）";
-      const currentBar = `<div class="lv-pk-cur" style="padding:8px 14px;background:var(--ok-soft);color:var(--ok);border-bottom:1px solid var(--line);font-size:12.5px;line-height:1.5">
-        <strong>当前在用 = v${_currentK}</strong>${_curTag} · 历史共 ${_total} 份，切换只移动指针、不新增版本
-      </div>`;
-      const wrap = document.createElement("div");
-      wrap.className = "lv-pk shots-hist";
-      wrap.innerHTML = `
-        <div class="lv-pk-mask"></div>
-        <div class="lv-pk-box" style="max-width:520px">
-          <div class="lv-pk-t">分镜历史</div>
-          ${currentBar}
-          <div class="lv-pk-list">${rows || '<div class="lv-pk-empty">暂无归档</div>'}</div>
-          <div style="padding:8px 14px;border-top:1px solid var(--line);display:flex;justify-content:flex-end">
-            <button class="mini sh-close">关闭</button>
-          </div>
-        </div>`;
-      const done = () => wrap.remove();
-      wrap.querySelector(".lv-pk-mask").addEventListener("click", done);
-      wrap.querySelector(".sh-close").addEventListener("click", done);
-      wrap.addEventListener("click", async (e) => {
-        const it = e.target.closest(".lv-pk-it");
-        if (!it) return;
-        const idx = parseInt(it.dataset.i, 10);
-        const k = parseInt(it.dataset.k, 10);
-        if (e.target.closest(".sh-del")) {
-          e.stopImmediatePropagation();
-          if (!(await lvConfirm({ title: "删除分镜历史", message: `确定删除第 ${k} 版分镜？相关的视频可在资产库中查看。`, danger: true, okText: "删除" }))) return;
-          try {
-            const r = await fetch(API + `/api/jobs/${lv.jobId}/shots_history/${idx}`, { method: "DELETE" });
-            if (!r.ok) { const j = await r.json().catch(() => ({})); err("删除失败：" + (j.error || "")); return; }
-            
-            const g = await fetch(API + `/api/jobs/${lv.jobId}`);
-            const gj = await g.json().catch(() => ({}));
-            if (g.ok && Array.isArray(gj.shots_history)) lv.shotsHist = gj.shots_history;
-            if (idx === lv.curShotVer || lv.curShotVer >= lv.shotsHist.length) lv.curShotVer = lv.shotsHist.length - 1;
-            try { await fetch(API + `/api/jobs/${lv.jobId}/shots_history/current`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ idx: lv.curShotVer }) }); } catch (_) {}
-            $("lvShotsHist").hidden = lv.shotsHist.length === 0;
-            openShotsHistPanel();   
-            setMsg(`已删除第 ${k} 版分镜历史`);
-          } catch (ex) { err("删除异常：" + ex.message); }
-          return;
-        }
-        if (e.target.closest(".sh-restore")) {
-          e.stopImmediatePropagation();
-          if (!(await lvConfirm({
-            title: "切换到分镜历史",
-            message: `将把编辑界面切换到第 ${k} 版分镜查看/继续编辑：\n· 不会新增版本、历史份数不变\n· 当前编辑结果会先存回它所属版本\n· 切换后可继续编辑或重新生成镜头\n\n确认切换？`,
-            okText: "切换查看",
-          }))) return;
-          try {
-            
-            const _curNow = lv.curShotVer >= 0 ? lv.curShotVer : (lv.shotsHist.length - 1);
-            if (_curNow >= 0 && lv.shots.length) {
-              try {
-                const _pr = await fetch(API + `/api/jobs/${lv.jobId}/shots_history/${_curNow}`, {
-                  method: "PUT",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ shots: lv.shots }),
-                });
-                if (!_pr.ok) {
-                  const _pj = await _pr.json().catch(() => ({}));
-                  setMsg("当前分镜存回历史失败：" + (_pj.error || "") + "（未写入）");
-                }
-              } catch (_) {}
-            }
-            
-            const r = await fetch(API + `/api/jobs/${lv.jobId}/shots_history/${idx}`);
-            const j = await r.json();
-            if (!r.ok) { err("读取历史失败：" + (j.error || "")); return; }
-            const old = (j.version || {}).shots || [];
-            if (!old.length) { err("历史版本数据为空"); return; }
-            lv.shots = old;
-            lv.curShotVer = idx;       
-            try { await fetch(API + `/api/jobs/${lv.jobId}/shots_history/current`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ idx: idx }) }); } catch (_) {}
-            renderShots();
-            lvStep2Act.hidden = lv.shots.length === 0;
-            _syncStartBtn();
-            saveDraft();
-            done();
-            setMsg(`已切换到第 ${k} 版分镜（历史共 ${lv.shotsHist.length} 份，可随时切回）`);
-          } catch (ex) { err("切换异常：" + ex.message); }
-          return;
-        }
-      });
-      document.body.appendChild(wrap);
-    })();
-  }
-  $("lvShotsHist").addEventListener("click", openShotsHistPanel);
-
   
   if (lvScript) lvScript.addEventListener("input", () => saveDraft());
 
@@ -1816,16 +1716,14 @@
   function _shotOptSnapDel(k) { _shotOptSnap.delete(k); _shotOptSnapFlush(); }
   _shotOptSnapLoad();   
 
+  
+  let _pendingFocusShot = 0;
+
   function renderShots() {
     
     
     lvShots.innerHTML = "";
     
-    
-    const _ro = !!(lv.jobId && lv.jobStatus && lv.jobStatus !== "draft");
-    const roHint = $("lvShotsRoHint");
-    if (roHint) roHint.hidden = !_ro;
-    let _lockTipAt = 0;   
     lv.shots.forEach((s, idx) => {
       
       
@@ -1834,57 +1732,86 @@
         const imgs0 = (s.images || []);
         if (imgs0[0] === "tail") s.images = imgs0.filter((x) => x !== "tail");
       }
+      
+      const _segNo = idx + 1;
+      const _segRow = (lv.segs || []).find((x) => x.seg_no === _segNo);
+      
+      
+      const _histVers = _cardHistOf(_segNo);
+      const _verTotal = 1 + _histVers.length;
+      let _vi = parseInt((lv.segVer || {})[_segNo], 10);
+      if (!_vi || _vi < 0 || _vi >= _verTotal) _vi = 0;   
+      const _ver = _vi > 0 ? _histVers[_vi - 1] : null;   
+      const _isHist = !!_ver;
+
       const div = document.createElement("div");
-      div.className = "lv-shot" + (_ro ? " ro" : "");
+      div.className = "lv-shot" + (_isHist ? " hist" : "");
       div.dataset.idx = idx;
       div.dataset.segNo = s.shot_no;   
-      
-      
-      if (_ro) {
-        div.addEventListener("click", (e) => {
-          if (e.target.closest(".lv-shot-st")) return;   
-          if (!e.target.closest("input, button, [contenteditable], .lv-chip, .lv-add-chip, .lv-mat-add, .lv-thumb-x, .lv-tile-x")) return;
-          const now = Date.now();
-          if (now - _lockTipAt < 2000) return;
-          _lockTipAt = now;
-          setMsg("分镜已锁定（生成后只读）——点上方「解锁编辑」进入重新编辑，或到「分镜与生成」屏逐分镜重新生成", "lock");
-        });
-      }
 
       
       const head = document.createElement("div");
       head.className = "lv-shot-h";
+      
+      
+      
+      
       const num = document.createElement("span");
-      num.textContent = `镜头 ${s.shot_no} · `;
+      num.className = "lv-shot-no";
+      num.title = `镜头 ${s.shot_no}`;
+      const numUnit = document.createElement("i");
+      numUnit.className = "lv-shot-no-u";
+      numUnit.textContent = "镜";
+      const numDigits = document.createElement("b");
+      numDigits.className = "lv-shot-no-d";
+      numDigits.textContent = String(s.shot_no).padStart(2, "0");
+      num.append(numUnit, numDigits);
       head.appendChild(num);
       
-      if (_ro) {
-        const lock = document.createElement("span");
-        lock.className = "lv-lock-badge";
-        lock.innerHTML = '<span class="ic ic-lock" aria-hidden="true"></span>已锁定';
-        lock.title = "生成后分镜为只读存档；点上方「解锁编辑」进入重新编排";
-        head.appendChild(lock);
-      }
       
       const badge = document.createElement("span");
       badge.className = s.is_continuation ? "lv-badge" : "lv-badge first";
-      badge.textContent = s.is_continuation ? "续接段" : "首段";
+      badge.innerHTML = s.is_continuation
+        ? '<span class="ic ic-link" aria-hidden="true"></span>续接段'
+        : '<span class="ic ic-resume" aria-hidden="true"></span>首段';
       head.appendChild(badge);
       
-      const secLabel = document.createElement("span");
-      secLabel.className = "lv-shot-seclbl";
-      secLabel.textContent = "时长";
-      head.appendChild(secLabel);
+      if (_isHist) {
+        const vTag = document.createElement("span");
+        vTag.className = "lv-badge hist";
+        vTag.innerHTML = '<span class="ic ic-clock" aria-hidden="true"></span>历史 v' + _esc(_ver.ver);
+        vTag.title = "这一版已被覆盖归档" +
+          (_ver.ts ? "（" + new Date(_ver.ts * 1000).toLocaleString("zh-CN") + "）" : "") +
+          "；只读，用卡片左右箭头切回当前版";
+        head.appendChild(vTag);
+      }
+      
+      
+      
+      
+      
+      
+      const secWrap = document.createElement("span");
+      secWrap.className = "lv-shot-sec" + (_isHist ? " hist" : "");
+      const secIcon = document.createElement("span");
+      secIcon.className = "ic ic-timer";
+      secIcon.setAttribute("aria-hidden", "true");
+      secWrap.appendChild(secIcon);
       const secInput = document.createElement("input");
       secInput.type = "number";
+      secInput.setAttribute("aria-label", "本镜时长（秒）");
       const _sb = lvSecBounds();   
       secInput.min = String(_sb.min); secInput.max = String(_sb.max);
       secInput.step = "1";
-      secInput.value = String(Math.max(_sb.min, Math.min(_sb.max, s.estimated_seconds || 5)));
-      secInput.title = `本镜时长（秒，${_sb.min}-${_sb.max}，接口单段上限）`;
-      secInput.disabled = _ro;
+      
+      const _secSrc = _isHist ? Number(_ver.seconds || 0) || 5 : (s.estimated_seconds || 5);
+      secInput.value = String(Math.max(_sb.min, Math.min(_sb.max, _secSrc)));
+      secInput.title = _isHist
+        ? `历史 v${_ver.ver} 归档时的时长（只读）`
+        : `本镜时长（秒，${_sb.min}-${_sb.max}，接口单段上限）`;
+      secInput.disabled = _isHist;
       secInput.addEventListener("change", () => {
-        if (_ro) return;
+        if (_isHist) return;
         
         
         
@@ -1894,10 +1821,12 @@
         s.estimated_seconds = v;
         saveDraft();
       });
-      head.appendChild(secInput);
+      secWrap.appendChild(secInput);
       const secUnit = document.createElement("span");
+      secUnit.className = "lv-shot-secunit";
       secUnit.textContent = "s";
-      head.appendChild(secUnit);
+      secWrap.appendChild(secUnit);
+      head.appendChild(secWrap);
       
       
       if (idx > 0) {
@@ -1906,10 +1835,8 @@
         const contBox = document.createElement("input");
         contBox.type = "checkbox";
         contBox.checked = !!s.is_continuation;
-        contBox.title = "勾选：本镜从上一段尾帧续接（图片1=tail）";
-        contBox.disabled = _ro;
+        contBox.title = "从上一段尾帧续接";
         contBox.addEventListener("change", () => {
-          if (_ro) { contBox.checked = !!s.is_continuation; return; }
           const on = contBox.checked;
           const imgs = (s.images || []);
           const urls = (s.images_urls || []);
@@ -1950,14 +1877,36 @@
         head.appendChild(contLabel);
       }
       
+      let addBtn = null;
+      if (!_isHist) {
+        addBtn = document.createElement("button");
+        addBtn.type = "button";
+        addBtn.className = "lv-shot-add";
+        addBtn.innerHTML = '<span class="ic ic-plus" aria-hidden="true"></span>插入一镜';
+        const _canAdd = _canEditShots();
+        addBtn.disabled = !_canAdd;
+        addBtn.title = _canAdd ? "在此后插入一镜" : "已开始生成，不能再增删镜头";
+        addBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (addBtn.disabled) return;
+          _addShot(idx + 1);
+        });
+      }
+      
+      const headActs = document.createElement("div");
+      
+      
+      headActs.className = "lv-shot-acts" + (_isHist ? " is-hist" : "");
+      head.appendChild(headActs);
+      
       const delBtn = document.createElement("button");
       delBtn.className = "lv-shot-del";
       delBtn.textContent = "删除此镜";
-      delBtn.title = "从分镜移除（未开始生成前）";
-      delBtn.disabled = _ro;
+      delBtn.title = "从分镜移除";
       delBtn.addEventListener("click", async () => {
-        if (_ro) return;
-        if (lv.jobStatus && lv.jobStatus !== "draft") { err("已开始生成的任务不可删除镜头"); return; }
+        
+        
+        if (lv.jobStatus && lv.jobStatus !== "draft") { err("已开始生成，不能再增删镜头"); return; }
         
         const _delMsg = `确定删除镜头 ${s.shot_no}？相关的画面可在资产库中查看。`;
         if (!(await lvConfirm({ title: "删除镜头", message: _delMsg, danger: true, okText: "删除" }))) return;
@@ -1984,24 +1933,22 @@
         saveDraft();
       });
       
-      if (_isH3()) {
+      if (_isH3() && !_isHist) {   
         const _h3p = _h3SegParamsHtml(s, idx);
-        if (_h3p.html) head.insertAdjacentHTML("beforeend", _h3p.html);
+        if (_h3p.html) headActs.insertAdjacentHTML("beforebegin", _h3p.html);
       }
       
       const copyBtn = document.createElement("button");
       copyBtn.className = "lv-shot-copy";
       copyBtn.innerHTML = '<span class="ic ic-copy" aria-hidden="true"></span>';
       copyBtn.title = "复制本镜提示词与素材引用";
-      copyBtn.disabled = _ro;
       copyBtn.addEventListener("click", () => {
-        if (_ro) return;
         const text = _copyShotPrompt(ed.el);
-        if (!text.trim()) { setMsg("本镜还没有可复制的提示词"); return; }
+        if (!text.trim()) { setMsg("本镜还没有可复制的提示词", "warn"); return; }
         _lvCopyText(text).then(function () {
           setMsg("已复制本镜提示词与素材引用");
         }, function () {
-          setMsg("复制失败，请手动选中复制");
+          err("复制失败，请手动选中复制");
         });
       });
       
@@ -2009,8 +1956,7 @@
         const optBtn = document.createElement("button");
         optBtn.className = "lv-shot-opt";
         optBtn.innerHTML = '<span class="ic ic-spark" aria-hidden="true"></span>';
-        optBtn.title = "优化本镜提示词（H3 六段）";
-        optBtn.disabled = _ro;
+        optBtn.title = "优化本镜提示词";
         const _snapKey = (lv.jobId || "") + ":" + s.shot_no;
         if (_shotOptSnap.has(_snapKey)) {
           optBtn.dataset.undo = "1";
@@ -2018,13 +1964,13 @@
           optBtn.title = "撤销本次提示词优化";
         }
         optBtn.addEventListener("click", async () => {
-          if (_ro || optBtn.dataset.busy === "1") return;
+          if (optBtn.dataset.busy === "1") return;
           if (optBtn.dataset.undo === "1") {
             const snap = _shotOptSnap.get(_snapKey);
             _shotOptSnapDel(_snapKey);   
             optBtn.dataset.undo = "";
             optBtn.classList.remove("can-undo");
-            optBtn.title = "优化本镜提示词（H3 六段）";
+            optBtn.title = "优化本镜提示词";
             if (snap != null) {
               ed.setTextMixed(snap);
               s.prompt = ed.getText();
@@ -2034,7 +1980,7 @@
             return;
           }
           const text = _copyShotPrompt(ed.el);
-          if (!text.trim()) { setMsg("本镜还没有可优化的提示词"); return; }
+          if (!text.trim()) { setMsg("本镜还没有可优化的提示词", "warn"); return; }
           const mats = _matsForShot(s);
           const materials = mats.imgs.concat(mats.auds).map((x) => ({
             kind: x.kind, idx: x.idx, label: x.label || "", name: x.name || "", url: x.url || "",
@@ -2063,15 +2009,29 @@
             err("提示词优化失败：" + (ex.message || ex));
           } finally {
             optBtn.dataset.busy = "";
-            optBtn.disabled = _ro;
             optBtn.classList.remove("busy");
           }
         });
-        head.appendChild(optBtn);
-        copyBtn.style.marginLeft = "0";   
+        headActs.appendChild(optBtn);
       }
-      head.appendChild(copyBtn);
-      head.appendChild(delBtn);
+      headActs.appendChild(copyBtn);
+      if (addBtn) headActs.appendChild(addBtn);   
+      headActs.appendChild(delBtn);
+      
+      const _h3Anchor = _isH3() && s.is_continuation;
+      if (!_h3Anchor) {
+        const genBtn = document.createElement("button");
+        genBtn.className = "lv-shot-gen";
+        const _hasProduct = !!((lv.segs || []).find((x) => x.seg_no === idx + 1 && x.status === "completed"));
+        genBtn.textContent = _hasProduct ? "重生成" : "生成";
+        
+        genBtn.title = _hasProduct ? "重新生成这一镜" : "只生成这一镜";
+        genBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          _submitSingleShot(idx + 1);
+        });
+        headActs.appendChild(genBtn);
+      }
       div.appendChild(head);
 
       
@@ -2096,7 +2056,10 @@
       const unmatchedNote = unmatchedChars.length
         ? `<div class="lv-warn">未在脚本片段确认角色：${unmatchedChars.join("、")}（若有引用，将靠 prompt 文字描述）</div>` : "";
       
+      
+      
       const noImgChip = !(s.images_urls || []).filter((u) => u !== "tail").length
+        && (s.characters || []).length > 0
         ? `<div class="lv-warn">本镜头未匹配任何素材图，prompt 中的角色是「猜的」，请补传或人工校对。</div>` : "";
 
       const warnBox = document.createElement("div");
@@ -2106,179 +2069,225 @@
       
       
       
-      const matTiles = document.createElement("div");
-      matTiles.className = "lv-mat-tiles";
+      
+      if (!_isHist) {
+        const matTiles = document.createElement("div");
+        matTiles.className = "lv-mat-tiles";
 
-      
-      const addTile = document.createElement("div");
-      addTile.className = "lv-mat-add";
-      addTile.innerHTML = '<span class="ic ic-plus" aria-hidden="true"></span>';
-      addTile.title = "从本任务素材里选一个加入本镜（图片=参考图，角色图=角色）";
-      addTile.addEventListener("click", () => { if (_ro) return; _pickAnyForShot(s); });
-      matTiles.appendChild(addTile);
-
-      
-      
-      const imgsArr = (s.images || []);
-      const urlsArr = (s.images_urls || []);
-      const charsArr = (s.characters || []);
-      const segJobId = (window.LV_JOB_ID || document.body.dataset.jobId || "");
-      const _imgStart = s.is_continuation ? 2 : 1;
-      let _imgSeq = _imgStart - 1;
-      const _assetOf = (nm) => (lv.assets || []).find((a) => a.name === nm)
-                        || (currentLibraryItems || []).find((a) => a.name === nm);
-      const imgToChar = {};           
-      const consumedImg = new Set();
-      charsArr.forEach((c, ci) => {
-        const L = (c && c.label || "").trim();
-        if (!L) return;               
-        const _la = _lblAssetOf(L);
-        if (_la && (_la.kind === "scene" || _la.kind === "prop")) return; 
-        for (let ii = 0; ii < imgsArr.length; ii++) {
-          if (consumedImg.has(ii)) continue;
-          const a = _assetOf(imgsArr[ii]);
-          if (a && a.kind === "character" && (a.label || "").trim() === L) {
-            imgToChar[ii] = ci; consumedImg.add(ii); break;
-          }
-        }
-      });
-
-      
-      imgsArr.forEach((key, i) => {
-        const isTail = key === "tail";
-        const url = urlsArr[i];
-        const tile = document.createElement("span");
-        if (isTail) {
-          tile.className = "lv-thumb-wrap tail";
-          tile.dataset.kind = "tail";
-          tile.dataset.shotIdx = String(idx);
-          tile.dataset.segNo = String(s.seg_no);
-          tile.dataset.jobId = _esc(segJobId);
-          tile.innerHTML = '<div class="lv-thumb-tail">尾帧<br><small style="opacity:.7;font-weight:400">续接</small></div>'
-            + '<button class="lv-thumb-x" title="移除此尾帧引用" data-act="rm-img" data-i="' + i + '"><span class="ic ic-cancel" aria-hidden="true"></span></button>';
-          matTiles.appendChild(tile);
-          _tailThumbsToLoad.push(tile);
-          tile.querySelector("button").addEventListener("click", () => {
-            if (_ro) return;
-            s.images.splice(i, 1);
-            if (s.images_urls) s.images_urls.splice(i, 1);
-            s.prompt = _stripRefFromPrompt(s.prompt, "图", i + 1);
-            renderShots(); saveDraft();
-          });
-          return;
-        }
-        _imgSeq++;
-        if (consumedImg.has(i)) {
-          
-          const ci = imgToChar[i];
-          const c = charsArr[ci] || {};
-          const unmatched = c.matched === false;
-          tile.className = "lv-thumb-wrap lv-combo" + (unmatched ? " review" : "");
-          tile.dataset.kind = "image";
-          tile.dataset.idx = String(_imgSeq);
-          tile.dataset.shotIdx = String(idx);
-          tile.title = _esc(c.label || _assetLabel(key));
-          tile.innerHTML = '<img class="lv-thumb" src="' + _esc(_thumb(url || "", 128)) + '" alt="">'
-            + '<span class="lv-thumb-idx">图' + _imgSeq + '</span>'
-            + '<span class="lv-combo-lbl">' + _esc(c.label || "?")
-            + (unmatched ? ' <span class="ic ic-warn" aria-hidden="true"></span>' : "") + '</span>'
-            + '<button class="lv-thumb-x" title="移除该角色及其参考图" data-act="rm-combo" data-i="' + i + '" data-ci="' + ci + '"><span class="ic ic-cancel" aria-hidden="true"></span></button>';
-          matTiles.appendChild(tile);
-          tile.querySelector("button").addEventListener("click", () => {
-            if (_ro) return;
-            
-            s.images.splice(i, 1);
-            if (s.images_urls) s.images_urls.splice(i, 1);
-            s.prompt = _stripRefFromPrompt(s.prompt, "图", i + 1);
-            if (s.characters) s.characters.splice(ci, 1);
-            renderShots(); saveDraft();
-          });
-        } else {
-          
-          tile.className = "lv-thumb-wrap";
-          tile.dataset.kind = "image";
-          tile.dataset.idx = String(_imgSeq);
-          tile.dataset.shotIdx = String(idx);
-          tile.title = _esc(_assetLabel(key));
-          tile.innerHTML = '<img class="lv-thumb" src="' + _esc(_thumb(url || "", 128)) + '" alt="">'
-            + '<span class="lv-thumb-idx">图' + _imgSeq + '</span>'
-            + '<button class="lv-thumb-x" title="移除此图引用" data-act="rm-img" data-i="' + i + '"><span class="ic ic-cancel" aria-hidden="true"></span></button>';
-          matTiles.appendChild(tile);
-          tile.querySelector("button").addEventListener("click", () => {
-            if (_ro) return;
-            s.images.splice(i, 1);
-            if (s.images_urls) s.images_urls.splice(i, 1);
-            s.prompt = _stripRefFromPrompt(s.prompt, "图", i + 1);
-            renderShots(); saveDraft();
-          });
-        }
-      });
-
-      
-      const boundChars = new Set(Object.values(imgToChar));
-      charsArr.forEach((c, i) => {
-        if (boundChars.has(i)) return;
-        const _lbl = (c && c.label || "").trim();
         
-        if (_lbl && !(s.prompt || "").includes(_lbl)) return;
-        const _la = _lbl ? _lblAssetOf(_lbl) : null;
-        if (_la && (_la.kind === "scene" || _la.kind === "prop")) return; 
-        const unmatched = c.matched === false;
-        const tile = document.createElement("span");
-        tile.className = "lv-mat-tile char" + (unmatched ? " review" : "");
-        tile.title = (unmatched ? "未在脚本片段确认：" : "") + _esc(c.label || "?");
-        tile.innerHTML = '<span class="lv-mat-tile-lbl">' + _esc(c.label || "?") + "</span>"
-          + '<button class="lv-tile-x" title="移除此角色" data-act="rm-char" data-i="' + i + '"><span class="ic ic-cancel" aria-hidden="true"></span></button>';
-        tile.querySelector("button").addEventListener("click", () => {
-          if (_ro) return;
-          s.characters.splice(i, 1);
-          renderShots();
-          saveDraft();
-        });
-        matTiles.appendChild(tile);
-      });
+        const addTile = document.createElement("div");
+        addTile.className = "lv-mat-add";
+        addTile.innerHTML = '<span class="ic ic-plus" aria-hidden="true"></span>';
+        addTile.title = "从本任务素材里选一个加入本镜";
+        addTile.addEventListener("click", () => { _pickAnyForShot(s); });
+        matTiles.appendChild(addTile);
 
-      
-      const _auds = s.audio_urls || [];
-      const _audWho = s.audio || [];
-      const _n = Math.max(_auds.length, _audWho.length);
-      for (let i = 0; i < _n; i++) {
-        const u = _auds[i];
-        const who = _audWho[i] || "";
-        const tile = document.createElement("span");
-        tile.className = "lv-chip audio";
-        tile.dataset.kind = "audio";
-        tile.dataset.idx = String(i + 1);
-        tile.dataset.shotIdx = String(idx);
-        const fname = u ? (u.split("/").pop() || u) : "";
-        tile.innerHTML = '<span class="ic ic-audio" aria-hidden="true"></span>音频' + (i + 1) + " " + _esc(who || fname)
-          + '<button class="lv-tile-x" title="移除此声线" data-act="rm-aud" data-i="' + i + '"><span class="ic ic-cancel" aria-hidden="true"></span></button>';
-        tile.querySelector("button").addEventListener("click", () => {
-          if (_ro) return;
-          if (Array.isArray(s.audio)) s.audio.splice(i, 1);
-          if (Array.isArray(s.audio_urls)) s.audio_urls.splice(i, 1);
-          s.prompt = _stripRefFromPrompt(s.prompt, "音频", i + 1);
-          renderShots();
-          saveDraft();
+        
+        
+        const imgsArr = (s.images || []);
+        const urlsArr = (s.images_urls || []);
+        const charsArr = (s.characters || []);
+        const segJobId = (window.LV_JOB_ID || document.body.dataset.jobId || "");
+        const _imgStart = s.is_continuation ? 2 : 1;
+        let _imgSeq = _imgStart - 1;
+        const _assetOf = (nm) => (lv.assets || []).find((a) => a.name === nm)
+                          || (currentLibraryItems || []).find((a) => a.name === nm);
+        const imgToChar = {};           
+        const consumedImg = new Set();
+        charsArr.forEach((c, ci) => {
+          const L = (c && c.label || "").trim();
+          if (!L) return;               
+          const _la = _lblAssetOf(L);
+          if (_la && (_la.kind === "scene" || _la.kind === "prop")) return; 
+          for (let ii = 0; ii < imgsArr.length; ii++) {
+            if (consumedImg.has(ii)) continue;
+            const a = _assetOf(imgsArr[ii]);
+            if (a && a.kind === "character" && (a.label || "").trim() === L) {
+              imgToChar[ii] = ci; consumedImg.add(ii); break;
+            }
+          }
         });
-        if (u) tile.title = _esc(_assetLabel(who) || who || u);
-        matTiles.appendChild(tile);
+
+        
+        imgsArr.forEach((key, i) => {
+          const isTail = key === "tail";
+          const url = urlsArr[i];
+          const tile = document.createElement("span");
+          if (isTail) {
+            tile.className = "lv-thumb-wrap tail";
+            tile.dataset.kind = "tail";
+            tile.dataset.shotIdx = String(idx);
+            tile.dataset.segNo = String(s.seg_no);
+            tile.dataset.jobId = _esc(segJobId);
+            tile.innerHTML = '<div class="lv-thumb-tail">尾帧<br><small style="opacity:.7;font-weight:400">续接</small></div>'
+              + '<button class="lv-thumb-x" title="移除此尾帧引用" data-act="rm-img" data-i="' + i + '"><span class="ic ic-cancel" aria-hidden="true"></span></button>';
+            matTiles.appendChild(tile);
+            _tailThumbsToLoad.push(tile);
+            tile.querySelector("button").addEventListener("click", () => {
+              s.images.splice(i, 1);
+              if (s.images_urls) s.images_urls.splice(i, 1);
+              s.prompt = _stripRefFromPrompt(s.prompt, "图", i + 1);
+              renderShots(); saveDraft();
+            });
+            return;
+          }
+          _imgSeq++;
+          if (consumedImg.has(i)) {
+            
+            const ci = imgToChar[i];
+            const c = charsArr[ci] || {};
+            const unmatched = c.matched === false;
+            tile.className = "lv-thumb-wrap lv-combo" + (unmatched ? " review" : "");
+            tile.dataset.kind = "image";
+            tile.dataset.idx = String(_imgSeq);
+            tile.dataset.shotIdx = String(idx);
+            tile.title = _esc(c.label || _assetLabel(key));
+            tile.innerHTML = '<img class="lv-thumb" src="' + _esc(_thumb(url || "", 128)) + '" alt="">'
+              + '<span class="lv-thumb-idx">图' + _imgSeq + '</span>'
+              + '<span class="lv-combo-lbl">' + _esc(c.label || "?")
+              + (unmatched ? ' <span class="ic ic-warn" aria-hidden="true"></span>' : "") + '</span>'
+              + '<button class="lv-thumb-x" title="移除该角色及其参考图" data-act="rm-combo" data-i="' + i + '" data-ci="' + ci + '"><span class="ic ic-cancel" aria-hidden="true"></span></button>';
+            matTiles.appendChild(tile);
+            tile.querySelector("button").addEventListener("click", () => {
+              
+              s.images.splice(i, 1);
+              if (s.images_urls) s.images_urls.splice(i, 1);
+              s.prompt = _stripRefFromPrompt(s.prompt, "图", i + 1);
+              if (s.characters) s.characters.splice(ci, 1);
+              renderShots(); saveDraft();
+            });
+          } else {
+            
+            tile.className = "lv-thumb-wrap";
+            tile.dataset.kind = "image";
+            tile.dataset.idx = String(_imgSeq);
+            tile.dataset.shotIdx = String(idx);
+            tile.title = _esc(_assetLabel(key));
+            tile.innerHTML = '<img class="lv-thumb" src="' + _esc(_thumb(url || "", 128)) + '" alt="">'
+              + '<span class="lv-thumb-idx">图' + _imgSeq + '</span>'
+              + '<button class="lv-thumb-x" title="移除此图引用" data-act="rm-img" data-i="' + i + '"><span class="ic ic-cancel" aria-hidden="true"></span></button>';
+            matTiles.appendChild(tile);
+            tile.querySelector("button").addEventListener("click", () => {
+              s.images.splice(i, 1);
+              if (s.images_urls) s.images_urls.splice(i, 1);
+              s.prompt = _stripRefFromPrompt(s.prompt, "图", i + 1);
+              renderShots(); saveDraft();
+            });
+          }
+        });
+
+        
+        const boundChars = new Set(Object.values(imgToChar));
+        charsArr.forEach((c, i) => {
+          if (boundChars.has(i)) return;
+          const _lbl = (c && c.label || "").trim();
+          
+          if (_lbl && !(s.prompt || "").includes(_lbl)) return;
+          const _la = _lbl ? _lblAssetOf(_lbl) : null;
+          if (_la && (_la.kind === "scene" || _la.kind === "prop")) return; 
+          const unmatched = c.matched === false;
+          const tile = document.createElement("span");
+          tile.className = "lv-mat-tile char" + (unmatched ? " review" : "");
+          tile.title = (unmatched ? "未在脚本片段确认：" : "") + _esc(c.label || "?");
+          tile.innerHTML = '<span class="lv-mat-tile-lbl">' + _esc(c.label || "?") + "</span>"
+            + '<button class="lv-tile-x" title="移除此角色" data-act="rm-char" data-i="' + i + '"><span class="ic ic-cancel" aria-hidden="true"></span></button>';
+          tile.querySelector("button").addEventListener("click", () => {
+            s.characters.splice(i, 1);
+            renderShots();
+            saveDraft();
+          });
+          matTiles.appendChild(tile);
+        });
+
+        
+        const _auds = s.audio_urls || [];
+        const _audWho = s.audio || [];
+        const _n = Math.max(_auds.length, _audWho.length);
+        for (let i = 0; i < _n; i++) {
+          const u = _auds[i];
+          const who = _audWho[i] || "";
+          const tile = document.createElement("span");
+          tile.className = "lv-chip audio";
+          tile.dataset.kind = "audio";
+          tile.dataset.idx = String(i + 1);
+          tile.dataset.shotIdx = String(idx);
+          const fname = u ? (u.split("/").pop() || u) : "";
+          tile.innerHTML = '<span class="ic ic-audio" aria-hidden="true"></span>音频' + (i + 1) + " " + _esc(who || fname)
+            + '<button class="lv-tile-x" title="移除此声线" data-act="rm-aud" data-i="' + i + '"><span class="ic ic-cancel" aria-hidden="true"></span></button>';
+          tile.querySelector("button").addEventListener("click", () => {
+            if (Array.isArray(s.audio)) s.audio.splice(i, 1);
+            if (Array.isArray(s.audio_urls)) s.audio_urls.splice(i, 1);
+            s.prompt = _stripRefFromPrompt(s.prompt, "音频", i + 1);
+            renderShots();
+            saveDraft();
+          });
+          if (u) tile.title = _esc(_assetLabel(who) || who || u);
+          matTiles.appendChild(tile);
+        }
+
+        div.appendChild(matTiles);
+      } else {
+        
+        const matTiles = document.createElement("div");
+        matTiles.className = "lv-mat-tiles hist";
+        const _hImgs = Array.isArray(_ver.images) ? _ver.images : [];
+        const _hUrls = Array.isArray(_ver.images_urls) ? _ver.images_urls : [];
+        let _hSeq = 0;
+        _hImgs.forEach((nm, i) => {
+          const tile = document.createElement("span");
+          if (nm === "tail") {
+            tile.className = "lv-thumb-wrap tail";
+            tile.innerHTML = '<div class="lv-thumb-tail">尾帧<br><small style="opacity:.7;font-weight:400">续接</small></div>';
+            matTiles.appendChild(tile);
+            return;
+          }
+          _hSeq++;
+          tile.className = "lv-thumb-wrap";
+          tile.title = _esc(_assetLabel(nm) || nm) + "（历史快照，只读）";
+          
+          tile.innerHTML = '<img class="lv-thumb" src="' + _esc(_thumb(_hUrls[i] || "", 128)) + '" alt="">'
+            + '<span class="lv-thumb-idx">图' + _hSeq + '</span>';
+          matTiles.appendChild(tile);
+        });
+        const _hAuds = Array.isArray(_ver.audio) ? _ver.audio : [];
+        _hAuds.forEach((who, i) => {
+          
+          const tile = document.createElement("span");
+          tile.className = "lv-chip audio";
+          tile.title = (who || "") + "（历史快照，只读）";
+          tile.innerHTML = '<span class="ic ic-audio" aria-hidden="true"></span>音频' + (i + 1) + " " + _esc(_assetLabel(who) || who || "");
+          matTiles.appendChild(tile);
+        });
+        if (!_hImgs.length && !_hAuds.length) {
+          const none = document.createElement("div");
+          none.className = "lv-hist-nomat";
+          none.textContent = "这一版没有绑定任何素材";
+          matTiles.appendChild(none);
+        }
+        div.appendChild(matTiles);
       }
 
-      div.appendChild(matTiles);
-
 
       
+      
+      
+      const _promptOwner = _isHist
+        ? {
+            images: Array.isArray(_ver.images) ? _ver.images : [],
+            images_urls: Array.isArray(_ver.images_urls) ? _ver.images_urls : [],
+            audio: Array.isArray(_ver.audio) ? _ver.audio : [],
+            audio_urls: Array.isArray(_ver.audio_urls) ? _ver.audio_urls : [],
+          }
+        : s;
       const wrap = document.createElement("div");
-      wrap.className = "lv-prompt-edit-wrap";
+      wrap.className = "lv-prompt-edit-wrap" + (_isHist ? " hist" : "");
       wrap.style.position = "relative";
       const ed = createRichPromptEditor({
-        text: s.prompt || "",
+        text: _isHist ? (_ver.prompt || "") : (s.prompt || ""),
         placeholder: "本镜提示词（写足：场景+角色外貌+互动+对白(声线：台词，嘴形同步)+SFX+风格，不限制字数）。输入 @ 可把本镜素材缩略图插入此处。",
-        getMats: () => _matsForShot(s),
-        onCommit: (t) => { if (_ro) return; s.prompt = t; saveDraft(); },
+        getMats: () => _matsForShot(_promptOwner),
+        onCommit: (t) => { if (_isHist) return; s.prompt = t; saveDraft(); },
         onAddMaterial: (kind, name, url) => {
-          if (_ro) return 0;
           if (kind === "image") {
             s.images = s.images || []; s.images_urls = s.images_urls || [];
             if (!s.images.includes(name)) { s.images.push(name); s.images_urls.push(url); }
@@ -2290,7 +2299,7 @@
         },
         onRerender: () => renderShots(),
       });
-      if (_ro) ed.el.contentEditable = "false";
+      if (_isHist) ed.el.contentEditable = "false";   
       wrap.appendChild(ed.el);
       div.appendChild(wrap);
 
@@ -2315,11 +2324,44 @@
 
       
       
-      if (_ro) {
+      
+      
+      const _segForCard = lv.segs.find((x) => x.seg_no === _segNo);
+      if (_segForCard) {
         const stEl = document.createElement("div");
-        stEl.className = "lv-shot-st st-pending";
-        stEl.innerHTML = `<span class="st-dot"></span><span class="st-txt">排队中</span>`;
+        stEl.className = "lv-shot-st";
         div.appendChild(stEl);
+        _fillShotStatusLine(stEl, _segForCard);
+      }
+
+      
+      if (_verTotal > 1) {
+        const nav = document.createElement("div");
+        nav.className = "lv-ver-nav";
+        const mkBtn = (cls, icon, title, target) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "lv-ver-btn " + cls;
+          b.innerHTML = '<span class="ic ic-chevron-' + icon + '" aria-hidden="true"></span>';
+          b.title = title;
+          b.disabled = target === null;
+          b.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            if (target === null) return;
+            _renderVerSwitch(_segNo, target);
+          });
+          return b;
+        };
+        nav.appendChild(mkBtn("prev", "left", "上一版（更新，最左是当前稿）", _vi > 0 ? _vi - 1 : null));
+        nav.appendChild(mkBtn("next", "right", "下一版（更旧）", _vi < _verTotal - 1 ? _vi + 1 : null));
+        const cnt = document.createElement("span");
+        cnt.className = "lv-ver-count" + (_isHist ? " hist" : "");
+        cnt.textContent = (_vi + 1) + "/" + _verTotal;
+        cnt.title = _isHist
+          ? "正在看历史版" + (_ver.ts ? "（归档于 " + new Date(_ver.ts * 1000).toLocaleString("zh-CN") + "）" : "") + "；只读"
+          : "当前版（最新）";
+        nav.appendChild(cnt);
+        div.appendChild(nav);
       }
 
       lvShots.appendChild(div);
@@ -2335,10 +2377,46 @@
       }
     });
     
-    if (_ro && lv.segs.length) _updateShotStatusLines();
+    if (lv.segs.length) _updateShotStatusLines();
     
     
     _loadTailThumbs();
+    _mountAddRow();
+  }
+
+  
+  function _mountAddRow() {
+    const _empty = lv.shots.length === 0;
+    const row = document.createElement("div");
+    row.className = "lv-addrow" + (_empty ? " empty" : "");
+    if (_empty) {
+      const tip = document.createElement("div");
+      tip.className = "lv-addrow-tip";
+      tip.innerHTML = "还没有分镜。可以自己写第一镜，也可以在左侧粘贴脚本后点「智能分镜」让 AI 拆。";
+      row.appendChild(tip);
+    }
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "lv-addrow-btn";
+    b.innerHTML = '<span class="ic ic-plus" aria-hidden="true"></span>' + (_empty ? "手动添加第一镜" : "添加一镜");
+    const _ok = _canEditShots();
+    b.disabled = !_ok;
+    b.title = !_ok ? "已开始生成，不能再增删镜头" : (_empty ? "添加第一镜" : "在末尾添加一镜");
+    b.addEventListener("click", () => { if (!b.disabled) _addShot(null); });
+    row.appendChild(b);
+    lvShots.appendChild(row);
+    
+    if (_pendingFocusShot) {
+      const _no = _pendingFocusShot;
+      _pendingFocusShot = 0;
+      const card = lvShots.querySelector('.lv-shot[data-seg-no="' + _no + '"]')
+                || lvShots.querySelectorAll(".lv-shot")[_no - 1];
+      if (card) {
+        card.scrollIntoView({ block: "center" });
+        const edEl = card.querySelector(".lv-prompt-edit");
+        if (edEl) setTimeout(() => { try { edEl.focus(); } catch (_) {} }, 30);
+      }
+    }
   }
 
   function _esc(s) {
@@ -2517,68 +2595,80 @@ async function _pickImageForShot(s) {
     const bar = $("lvStep2Act");
     const btn = $("lvTo3");
     if (!bar || !btn) return;
-    const st = lv.jobStatus;
-    const isDraft = !lv.jobId || !st || st === "draft";
-    const running = st === "processing" || (lv.segs || []).some((s) => s.status === "processing");
-    if (isDraft) {
-      bar.hidden = lv.shots.length === 0;
-      btn.hidden = false;
-      btn.disabled = false;
-      btn.classList.remove("danger");
-      btn.textContent = "开始生成";
-    } else if (running) {
-      bar.hidden = false;      
-      btn.hidden = true;
-    } else {
+    const running = lv.jobStatus === "processing" || (lv.segs || []).some((s) => s.status === "processing");
+    bar.hidden = lv.shots.length === 0;
+    btn.hidden = false;
+    btn.disabled = running;
+    btn.classList.remove("danger");
+    btn.textContent = "批量生成";
+    _syncOptBtn();   
+  }
+
+  
+  function _syncOptBtn() {
+    const btn = $("lvOptimize");
+    if (!btn) return;
+    const _started = !!(lv.jobId && lv.jobStatus && lv.jobStatus !== "draft")
+      || (lv.segs || []).some((x) => x.status === "completed" || x.status === "processing" || x.video_id);
+    btn.disabled = _started;
+    btn.title = _started
+      ? "已开始生成，分镜已定稿。改某一镜请直接改稿重生成；要整份重拆请新建任务"
+      : "用当前剧本拆一份分镜";
+  }
+
+  
+  function _canEditShots() {
+    return !(lv.jobStatus && lv.jobStatus !== "draft");
+  }
+  function _blankShot(shotNo) {
+    const _sb = lvSecBounds();
+    return {
+      shot_no: shotNo,
+      prompt: "",
       
-      bar.hidden = lv.shots.length === 0;
-      btn.hidden = false;
-      btn.classList.add("danger");
-      btn.textContent = "重新编排";
-    }
+      estimated_seconds: Math.max(_sb.min, Math.min(_sb.max, 5)),
+      
+      is_continuation: false,
+      images: [], images_urls: [], audio: [], audio_urls: [],
+      mode: "reference",
+      
+      post_refine: {}, post_face: {},
+    };
   }
-
   
-  
-  
-  async function _enterReedit() {
-    if (!lv.jobId) return;
-    if (lv.jobStatus === "processing") { err("任务生成中，请等待完成后再重新编排"); return; }
-    if (lv.jobStatus === "draft") { setMsg("任务已是可编辑状态（无需解锁）"); return; }
-    if (!(await lvConfirm({
-      title: "重新编排",
-      message: "将解锁分镜进入重新编辑：\n· 分镜恢复可编辑（改提示词/秒数/绑定/删加镜头）\n· 已生成的成片保留在第 3 步供对照\n· 改完分镜点「开始生成」才会重新生成（旧视频会自动保留）\n\n进入重新编辑？",
-      okText: "解锁编辑",
-    }))) return;
-    try {
-      const r = await fetch(API + `/api/jobs/${lv.jobId}/reedit`, { method: "POST" });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) { err("进入重编失败：" + (j.error || "")); return; }
-      lv.jobStatus = "draft";
-      _autoJumpOK = false;      
-      saveState();
-      renderShots();            
-      _syncStartBtn();          
-      _updateProgSum({ status: "draft" });   
-      setMsg("已进入重新编辑：分镜已解锁，改完点「开始生成」重新生成（旧成片在第 3 步可对照）");
-    } catch (e) { err("重编请求异常：" + e.message); }
-  }
-
-  $("lvTo3").addEventListener("click", async () => {
-    
-    
-    const st = lv.jobStatus;
-    if (lv.jobId && st && st !== "draft") {
-      await _enterReedit();
+  async function _addShot(at) {
+    if (!_canEditShots()) {
+      err("已开始生成，不能再增删镜头");
       return;
     }
-    withBtn($("lvTo3"), "创建中…", async () => {
+    if (!lv.jobId) await ensureJob();       
+    if (!lv.jobId) { err("任务创建失败，请稍后重试"); return; }
+    const pos = (at == null || at > lv.shots.length) ? lv.shots.length : Math.max(0, at);
+    
+    const _nextWasCont = pos < lv.shots.length && !!lv.shots[pos].is_continuation;
+    lv.shots.splice(pos, 0, _blankShot(pos + 1));
+    lv.shots.forEach((sh, i) => { sh.shot_no = i + 1; });   
+    _pendingFocusShot = pos + 1;
+    renderShots();
+    lvStep2Act.hidden = lv.shots.length === 0;
+    _syncStartBtn();
+    saveDraft();
+    if (_nextWasCont) {
+      setMsg(`已插入第 ${pos + 1} 镜；原第 ${pos + 1} 镜现在是第 ${pos + 2} 镜，请确认它还要不要续接`, "warn");
+    } else {
+      setMsg(`已插入第 ${pos + 1} 镜，填好提示词即可`);
+    }
+  }
+
+  
+  $("lvTo3").addEventListener("click", async () => {
+    withBtn($("lvTo3"), "提交中…", async () => {
       if (!lv.shots.length) { err("分镜数据未加载完成，请稍候重试"); return; }
       
       if (!lv.jobId) await ensureJob();
-      
       if (lv.jobStatus === "processing") { err("该任务正在生成中，请等待完成"); return; }
-      setMsg("开始生成中…");
+      const ownerJobId = lv.jobId || null;   
+      setMsg("正在补齐未生成的镜头…");
       let r, j;
       try {
         r = await fetch(API + "/api/jobs", {
@@ -2595,28 +2685,71 @@ async function _pickImageForShot(s) {
         });
         j = await r.json().catch(() => ({}));
       } catch (e) {
-        err("开始生成网络异常：" + (e && e.message ? e.message : e));
+        err("批量生成网络异常：" + (e && e.message ? e.message : e));
         return;
       }
-      if (!r.ok) { err("创建失败：" + (j.error || `HTTP ${r.status}`)); return; }
-      lv.jobId = j.job_id;
-      lv.jobStatus = "processing";
-      lv.genStartTs = Date.now() / 1000;
-      saveState();
-      _syncStartBtn();
-      renderShots();   
-      _updateProgSum({ status: "processing" });   
-      _autoJumpOK = true;   
-      startPoll();
+      if (!r.ok) { err("提交失败：" + (j.error || `HTTP ${r.status}`)); return; }
       
+      if (_ownerGone(ownerJobId)) { loadJobs(); return; }
+      if (!_adoptJobState(j, { claim: true })) { loadJobs(); return; }
+      saveState();
+      renderShots();   
+      _refreshStatusUI();
+      startPoll();
       const _cur = lvShots.querySelector(".lv-shot");
       if (_cur) _cur.scrollIntoView({ behavior: "smooth", block: "start" });
       loadJobs();
+      setMsg("已提交，后台补齐未生成的镜头（已生成的保留）");
     });
   });
 
   
-  
+  async function _submitSingleShot(segNo) {
+    if (!lv.shots.length) { err("分镜数据未加载完成"); return; }
+    if (lv.jobStatus === "processing" || (lv.segs || []).some((x) => x.status === "processing")) {
+      err("有镜头正在生成，请稍候再提交这一镜"); return;
+    }
+    const seg = (lv.segs || []).find((x) => x.seg_no === segNo);
+    
+    if (seg && seg.status === "completed") { await _regenFromCard(segNo); return; }
+    
+    if (!lv.jobId) await ensureJob();
+    const ownerJobId = lv.jobId || null;   
+    let segNos = [segNo];
+    if (_isH3()) {
+      
+      for (let i = segNo; i < lv.shots.length; i++) {
+        if (i === segNo - 1 || lv.shots[i].is_continuation) segNos.push(i + 1);
+        else break;
+      }
+      segNos = [...new Set(segNos)].sort((a, b) => a - b);
+    }
+    withBtn(lvShots.querySelector(`.lv-shot[data-idx="${segNo - 1}"] .lv-shot-gen`), "提交中…", async () => {
+      let r, j;
+      try {
+        r = await fetch(API + "/api/jobs", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            job_id: lv.jobId, shots: lv.shots,
+            assets: _cleanAssets(lv.assets), script: lvScript ? lvScript.value : "",
+            seg_nos: segNos, gen_params: lv.opts || {},
+          }),
+        });
+        j = await r.json().catch(() => ({}));
+      } catch (e) { err("单镜提交网络异常：" + (e.message || e)); return; }
+      if (!r.ok) { err("单镜提交失败：" + (j.error || `HTTP ${r.status}`)); return; }
+      
+      if (_ownerGone(ownerJobId)) { loadJobs(); return; }
+      if (!_adoptJobState(j, { claim: true })) { loadJobs(); return; }   
+      saveState();
+      renderShots();
+      _refreshStatusUI();
+      startPoll();
+      loadJobs();
+      setMsg(`第 ${segNo} 镜已提交${segNos.length > 1 ? `（含续接链共 ${segNos.length} 段）` : ""}，后台生成中`);
+    });
+  }
+
   
   
   let _pollGen = 0;
@@ -2627,12 +2760,46 @@ async function _pickImageForShot(s) {
     lv.poll = setInterval(pollJob, 4000);
   }
   function stopPoll() {
-    _pollGen++;   
+    _pollGen++;
     if (lv.poll) { clearInterval(lv.poll); lv.poll = null; }
   }
+
+
   
+  function _adoptJobState(j, opts) {
+    const o = opts || {};
+    if (!j || !j.state) return false;
+    const st = j.state;
+    
+    const owner = st.job_id || j.job_id || (j.job && j.job.id) || null;
+    if (owner) {
+      if (o.claim) {
+        if (lv.jobId && lv.jobId !== owner) return false;
+        lv.jobId = owner;
+      } else if (lv.jobId !== owner) {
+        return false;
+      }
+    } else if (!lv.jobId && !o.claim) {
+      return false;
+    }
+    lv.state = st;
+    
+    if (Array.isArray(j.segments)) lv.segs = j.segments;
+    if ("queue_state" in j) lv.queueState = j.queue_state || null;
+    
+    lv.jobStatus = (lv.state && lv.state.status) || null;
+    return true;
+  }
   
-  let _autoJumpOK = false;
+  function _ownerGone(ownerJobId) {
+    return (lv.jobId || null) !== (ownerJobId || null);
+  }
+  
+  function _refreshStatusUI() {
+    _syncStartBtn();
+    _updateProgSum();
+    if ((lv.segs || []).length) _updateShotStatusLines();
+  }
 
   async function pollJob() {
     if (!lv.jobId) return;
@@ -2644,46 +2811,46 @@ async function _pickImageForShot(s) {
       
       if (gen !== _pollGen || jid !== lv.jobId) return;
       
-      lv.queueState = j.queue_state || null;
+      _adoptJobState(j);
       if (r.status === 404) {
         
         
         stopPoll();
-        lv.jobId = null; lv.jobStatus = null; lv.segs = [];
-        _syncStartBtn(); _updateProgSum({ status: "draft" }); _updateShotStatusLines();
+        lv.jobId = null; lv.jobStatus = null; lv.segs = []; lv.state = null;
+        _refreshStatusUI();
         loadJobs();
         setMsg("任务已被删除，已回到草稿（可重新编辑）");
         return;
       }
       if (!r.ok) { err("查询失败：" + (j.error || "")); return; }
-      lv.segs = j.segments || [];
-      lv.jobStatus = j.job.status;
+      
       _syncStartBtn();          
-      _updateProgSum(j.job);    
+      _updateProgSum();         
       _updateShotStatusLines(); 
       const _anyProc = lv.segs.some((s) => s.status === "processing");
+      
+      const _stLabel = (lv.state && lv.state.label) || "";
+      if (_stLabel !== lv._jobLabelSeen) {
+        lv._jobLabelSeen = _stLabel;
+        loadJobs();
+      }
       if (j.job.status === "completed" && !_anyProc) {
         stopPoll();
         lv.finalUrl = j.final_url || null;
         _verifyFinal();
-        setMsg("成片已生成");
-        
-        
-        
-        if (_autoJumpOK && lv.step === 2) {
-          _autoJumpOK = false;
-          goStep(4);
-          setMsg("成片已生成，已自动进入成片预览");
-        }
+        setMsg("成片已生成，可在右侧预览（点分镜卡定位到对应段）");
+        buildStrip();   
         loadJobs();
       } else if (j.job.status === "failed" && !_anyProc) {
         stopPoll();
-        _autoJumpOK = false;    
-        err("生成失败：" + (j.job.error || ""));
+        
+        err("生成失败：" + ((lv.state && lv.state.detail) || j.job.error || ""));
+        loadJobs();     
       } else if (j.job.status === "cancelled" && !_anyProc) {
         
         
         stopPoll();
+        loadJobs();     
       } else if (j.job.status !== "processing" && _anyProc) {
         
         
@@ -2697,54 +2864,24 @@ async function _pickImageForShot(s) {
     return m > 0 ? `${m}分${s}秒` : `${s}秒`;
   }
   
-  const _SEG_STATUS_CN = { pending: "排队中", processing: "生成中", completed: "已完成", failed: "失败", cancelled: "已停止" };
-  const _JOB_STATUS_CN = { draft: "草稿", processing: "生成中", completed: "已完成", failed: "失败", cancelled: "已停止" };
-  function _jobStatusCN(st) { return _JOB_STATUS_CN[st] || (st || "—"); }
-  function _segStatusCN(st, jobSt) {
-    if (st === "cancelled" || (jobSt === "cancelled" && (st === "pending" || !st))) return "已停止";
-    return _SEG_STATUS_CN[st] || (st || "—");
-  }
   
-  
-  
-  function _updateProgSum(job) {
+  function _updateProgSum() {
     const box = $("lvProgSum");
     if (!box) return;
-    const started = !!(lv.jobId && lv.jobStatus && lv.jobStatus !== "draft");
+    const _stObj = lv.state || {};
+    const js = _stObj.status || null;                       
+    const started = !!(lv.jobId && js && js !== "draft");
     box.hidden = !started || !lv.segs.length;
     if (box.hidden) return;
-    const total = lv.segs.length || 0;
-    const done = lv.segs.filter((s) => s.status === "completed").length;
-    const failed = lv.segs.filter((s) => s.status === "failed").length;
-    const running = lv.segs.find((s) => s.status === "processing");
+    
+    const total = (_stObj.total != null && _stObj.total > 0) ? _stObj.total : (lv.segs.length || 0);
+    const done = (_stObj.done != null) ? _stObj.done : lv.segs.filter((s) => s.status === "completed").length;
     const pct = total ? Math.round((done / total) * 100) : 0;
     
+    const jobCN = _stObj.label || "—";
     
-    const nowTs = Date.now() / 1000;
-    const _endsAll = lv.segs.map((s) => s.finished_at).filter(Boolean);
-    const _allDone = lv.segs.length > 0 && lv.segs.every((s) => s.status === "completed");
-    let elapsed = 0;
-    if (lv.genStartTs) {
-      const _t1 = (_allDone && _endsAll.length) ? Math.max(..._endsAll) : nowTs;
-      elapsed = Math.max(0, _t1 - lv.genStartTs);
-    }
-    
-    
-    
-    const completedSegs = lv.segs.filter((s) => s.status === "completed" && s.started_at && (s.finished_at || s.updated_at));
-    let eta = 0;
-    if (completedSegs.length) {
-      const avg = completedSegs.reduce((a, s) => a + ((s.finished_at || s.updated_at) - s.started_at), 0) / completedSegs.length;
-      eta = (total - done) * avg;
-    } else if (total - done > 0) {
-      eta = (total - done) * 95;
-    }
-    const js = (job && job.status) || lv.jobStatus;
-    
-    let jobCN = _jobStatusCN(js);   
-    if (js === "processing" && lv.queueState === "queued") jobCN += "·排队中";
-    
-    else if (js === "processing" && lv.queueState === "retry") jobCN += "·排队重试";
+    const elapsed = _stObj.elapsed || 0;
+    const eta = (_stObj.eta == null) ? 0 : _stObj.eta;
     const cls = js === "completed" ? "green" : js === "failed" ? "red" : js === "processing" ? "amber" : "";
     
     box.classList.toggle("st-processing", js === "processing");
@@ -2756,9 +2893,19 @@ async function _pickImageForShot(s) {
     const el2 = $("lvPsElapsed");
     if (el2) { el2.textContent = _fmtDur(elapsed); el2.className = "ps-v " + cls; }
     const el3 = $("lvPsEta");
-    if (el3) { el3.textContent = (eta > 0 && js !== "completed") ? _fmtDur(eta) : "—"; el3.className = "ps-v"; }
+    
+    if (el3) { el3.textContent = eta > 0 ? _fmtDur(eta) : "—"; el3.className = "ps-v"; }
     const el4 = $("lvPsSt");
-    if (el4) { el4.textContent = jobCN + (failed ? ` · 失败${failed}段` : ""); el4.className = "ps-v " + cls; }
+    
+    if (el4) {
+      const _d = (_stObj.detail || "").trim();
+      el4.textContent = jobCN + (_d ? " · " + _d : "");
+      el4.className = "ps-v " + cls;
+    }
+    
+    
+    
+    if (!lvShots.querySelector(".lv-shot.sel")) _prevShowJobState();
     
     const _costK = $("lvPsCostK"), _costV = $("lvPsCost");
     if (_costV) {
@@ -2783,8 +2930,6 @@ async function _pickImageForShot(s) {
     
     
     
-    const vb = $("lvTo4");
-    if (vb) { vb.hidden = !lv.segs.some((s) => s.status === "completed"); vb.disabled = vb.hidden; }
     const rb = $("lvRetry");
     if (rb) { rb.hidden = !(js === "failed"); rb.disabled = rb.hidden; }
     const rs = $("lvResume");
@@ -2792,7 +2937,10 @@ async function _pickImageForShot(s) {
     const sb = $("lvStopBtn");
     if (sb) { sb.hidden = !(js === "processing"); sb.disabled = sb.hidden; }
     const hint = $("lvPsHint");
-    if (hint) hint.textContent = running
+    
+    
+    const _segRunning = (lv.segs || []).some((s) => s && s.status === "processing");
+    if (hint) hint.textContent = _segRunning
       ? "正在生成当前段，请保持页面打开。"
       : (js === "processing" ? "正在生成，请保持页面打开。"
       : (js === "cancelled" ? "已停止：在飞段已收尾，点「继续生成」续跑剩余段。" : ""));
@@ -2800,14 +2948,14 @@ async function _pickImageForShot(s) {
 
   
   
+  
   function _updateShotStatusLines() {
-    if (!lv.segs.length) return;
     lvShots.querySelectorAll(".lv-shot").forEach((card) => {
       const segNo = parseInt(card.dataset.segNo, 10);
       const s = lv.segs.find((x) => x.seg_no === segNo);
-      if (!s) return;
-      const st = card.querySelector(".lv-shot-st");
-      if (!st) return;
+      let st = card.querySelector(".lv-shot-st");
+      if (!s) { if (st) st.remove(); return; }   
+      if (!st) { st = document.createElement("div"); st.className = "lv-shot-st"; card.appendChild(st); }
       _fillShotStatusLine(st, s);
     });
   }
@@ -2839,7 +2987,15 @@ async function _pickImageForShot(s) {
     if (typeof v === "object") return v;
     try { const o = JSON.parse(v); return (o && typeof o === "object") ? o : null; } catch (e) { return null; }
   }
-  function _h3JobMetaRows() {
+  
+  function _h3MetaWanted(s) {
+    const m = String((s && s.model) || (lv.opts && lv.opts.model) || "");
+    if (m) return /h3/i.test(m);
+    return _isH3();
+  }
+  function _h3JobMetaRows(s) {
+    
+    if (!_h3MetaWanted(s)) return [];
     const gp = lv.opts || {};
     const rows = [];
     if (gp.instance_tier) rows.push(["运行档位", _INST_T[String(gp.instance_tier).toLowerCase()] || gp.instance_tier]);
@@ -2848,6 +3004,7 @@ async function _pickImageForShot(s) {
     return rows;
   }
   function _h3SegMetaRows(s) {
+    if (!_h3MetaWanted(s)) return [];   
     const rows = [];
     const rf = _objVal(s.post_refine);
     if (rf) {
@@ -2875,21 +3032,28 @@ async function _pickImageForShot(s) {
       else if (s.status === "processing") durTxt = " · 已" + _fmtDur(Date.now() / 1000 - s.started_at);
     }
     
-    const _stoppedLike = lv.jobStatus === "cancelled" && (s.status === "pending" || !s.status);
-    const _effSt = _stoppedLike ? "cancelled" : (s.status || "pending");
-    st.className = "lv-shot-st st-" + _effSt;
-    let html = `<span class="st-dot"></span><span class="st-txt">${_segStatusCN(_effSt, lv.jobStatus)}${durTxt}</span>`;
-    if (s.status === "failed") {
-      const reason = (s.error || "").slice(0, 80);
-      html += `<span class="st-err" title="${_esc(s.error || "")}">${reason ? _esc(reason) : ""}</span>` +
-              `<button class="st-retry" type="button" data-seg="${s.seg_no}">重试本段</button>`;
+    const _ss = s.state || {};
+    st.className = "lv-shot-st st-" + (_ss.phase || s.status || "pending");
+    let html = `<span class="st-dot"></span><span class="st-txt">${_esc(_ss.label || "—")}${durTxt}</span>`;
+    if (s.status === "failed" || s.status === "cancelled" || _ss.skipped) {
+      
+      const reason = _ss.detail || "";
+      if (reason) html += `<span class="st-err" title="${_esc(s.error || reason)}">${_esc(reason)}</span>`;
+      
+      if (_ss.can_retry === false) {
+        html += `<span class="st-grp" title="该段属于续接组，整组一次提交，需从组首重试">` +
+                `随第${_ss.retry_owner || "?"}段整组重试</span>`;
+      } else {
+        html += `<button class="st-retry" type="button" data-seg="${s.seg_no}">` +
+                `${_esc(_ss.retry_label || "重试本段")}</button>`;
+      }
     } else if (s.status === "completed") {
       const _tv = Math.round(s.finished_at || s.updated_at || 0);
       
       
       
       const _costT = s.is_continuation ? "" : _costText(s.cost);
-      html += `<span class="st-thumb" data-seg="${s.seg_no}" title="点击进入④屏预览本段">
+      html += `<span class="st-thumb" data-seg="${s.seg_no}" title="点击在右侧预览本段成片">
                 <img src="${API}/api/jobs/${lv.jobId}/segment/${s.seg_no}/thumb?v=${_tv}" alt="" onerror="this.parentNode.classList.add('noimg');this.remove()">
               </span>`
               + (_costT ? `<span class="st-cost" title="本次任务消耗（整组续接合计一笔）">本次 ${_esc(_costT)}</span>` : "")
@@ -2903,15 +3067,14 @@ async function _pickImageForShot(s) {
     const retryBtn = e.target.closest(".st-retry");
     if (retryBtn) {
       e.stopImmediatePropagation();
-      _regenFromCard(parseInt(retryBtn.dataset.seg, 10));
+      
+      _submitSingleShot(parseInt(retryBtn.dataset.seg, 10));
       return;
     }
     const viewBtn = e.target.closest(".st-view, .st-thumb");
     if (viewBtn) {
       e.stopImmediatePropagation();
       
-      goStep(4);
-      buildStrip();
       selectSeg(parseInt(viewBtn.dataset.seg, 10));
       return;
     }
@@ -2923,48 +3086,45 @@ async function _pickImageForShot(s) {
     if (!s) return;
     if (s.status === "processing") { err("该段正在生成，请稍候"); return; }
     
+    const _shot = (lv.shots || [])[n - 1];
+    const _prompt = _shot && typeof _shot.prompt === "string" ? _shot.prompt : (s.prompt || "");
     
     
+    const _sec = _shot && _shot.estimated_seconds ? parseInt(_shot.estimated_seconds, 10) : undefined;
     
-    
-    const _isFailed = s.status === "failed";
-    const title = _isFailed ? "重新生成（上次失败）" : "重新生成";
-    const message = _isFailed
-      ? `确定重新生成第 ${n} 个分镜吗？\n\n` +
-        `ℹ 本段之前生成失败，没有产物可被覆盖。\n` +
-        `🔧 重新生成会按当前提示词提交（没有已生成的视频可覆盖，重试不会覆盖任何旧视频）。\n` +
-        `⚠ 若上次失败的原因没解决，重试仍可能再失败——可在第 4 步改完提示词再提交。\n` +
-        `❌ 不需要重试？点「取消」放弃。\n\n` +
-        `点「确定」开始重新生成，点「取消」放弃。`
-      : `确定重新生成第 ${n} 个分镜吗？\n\n` +
-        `⚠ 重新生成会覆盖「当前显示的版本」。\n` +
-        `✅ 旧版本会自动保留（最多 3 个），不会丢失。\n` +
-        `↩ 重新生成后可到第 4 步本分镜的「历史」查看旧稿/旧视频。\n` +
-        `❌ 想保留当前版本？点「取消」，编辑器里的改动一并留在内存里。\n\n` +
-        `点「确定」开始重新生成，点「取消」放弃。`;
+    const title = "重新生成";
+    const message = `确定重新生成第 ${n} 个分镜吗？` +
+      (s.status === "failed" ? "" : `\n\n旧版会自动归档。`);
     if (!(await lvConfirm({
       title,
       message,
       danger: true, okText: "重新生成",
     }))) return;
     setMsg(`第 ${n} 个分镜重新生成中…`);
+    const ownerJobId = lv.jobId || null;   
+    
+    const _pr = (_shot && _shot.post_refine) || null;
+    const _pf = (_shot && _shot.post_face) || null;
+    const _asp = (((_shot && _shot.aspect_ratio) || "").trim()) || ((lv.opts && lv.opts.aspect_ratio) || "");
+    const _res = (((_shot && _shot.resolution) || "").trim()) || ((lv.opts && lv.opts.resolution) || "");
     try {
       const r = await fetch(API + `/api/jobs/${lv.jobId}/segment/${n}/regen`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: s.prompt }),
+        body: JSON.stringify({
+          prompt: _prompt, seconds: _sec,
+          post_refine: _pr, post_face: _pf,
+          aspect_ratio: _asp, resolution: _res,
+          gen_params: lv.opts || {},
+        }),
       });
       const j = await r.json();
       if (!r.ok) { err("重生成失败：" + (j.error || "")); return; }
-      s.status = "processing";
-      s.error = null;
-      _fillShotStatusLineFor(n);
       
-      _autoJumpOK = true;
+      if (_ownerGone(ownerJobId)) { loadJobs(); return; }
+      if (!_adoptJobState(j)) { loadJobs(); return; }
       saveState();
-      
-      
-      _updateProgSum({ status: "processing" });
+      _refreshStatusUI();
       startPoll();
       loadJobs();
       setMsg(`第 ${n} 个分镜已加入队列，后台生成中…`);
@@ -2979,32 +3139,23 @@ async function _pickImageForShot(s) {
     if (st) _fillShotStatusLine(st, s);
   }
 
-  $("lvTo4").addEventListener("click", () => {
-    goStep(4);
-    buildStrip();
-    
-  });
-
   
   $("lvRetry").addEventListener("click", () => {
     if (!lv.jobId) return;
+    const ownerJobId = lv.jobId;   
     withBtn($("lvRetry"), "重试中…", async () => {
       setMsg("正在重新生成失败的镜头…");
       try {
         const r = await fetch(API + `/api/jobs/${lv.jobId}/retry`, { method: "POST" });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) { err("重试失败：" + (j.error || "")); return; }
-        lv.jobStatus = "processing";
+        
+        if (_ownerGone(ownerJobId)) { loadJobs(); return; }
+        if (!_adoptJobState(j)) { loadJobs(); return; }
         saveState();
-        _autoJumpOK = true;   
-        
-        
-        lv.segs.forEach((s) => {
-          if (s.status === "failed" || s.status === "cancelled") { s.status = "pending"; s.error = null; }
-        });
-        _updateShotStatusLines();
-        _updateProgSum({ status: "processing" });
+        _refreshStatusUI();
         startPoll();
+        loadJobs();
         const _rn = Number(j.retry_segments || 0);
         setMsg(_rn ? `已重新加入队列：${_rn} 段（已完成段保留，不重跑）` : "已重新加入队列生成失败的镜头…");
       } catch (e) {
@@ -3016,19 +3167,20 @@ async function _pickImageForShot(s) {
   
   $("lvResume").addEventListener("click", () => {
     if (!lv.jobId) return;
+    const ownerJobId = lv.jobId;   
     withBtn($("lvResume"), "启动中…", async () => {
       setMsg("正在继续生成剩余镜头…");
       try {
         const r = await fetch(API + `/api/jobs/${lv.jobId}/retry`, { method: "POST" });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) { err("继续失败：" + (j.error || "")); return; }
-        lv.jobStatus = "processing";
+        
+        if (_ownerGone(ownerJobId)) { loadJobs(); return; }
+        if (!_adoptJobState(j)) { loadJobs(); return; }
         saveState();
-        _autoJumpOK = false;   
-        lv.segs.forEach((s) => { if (s.status === "cancelled" || s.status === "failed") { s.status = "pending"; s.error = null; } });
-        _updateShotStatusLines();
-        _updateProgSum({ status: "processing" });
+        _refreshStatusUI();
         startPoll();
+        loadJobs();
         const _rn2 = Number(j.retry_segments || 0);
         setMsg(_rn2 ? `已继续生成：${_rn2} 段重新排队（已完成段保留）` : "已继续生成剩余镜头…");
       } catch (e) {
@@ -3039,55 +3191,32 @@ async function _pickImageForShot(s) {
 
   
   const lvVideo = $("lvVideo");
-  const lvStrip = $("lvStrip");
-  const lvSegPrompt = $("lvSegPrompt");
-  const _segEditor = createRichPromptEditor({
-    big: true,
-    text: "",
-    placeholder: "本镜生成提示词（图N=参考图，音频N=声线）。输入 @ 可把素材缩略图插入此处。",
-    getMats: () => _matsForSeg(_segCurrent()),
-    onCommit: (t) => { const s = _segCurrent(); if (s) { s.prompt = t; saveDraft(); } _updateCC(); },
-  });
-  if (lvSegPrompt && lvSegPrompt.parentNode) lvSegPrompt.parentNode.replaceChild(_segEditor.el, lvSegPrompt);
-  const lvCapSeg = $("lvCapSeg");
-  const lvCapSec = $("lvCapSec");
+  const lvPlayIc = $("lvPlayIc");
+  const lvJump = $("lvJump");
   const lvPrevCap = $("lvPrevCap");
   const lvPrevSec = $("lvPrevSec");
   const lvPrevStatus = $("lvPrevStatus");
   const lvPrevMeta = $("lvPrevMeta");
-  const lvCC = $("lvCC");
-  const lvPrev = $("lvPrev");
-  const lvNext = $("lvNext");
-  const lvRegen = $("lvRegen");
-  const lvJump = $("lvJump");
-  const lvPlayIc = $("lvPlayIc");
-  const lvCont = $("lvCont");
-  const lvChip1 = $("lvChip1"), lvChip2 = $("lvChip2"), lvChip3 = $("lvChip3");
-  const lvMatRow = $("lvMatRow");
-
-  
-  
-  const lvSecEdit = $("lvSecEdit");
-  const lvSecDown = $("lvSecDown");
-  const lvSecUp = $("lvSecUp");
-  let lvSecDirty = false;
-  let lvSecVal = 5;   
-
-  
-  let lvContinuous = true;
 
   function _statusCN(s) {
     if (!s) return "—";
-    if (s.status === "completed") return "已完成";
-    if (s.status === "processing") return "生成中…";
-    if (s.status === "failed") return "失败" + (s.error ? "：" + s.error : "");
-    return s.status;
+    
+    const _ss = s.state || {};
+    const base = _ss.label || "—";
+    if (s.status === "failed") {
+      const r = _ss.detail || (s.error || "");
+      
+      return base + (r ? "：" + r : "");
+    }
+    return base;
   }
   function _statusKey(s) {
     if (!s) return "muted";
     if (s.status === "completed") return "completed";
-    if (s.status === "processing") return "processing";
     if (s.status === "failed") return "failed";
+    
+    const _ss = s.state || {};
+    if (s.status === "processing") return _ss.phase || "processing";
     return "editing";
   }
   function _parseArr(v) {
@@ -3138,89 +3267,15 @@ async function _pickImageForShot(s) {
     });
     return out;
   }
-
-  function buildStrip() {
-    lvStrip.innerHTML = "";
-    if (!lv.segs.length) {
-      
-      
-      
-      lvStrip.innerHTML = `<div style="color:var(--mut-2);font-size:12px;padding:8px 12px">暂无片段${lv.jobId ? "（任务已选中，正在加载片段…）" : "（还没选中任务）"}</div>`;
-      return;
-    }
-    const arrL = document.createElement("button");
-    arrL.className = "arr"; arrL.type = "button"; arrL.innerHTML = '<span class="ic ic-chevron-left" aria-hidden="true"></span>';
-    const arrR = document.createElement("button");
-    arrR.className = "arr"; arrR.type = "button"; arrR.innerHTML = '<span class="ic ic-chevron-right" aria-hidden="true"></span>';
-    const inner = document.createElement("div");
-    inner.style.cssText = "display:flex;gap:8px;overflow-x:auto;flex:1;scroll-behavior:smooth;padding:0 2px;";
-    lvStrip.appendChild(arrL);
-    lvStrip.appendChild(inner);
-    lvStrip.appendChild(arrR);
-    arrL.addEventListener("click", () => inner.scrollBy({ left: -inner.clientWidth * 0.8, behavior: "smooth" }));
-    arrR.addEventListener("click", () => inner.scrollBy({ left: inner.clientWidth * 0.8, behavior: "smooth" }));
-    
-    
-    
-    
-    const _syncArrows = () => {
-      const max = inner.scrollWidth - inner.clientWidth;
-      arrL.disabled = inner.scrollLeft <= 2;
-      arrR.disabled = max <= 2 || inner.scrollLeft >= max - 2;
-    };
-    inner.addEventListener("scroll", _syncArrows, { passive: true });
-    _syncArrows();
-    requestAnimationFrame(() => { _syncArrows(); requestAnimationFrame(_syncArrows); });
-    setTimeout(_syncArrows, 350);
-    inner.querySelectorAll(".thumb img").forEach((im) => {
-      im.addEventListener("load", _syncArrows, { once: true });
-      im.addEventListener("error", _syncArrows, { once: true });
-    });
-    lv.segs.forEach((s) => {
-      const b = document.createElement("div");
-      b.className = "seg";
-      b.setAttribute("data-seg", s.seg_no);
-      const done = s.status === "completed";
-      const stCN = s.status === "completed" ? "已完成" : s.status === "processing" ? "生成中" : s.status === "failed" ? "失败" : s.status;
-      let thumb;
-      if (done) {
-        
-        const src = API + `/api/jobs/${lv.jobId}/segment/${s.seg_no}/thumb?t=${Date.now()}`;
-        thumb = `<div class="thumb"><img src="${src}" alt="镜头 ${s.seg_no}" referrerpolicy="no-referrer">`
-          + `<span class="badge">${s.seg_no}</span><span class="playing">播放中</span>`
-          + `<div class="ph" style="display:none"><span class="sp"><span class="ic ic-film" aria-hidden="true"></span></span>无预览</div></div>`;
-      } else {
-        const ic = s.status === "processing" ? "ic-loader" : s.status === "failed" ? "ic-fail" : "ic-more";
-        thumb = `<div class="thumb"><span class="badge">${s.seg_no}</span>`
-          + `<div class="ph"><span class="sp"><span class="ic ${ic}" aria-hidden="true"></span></span>${stCN}</div></div>`;
-      }
-      b.innerHTML = thumb
-        + `<div class="cap"><span class="nm">镜头 ${s.seg_no}</span><span class="sc">${(s.seconds || 5)}s</span></div>`;
-      if (done) {
-        const img = b.querySelector("img");
-        const ph = b.querySelector(".ph");
-        img.addEventListener("error", () => { img.style.display = "none"; if (ph) ph.style.display = ""; });
-      }
-      b.addEventListener("click", () => selectSeg(s.seg_no));
-      inner.appendChild(b);
-    });
-    if (lv.segs.length) selectSeg(1);
-  }
-
   
-  function _useFinal() {
-    return lvContinuous && !!lv.finalUrl;
-  }
+  let lvContinuous = false;
+  function _useFinal() { return lvContinuous && !!lv.finalUrl; }
   
   function _segStart(n) {
     let t = 0;
-    for (const s of lv.segs) {
-      if (s.seg_no >= n) break;
-      t += (s.real_seconds || s.seconds || 5);
-    }
+    for (const s of lv.segs) { if (s.seg_no >= n) break; t += (s.real_seconds || s.seconds || 5); }
     return t;
   }
-  
   function _segAt(t) {
     let acc = 0;
     for (const s of lv.segs) {
@@ -3230,474 +3285,190 @@ async function _pickImageForShot(s) {
     }
     return lv.segs.length;
   }
-
-  function selectSeg(n, autoplay) {
-    if (!lv.segs.length) return;
-    n = Math.max(1, Math.min(n, lv.segs.length));
-    _syncSegUI(n);
-    _playSegSrc(n, autoplay);
-  }
-
   
-  
-  
-  
-  function _syncSecStepper() {
-    const _sb = lvSecBounds();
-    const _s = (lv.segs || []).find((x) => x.seg_no === lv.selSeg);
-    const _secLock = !!(_s && _s.status === "processing");   
-    if (lvSecDown) lvSecDown.disabled = _secLock || lvSecVal <= _sb.min;
-    if (lvSecUp) lvSecUp.disabled = _secLock || lvSecVal >= _sb.max;
-    if (lvSecEdit) {
-      lvSecEdit.style.opacity = _secLock ? ".55" : "";
-      lvSecEdit.title = `调整本段时长（${_sb.min}~${_sb.max} 秒，界随所选视频模型），改动会随「重新生成本段」一起生效`;
+  function _resetPrevInfo() {
+    if (lvPrevStatus) { lvPrevStatus.textContent = "状态：—"; lvPrevStatus.className = "lv-prev-status s-muted"; }
+    if (lvPrevMeta) lvPrevMeta.innerHTML = "";
+    if (lvPrevSec) lvPrevSec.textContent = "本段时长：5s";
+    if (lvPrevCap) lvPrevCap.textContent = "";
+    if (lvPlayIc) lvPlayIc.style.display = "";
+    if (lvVideo) {
+      try { lvVideo.pause(); lvVideo.removeAttribute("src"); lvVideo.load(); } catch (_) {}
     }
+    lvContinuous = false;
   }
-
+  
+  function _resetProgSum() {
+    const box = $("lvProgSum");
+    if (box) {
+      box.hidden = true;
+      box.classList.remove("st-processing", "st-completed", "st-failed", "st-stopped");
+    }
+    const _put = (id, tx, cls) => { const e = $(id); if (e) { e.textContent = tx; if (cls) e.className = cls; } };
+    _put("lvPsN", "0/0");
+    _put("lvPsElapsed", "—", "ps-v");
+    _put("lvPsEta", "—", "ps-v");
+    _put("lvPsSt", "—", "ps-v amber");
+    _put("lvPsHint", "");
+    const _ck = $("lvPsCostK"), _cv = $("lvPsCost");
+    if (_ck) _ck.hidden = true;
+    if (_cv) { _cv.hidden = true; _cv.textContent = "—"; }
+    const bar = $("lvPsBar"); if (bar) bar.style.width = "0%";
+    ["lvRetry", "lvResume", "lvStopBtn"].forEach((id) => {
+      const b = $(id); if (b) { b.hidden = true; b.disabled = true; }
+    });
+  }
+  
+  function _resetJobContext() {
+    stopPoll();
+    lv.state = null;
+    lv.jobStatus = null;        
+    lv.queueState = null;
+    lv.segs = [];
+    lv.finalUrl = null;
+    lv.selSeg = 1;
+    lv.shotsBudgetError = "";
+    lv._jobLabelSeen = null;    
+    _resetPrevInfo();
+    _resetProgSum();
+  }
+  
+  function _prevShowJobState() {
+    if (!lvPrevStatus) return;
+    const st = lv.state || {};
+    if (!st.label) return;
+    lvPrevStatus.textContent = "状态：" + st.label + (st.detail ? "：" + st.detail : "");
+    lvPrevStatus.className = "lv-prev-status s-" + (st.phase || (st.status === "failed" ? "failed" : "muted"));
+  }
   
   function _syncSegUI(n) {
     lv.selSeg = n;
     saveState();
-    const inner = lvStrip.querySelector("div");
-    if (inner) inner.querySelectorAll(".seg").forEach((b) =>
-      b.classList.toggle("on", +b.getAttribute("data-seg") === n)
-    );
     const s = lv.segs.find((x) => x.seg_no === n);
-    if (!s) return;
-    lvCapSeg.textContent = "镜头 " + n;
-    
-    lvSecVal = s.seconds || 5;
-    lvCapSec.textContent = lvSecVal + "s";
-    lvSecDirty = false;
-    if (lvSecEdit) lvSecEdit.classList.remove("dirty");
-    
-    _syncSecStepper();
-    
-    let chips = [];
-    try { chips = _matChips(s); } catch (e) { console.error("[lv][matChips] err", e, s); chips = [{ label: "素材加载失败", isMiss: true }]; }
     
     
-    if (lvMatRow) {
-      Array.from(lvMatRow.querySelectorAll(".chip")).forEach((el) => el.remove());
-      chips.forEach((item) => {
-        const sp = document.createElement("span");
-        const cls = ["chip", "lv-mat"];
-        if (item.kind === "audio") cls.push("audio");
-        if (item.isTail) cls.push("tail");
-        if (item.isMiss) cls.push("miss");
-        sp.className = cls.join(" ");
-        if (item.kind === "image" && !item.isMiss && !item.isTail) {
-          
-          
-          const img = document.createElement("img");
-          img.className = "lv-mat-img";
-          img.alt = "";
-          img.loading = "lazy";
-          img.decoding = "async";
-          img.referrerPolicy = "no-referrer";
-          img.src = _thumb(_encUrl(item.url || ""), 128);
-          img.onerror = () => {
-            img.removeAttribute("src");
-            img.classList.add("lv-mat-img-failed");
-            img.alt = "图片失效";
-            sp.title = "素材加载失败: " + (item.url || "(no url)");
-          };
-          sp.appendChild(img);
-        } else if (item.kind === "audio") {
-          const ico = document.createElement("span");
-          ico.className = "lv-mat-ico ic ic-audio";
-          sp.appendChild(ico);
-        } else if (item.isTail) {
-          const ico = document.createElement("span");
-          ico.className = "lv-mat-ico ic ic-continue";
-          sp.appendChild(ico);
-        }
-        const tag = document.createElement("span");
-        tag.className = "lv-mat-tag";
-        if (!item.kind) {
-          
-          tag.textContent = item.label || "";
-        } else if (item.isTail) {
-          tag.textContent = "图1 尾帧";
-        } else if (item.isMiss) {
-          tag.textContent = "图1 无图";
-        } else {
-          const prefix = (item.kind === "audio" ? "音频" : "图") + item.idx;
-          tag.textContent = item.label ? (prefix + " " + item.label) : prefix;
-        }
-        sp.appendChild(tag);
-        lvMatRow.appendChild(sp);
-      });
-    } else {
-      
-      [lvChip1, lvChip2, lvChip3].forEach((el, i) => {
-        const it = chips[i];
-        if (!it) { el.style.display = "none"; return; }
-        const txt = it.label ? ((it.kind === "audio" ? "音频" + it.idx : "图" + it.idx) + " " + it.label) : (it.label || "");
-        el.innerHTML = (it.kind === "audio" ? '<span class="ic ic-audio" aria-hidden="true"></span>' : "") + _esc(txt);
-        el.style.display = "";
-      });
+    
+    if (!s) {
+      _resetPrevInfo();
+      _prevShowJobState();
+      return;
     }
-    
+    if (lvPrevSec) lvPrevSec.textContent = "本段时长：" + (s.seconds || 5) + "s";
+    if (lvPrevStatus) {
+      lvPrevStatus.textContent = "状态：" + _statusCN(s);
+      lvPrevStatus.className = "lv-prev-status s-" + _statusKey(s);
+    }
     if (lvPrevMeta) {
-      const pick = (...vs) => {
-        for (const v of vs) { const t = (v == null ? "" : String(v)).trim(); if (t) return t; }
-        return "—";
-      };
+      const pick = (...vs) => { for (const v of vs) { const t = (v == null ? "" : String(v)).trim(); if (t) return t; } return "—"; };
       const model = pick(s.model, lv.opts && lv.opts.model);
       const aspect = pick(s.aspect_ratio, lv.opts && lv.opts.aspect_ratio);
       const res = pick(s.resolution, lv.opts && lv.opts.resolution);
       const fmt = (k, v) => '<span class="m"><b>' + k + '：</b>' + _esc(v) + '</span>';
-      
       let _extra = [];
-      try { _extra = _h3JobMetaRows().concat(_h3SegMetaRows(s)); } catch (e) { console.error("[lv][h3meta] err", e); _extra = []; }
-      lvPrevMeta.innerHTML = fmt("模型", model) + fmt("画幅", aspect) + fmt("分辨率", res)
-        + _extra.map((r) => fmt(r[0], r[1])).join("");
+      try { _extra = _h3JobMetaRows(s).concat(_h3SegMetaRows(s)); } catch (e) { _extra = []; }
+      lvPrevMeta.innerHTML = fmt("模型", model) + fmt("画幅", aspect) + fmt("分辨率", res) + _extra.map((r) => fmt(r[0], r[1])).join("");
     }
-    _segEditor.setText(s.prompt || "");
-    _updateCC();
+    if (lvPrevCap) lvPrevCap.textContent = "";
     
-    
-    lvPrevCap.textContent = "";
-    if (lvPrevSec) lvPrevSec.textContent = "本段时长：" + (s.seconds || 5) + "s";
-    lvPrevStatus.textContent = "状态：" + _statusCN(s);
-    lvPrevStatus.className = "lv-prev-status s-" + _statusKey(s);
-    lvPrev.disabled = n <= 1;
-    lvNext.disabled = n >= lv.segs.length;
-    if (inner) {
-      const on = inner.querySelector(".seg.on");
-      if (on) on.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
-    }
+    document.querySelectorAll(".lv-shot[data-seg-no]").forEach((c) =>
+      c.classList.toggle("sel", +c.getAttribute("data-seg-no") === n)
+    );
+  }
+  
+  function selectSeg(n, autoplay) {
+    if (!lv.segs.length) return;
+    n = Math.max(1, Math.min(n, lv.segs.length));
+    if (autoplay === undefined) autoplay = true;
+    _syncSegUI(n);
+    _playSegSrc(n, autoplay);
+  }
+  
+  function _cardHistOf(segNo) {
+    const seg = (lv.segs || []).find((x) => x.seg_no === segNo);
+    const all = (seg && Array.isArray(seg.prompt_history)) ? seg.prompt_history : [];
+    return all
+      .filter((h) => h && Number(h.ver) > 0)          
+      .sort((a, b) => Number(b.ver) - Number(a.ver)); 
   }
 
+  
+  function _verOf(segNo, vi) {
+    const hist = _cardHistOf(segNo);
+    return vi > 0 ? (hist[vi - 1] || null) : null;
+  }
+  
+  function _renderVerSwitch(segNo, vi) {
+    lv.segVer = lv.segVer || {};
+    lv.segVer[segNo] = vi;
+    const _st = lvShots ? lvShots.scrollTop : 0;
+    renderShots();
+    if (lvShots) lvShots.scrollTop = _st;
+    const ver = _verOf(segNo, vi);
+    _syncSegUI(segNo);
+    _playSegSrc(segNo, false);
+    if (ver) setMsg(`第 ${segNo} 镜 · 历史版 v${ver.ver}（只读，右栏是归档画面）`);
+    else setMsg(`第 ${segNo} 镜 · 已回到当前版`);
+  }
   function _playSegSrc(n, autoplay) {
+    
+    
+    const _vi = parseInt((lv.segVer || {})[n], 10) || 0;
+    const _ver = _vi > 0 ? _verOf(n, _vi) : null;
+    if (_ver) {
+      lvVideo.src = API + `/api/jobs/${lv.jobId}/segment/${n}/v/${_ver.ver}.mp4?t=${Date.now()}`;
+      lvVideo.load();
+      if (autoplay) { lvPlayIc.style.display = "none"; lvVideo.play().catch(() => { lvPlayIc.style.display = ""; }); }
+      else lvPlayIc.style.display = "";
+      return;
+    }
     if (_useFinal()) {
-      
       const want = API + lv.finalUrl + "?t=" + Date.now();
       const changingSrc = !lvVideo.src || !lvVideo.src.includes("/final.mp4") || !lvVideo.src.includes(lv.jobId);
-      if (changingSrc) {
-        lvVideo.src = want;
-        lvVideo.load();
-      }
-      const start = _segStart(n);
-      
-      
-      
-      
-      
-      
-      const seekTo = start + 0.01;
+      if (changingSrc) { lvVideo.src = want; lvVideo.load(); }
+      const seekTo = _segStart(n) + 0.01;
       const go = () => {
         try { lvVideo.currentTime = seekTo; } catch (_) {}
-        if (autoplay) {
-          lvPlayIc.style.display = "none";
-          lvVideo.play().catch(() => { lvPlayIc.style.display = ""; });
-        } else {
-          lvPlayIc.style.display = "";
-        }
+        if (autoplay) { lvPlayIc.style.display = "none"; lvVideo.play().catch(() => { lvPlayIc.style.display = ""; }); }
+        else lvPlayIc.style.display = "";
       };
-      if (changingSrc) {
-        
-        lvVideo.addEventListener("loadedmetadata", go, { once: true });
-      } else {
-        go();   
-      }
+      if (changingSrc) lvVideo.addEventListener("loadedmetadata", go, { once: true });
+      else go();
     } else {
       lvVideo.src = API + `/api/jobs/${lv.jobId}/segment/${n}.mp4?t=${Date.now()}`;
       lvVideo.load();
-      if (autoplay) {
-        lvPlayIc.style.display = "none";
-        lvVideo.play().catch(() => { lvPlayIc.style.display = ""; });   
-      } else {
-        lvPlayIc.style.display = "";
-      }
+      if (autoplay) { lvPlayIc.style.display = "none"; lvVideo.play().catch(() => { lvPlayIc.style.display = ""; }); }
+      else lvPlayIc.style.display = "";
     }
   }
-
-  function updatePlayingBadge() {
-    const playing = !lvVideo.paused && !lvVideo.ended && lvVideo.currentTime > 0;
-    lvStrip.querySelectorAll(".seg").forEach((b) =>
-      b.classList.toggle("playing", +b.getAttribute("data-seg") === lv.selSeg && playing)
-    );
+  
+  function buildStrip() {
+    if (lv.segs.length) _syncSegUI(lv.selSeg || 1);
+    else _resetPrevInfo();   
   }
+  
+  const lvPlayAll = $("lvPlayAll");
+  if (lvPlayAll) lvPlayAll.addEventListener("click", () => {
+    if (!lv.finalUrl) { setMsg("成片尚未生成（全段完成后自动拼接），当前只能逐段预览", "warn"); return; }
+    lvContinuous = true;
+    lvVideo.src = API + lv.finalUrl + "?t=" + Date.now();
+    lvVideo.load();
+    lvPlayIc.style.display = "none";
+    lvVideo.play().catch(() => { lvPlayIc.style.display = ""; });
+    setMsg("正在播放全片");
+  });
 
-  function _updateCC() {
-    lvCC.textContent = [..._segEditor.getText()].length + " 字符";
-  }
   
   lvVideo.addEventListener("timeupdate", () => {
     if (_useFinal() && lv.segs.length) {
       const cur = _segAt(lvVideo.currentTime);
-      if (cur !== lv.selSeg) {
-        _syncSegUI(cur);
-        updatePlayingBadge();
-      }
+      if (cur !== lv.selSeg) { _syncSegUI(cur); }
     }
   });
-  lvVideo.addEventListener("play", () => { lvPlayIc.style.display = "none"; updatePlayingBadge(); });
-  lvVideo.addEventListener("pause", () => { if (!lvVideo.ended) lvPlayIc.style.display = ""; updatePlayingBadge(); });
+  lvVideo.addEventListener("play", () => { lvPlayIc.style.display = "none"; });
+  lvVideo.addEventListener("pause", () => { if (!lvVideo.ended) lvPlayIc.style.display = ""; });
   lvVideo.addEventListener("ended", () => {
-    updatePlayingBadge();
     
-    
-    if (!_useFinal() && lvContinuous && lv.selSeg < lv.segs.length) {
-      selectSeg(lv.selSeg + 1, true);
-    } else {
-      lvPlayIc.style.display = "";
-      if (lv.selSeg >= lv.segs.length) { lvPrevStatus.textContent = "状态：播放完毕"; lvPrevStatus.className = "lv-prev-status s-completed"; }
-    }
+    lvPlayIc.style.display = "";
+    if (lvPrevStatus && lv.selSeg >= lv.segs.length) { lvPrevStatus.textContent = "状态：播放完毕"; lvPrevStatus.className = "lv-prev-status s-completed"; }
   });
-
-  lvJump.addEventListener("click", () => selectSeg(lv.selSeg, true));                    
-  
-  
-
-  
-  const lvHistory = $("lvHistory");
-  let _histEl = null;
-  function _fmtTs(ts) {
-    const d = new Date((ts || 0) * 1000);
-    const p = (x) => String(x).padStart(2, "0");
-    return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-  }
-  function _closeHist() { if (_histEl) { _histEl.remove(); _histEl = null; document.removeEventListener("keydown", _histKey, true); } }
-  function _histKey(e) { if (e.key === "Escape") { e.stopPropagation(); _closeHist(); } }
-  if (lvHistory) lvHistory.addEventListener("click", async () => {
-    if (!lv.jobId || !lv.selSeg) { err("请先选择一个段落"); return; }
-    const n = lv.selSeg;
-    try {
-      const r = await fetch(API + `/api/jobs/${lv.jobId}/segment/${n}/history`);
-      const j = await r.json();
-      if (!r.ok) { err("历史查询失败：" + (j.error || "")); return; }
-      _closeHist();
-      const wrap = document.createElement("div");
-      wrap.className = "lv-pk";
-      const hist = j.history || [];
-      const vids = j.videos || [];   
-      
-      const _trunc = (x) => (x.length > 12 ? x.slice(0, 12) + "…" : x);
-      const _matHtml = (list) => list.slice(0, 6).map((m) => `<span class="h-mat"><span class="ic ic-${m.ic}" aria-hidden="true"></span>${_esc(m.t)}</span>`).join("");
-      const rows = hist.length
-        ? hist.slice().reverse().map((h, ri) => {
-            
-            const ver = h.ver || (hist.length - ri);
-            const idx = hist.length - ri;   
-            const mats = _matHtml([
-              ...(h.images || []).filter((k) => k !== "tail").map((k) => ({ ic: "image", t: "图·" + _trunc(k) })),
-              ...(h.audio || []).map((a) => ({ ic: "audio", t: "·" + _trunc(a) })),
-            ]);
-            
-            const vid = (vids || []).find((x) => x.v === ver);
-            const vidBtn = vid
-              ? `<button class="h-vid" data-url="${vid.url}" type="button" title="在预览区播放这一版当时生成的画面（不会重新生成）"><span class="ic ic-resume" aria-hidden="true"></span>看这版画面</button>`
-              : `<span class="h-novid" title="历史画面最多保留 3 版，这一版已被更新的版本顶掉">旧画面已超出保留数量</span>`;
-            
-            const delBtn = `<button class="h-del" data-didx="${idx - 1}" data-dver="${ver}" type="button" title="删除这一版旧记录">删除</button>`;
-            return `<div class="lv-hist-it" data-i="${idx - 1}" data-role="old">
-              <div class="h-when"><b>v${ver}</b><span>${_fmtTs(h.ts)}</span><span>${(h.seconds || 5)}s</span><span style="margin-left:auto;color:var(--vio);font-size:11px">点击放回编辑器</span></div>
-              <div class="h-txt">${_esc((h.prompt || "").slice(0, 160) || "（空）")}</div>
-              <div class="h-mats">${mats}<span style="flex:1"></span>${vidBtn}${delBtn}</div>
-            </div>`;
-          }).join("")
-        : `<div class="lv-hist-cur" style="padding:22px 6px;text-align:center">这一段还没有历史版本。<br>以后每次「重新生成本段」，替换前的旧提示词和旧画面都会自动保存在这里。</div>`;
-      const cur = j.current || {};
-      
-      const _same = (cur.prompt || "") && hist.find((h) => (h.prompt || "") === (cur.prompt || ""));
-      const curMats = _matHtml([
-        ...(cur.images || []).filter((k) => k !== "tail").map((k) => ({ ic: "image", t: "图·" + _trunc(k) })),
-        ...(cur.audio || []).map((a) => ({ ic: "audio", t: "·" + _trunc(a) })),
-      ]);
-      const curVidUrl = `/api/jobs/${lv.jobId}/segment/${n}.mp4?t=${Date.now()}`;
-      wrap.innerHTML = `
-        <div class="lv-pk-mask"></div>
-        <div class="lv-pk-box" style="width:min(640px,94vw)">
-          <div class="lv-pk-t">第 ${n} 段 · 历史版本<span class="lv-sub" style="margin-left:8px;font-weight:400">共 ${hist.length} 版旧记录 · 最下方「当前生效」是现在正在使用的版本</span></div>
-          <div class="lv-pk-list" style="gap:6px">${rows}</div>
-          <div class="lv-hist-it" data-role="cur" style="cursor:default;border-color:var(--vio-line);background:var(--vio-soft)">
-            <div class="h-when"><b style="color:var(--txt)"><span class="ic ic-dot" aria-hidden="true"></span>当前生效</b><span>${cur.updated_at ? _fmtTs(cur.updated_at) : ""}</span><span>${(cur.seconds || 5)}s</span>${_same ? `<span style="color:var(--amber,#c80)">内容与 v${_same.ver || "?"} 相同（重提未改提示词）</span>` : ""}<span style="margin-left:auto"></span></div>
-            <div class="h-txt">${_esc((cur.prompt || "").slice(0, 160) || "（空）")}</div>
-            <div class="h-mats">${curMats}<span style="flex:1"></span><button class="h-vid" data-url="${curVidUrl}" type="button" title="在预览区播放这一段现在正在使用的画面"><span class="ic ic-resume" aria-hidden="true"></span>看当前画面</button></div>
-          </div>
-        </div>`;
-      document.addEventListener("keydown", _histKey, true);
-      wrap.querySelector(".lv-pk-mask").addEventListener("click", _closeHist);
-      
-      const _curVidBtn = wrap.querySelector('[data-role="cur"] .h-vid');
-      if (_curVidBtn) _curVidBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        lvVideo.pause();
-        lvVideo.src = e.currentTarget.dataset.url;
-        lvVideo.play().catch(() => {});
-        lvPrevCap.textContent = `镜头 ${n} · 当前画面`;
-        setMsg(`正在预览第 ${n} 段当前画面（切换到其他段会自动恢复）`);
-      });
-      
-      
-      wrap.querySelector(".lv-pk-list").addEventListener("click", (e) => {
-        
-        const db = e.target.closest(".h-del");
-        if (db) {
-          e.stopPropagation();
-          e.stopImmediatePropagation();   
-          const didx = parseInt(db.dataset.didx, 10);
-          const dver = parseInt(db.dataset.dver, 10);
-          const _hasVid = (vids || []).some((x) => x.v === dver);
-          (async () => {
-            if (!(await lvConfirm({
-              title: "删除历史版本",
-              message: `确定删除第 ${dver} 版旧记录？`,
-              danger: true, okText: "删除",
-            }))) return;
-            try {
-              const r = await fetch(API + `/api/jobs/${lv.jobId}/segment/${n}/history/${didx}`, {
-                method: "DELETE",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ ver: dver, video_ver: _hasVid ? dver : null }),
-              });
-              const j = await r.json().catch(() => ({}));
-              if (!r.ok) { err("删除失败：" + (j.error || "")); return; }
-              setMsg(`已删除第 ${dver} 版${j.removed_video ? "（含已生成视频 " + j.removed_video + "）" : ""}`);
-              _closeHist();
-              lvHistory.click();   
-            } catch (ex) { err("删除异常：" + ex.message); }
-          })();
-          return;
-        }
-        const vb = e.target.closest(".h-vid");
-        if (vb) {
-          e.stopPropagation();
-          e.stopImmediatePropagation();   
-          lvVideo.pause();
-          lvVideo.src = vb.dataset.url;
-          lvVideo.play().catch(() => {});
-          const _vm = /v(\d)/.exec(vb.textContent);
-          lvPrevCap.textContent = `镜头 ${n} · 归档画面 v${_vm ? _vm[1] : "?"}（回看中，切段恢复）`;
-          setMsg(`正在预览第 ${n} 段的旧版画面（切换到其他段会自动恢复）`);
-          return;
-        }
-      });
-      wrap.querySelector(".lv-pk-list").addEventListener("click", (e) => {
-        const it = e.target.closest(".lv-hist-it[data-role=old]");
-        if (!it) return;
-        const h = hist[parseInt(it.dataset.i, 10)];
-        if (!h) return;
-        
-        _segEditor.setText(h.prompt || "");
-        const _sb = lvSecBounds();
-        if (h.seconds && h.seconds >= _sb.min && h.seconds <= _sb.max) {
-          lvSecVal = h.seconds;
-          lvCapSec.textContent = lvSecVal + "s";
-          _syncSecStepper();
-          
-          const cur = _segCurrent();
-          lvSecDirty = !!(cur && cur.seconds !== h.seconds);
-          lvSecEdit.classList.toggle("dirty", lvSecDirty);
-        }
-        _updateCC();
-        _closeHist();
-        setMsg(`已把 v${(hist[parseInt(it.dataset.i, 10)] || {}).ver || "?"} 旧稿放回编辑器（还没有生效，确认内容后点「重新生成本段」才会真正生成）`);
-      });
-      document.body.appendChild(wrap);
-      _histEl = wrap;
-    } catch (e) { err("历史查询异常：" + e.message); }
-  });
-  lvCont.addEventListener("click", () => {
-    lvContinuous = !lvContinuous;
-    lvCont.classList.toggle("on", lvContinuous);
-    lvCont.setAttribute("aria-pressed", lvContinuous ? "true" : "false");
-    
-    
-    
-    if (lv.jobId && lv.selSeg) {
-      const wasPaused = lvVideo.paused;
-      lvVideo.pause();
-      selectSeg(lv.selSeg, !wasPaused);
-    }
-  });
-  lvPrev.addEventListener("click", () => { if (lv.selSeg > 1) selectSeg(lv.selSeg - 1); });
-  lvNext.addEventListener("click", () => { if (lv.selSeg < lv.segs.length) selectSeg(lv.selSeg + 1); });
-
-  
-  if (lvSecDown) lvSecDown.addEventListener("click", () => {
-    const _sb = lvSecBounds();
-    if (lvSecVal <= _sb.min) return;
-    lvSecVal--; lvCapSec.textContent = lvSecVal + "s";
-    _syncSecStepper();
-    lvSecDirty = true; lvSecEdit.classList.add("dirty");
-  });
-  if (lvSecUp) lvSecUp.addEventListener("click", () => {
-    const _sb = lvSecBounds();
-    if (lvSecVal >= _sb.max) return;
-    lvSecVal++; lvCapSec.textContent = lvSecVal + "s";
-    _syncSecStepper();
-    lvSecDirty = true; lvSecEdit.classList.add("dirty");
-  });
-  
-  
-  if (lvSecEdit) lvSecEdit.addEventListener("change", () => {
-    const _sb = lvSecBounds();
-    const v = parseInt(lvSecEdit.value, 10);
-    if (!Number.isFinite(v)) { lvSecEdit.value = String(lvSecVal); return; }   
-    const _clamped = Math.max(_sb.min, Math.min(_sb.max, v));
-    lvSecVal = _clamped;
-    lvSecEdit.value = String(_clamped);
-    lvCapSec.textContent = lvSecVal + "s";
-    if (_clamped !== v) setMsg(`时长已按当前模型界钳到 ${_clamped} 秒（${_sb.min}~${_sb.max}）`);
-    const _cur = (lv.segs || []).find((x) => x.seg_no === lv.selSeg) || {};
-    lvSecDirty = lvSecVal !== (_cur.seconds || 5);
-    lvSecEdit.classList.toggle("dirty", lvSecDirty);
-    _syncSecStepper();
-  });
-
-  lvRegen.addEventListener("click", async () => {
-    const n = lv.selSeg;
-    const s = lv.segs.find((x) => x.seg_no === n);
-    if (s && s.status === "processing") { err("该段正在生成，请稍候"); return; }
-    
-    const _mainRunning = lv.jobStatus === "processing" || (lv.segs || []).some((s) => s.status === "processing");
-    const _parallelNote = _mainRunning ? "\n\n· 提示：还有其他段正在生成，本段会排在它后面一起生成，等待时间可能变长。" : "";
-    const _secNote = lvSecDirty ? `\n\n· 本段时长将由 ${s.seconds || 5}s 改为 ${lvSecVal}s。` : "";
-    if (!(await lvConfirm({
-      title: "重新生成本段",
-      message: `将按编辑器里的提示词，重新生成第 ${n} 段视频（大约需要 2~3 分钟）。\n\n` +
-        `· 生成完成后，现在这段视频会被新视频替换；\n` +
-        `· 替换前的旧视频和旧提示词会自动存入「历史」，随时可以回看（旧提示词全部保留，旧画面保留最近 3 版）；\n` +
-        `· 点「取消」则不做任何改动，编辑器里已修改的内容也仍会保留。` +
-        `${_secNote}${_parallelNote}`,
-      danger: true,
-      okText: "开始重新生成",
-    }))) return;
-    withBtn(lvRegen, "生成中…", async () => {
-      const prompt = _segEditor.getText().trim();
-      
-      const body = { prompt };
-      if (lvSecDirty) body.seconds = lvSecVal;
-      setMsg(`第 ${n} 段开始重新生成，预计 2~3 分钟，期间可以切换或操作其他段落`);
-      const r = await fetch(API + `/api/jobs/${lv.jobId}/segment/${n}/regen`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const j = await r.json();
-      if (!r.ok) { err("重生成失败：" + (j.error || "")); return; }
-      
-      lvSecDirty = false;
-      if (lvSecEdit) lvSecEdit.classList.remove("dirty");
-      
-      
-      if (body.seconds && s) s.seconds = body.seconds;
-      
-      
-      const _shot = (lv.shots || []).find((x) => x.shot_no === n);
-      if (_shot) { _shot.prompt = prompt; saveDraft(); }
-      
-      
-      setMsg(`第 ${n} 个分镜已加入队列，后台生成中…`);
-      lv.finalUrl = null;   
-      startPoll();
-      buildStrip();
-      selectSeg(n);
-      loadJobs();
-      setMsg("");
-    });
-  });
+  lvJump.addEventListener("click", () => selectSeg(lv.selSeg || 1, true));

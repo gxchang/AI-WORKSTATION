@@ -44,7 +44,7 @@ var d=tlData(n);var a=d.segs[track];var idx=a.length;var T=d.ui.T;if(typeof T===
 var seg={id:"s"+Math.random().toString(36).slice(2,8),url:url,kind:kind,name:item.name||"",at:0,len:(kind==="image")?IMG_LEN:(j.duration||IMG_LEN),in:0,total:(kind==="image")?0:(j.duration||0),vw:j.width||0,vh:j.height||0};if(kind!=="image"){seg.total=j.duration||0;seg.len=seg.total>0?seg.total:IMG_LEN;}
 HOST.push(HOST.snapshot());a.splice(idx,0,seg);reflow(a,idx);var landed="";if(item.land&&HOST.addAssetNode){landed=HOST.addAssetNode(nid,{url:seg.url,kind:kind,name:seg.name},!FS)||"";}
 if(HOST.linkEdge){var ef=landed||item.edgeFrom||item.nodeId;if(ef)HOST.linkEdge(ef,nid);}
-d.ui.sel={track:track,id:seg.id};if(d.ui.T==null)d.ui.T=0;if(!d.ui.ar&&seg.vw&&seg.vh)d.ui.ar=seg.vw/seg.vh;resetOrigin(n);HOST.save();render(nid);if(HOST.renderEdges)HOST.renderEdges();if(FS&&FS.id===nid)fillLib(n);if(HOST.toast){HOST.toast("已加入"+(track==="audio"?"音频轨":"画面轨")+"："+(seg.name||"素材"));}
+d.ui.sel={track:track,id:seg.id};if(d.ui.T==null)d.ui.T=0;if(!d.ui.ar&&seg.vw&&seg.vh)d.ui.ar=seg.vw/seg.vh;resetOrigin(n);HOST.save();render(nid);if(HOST.renderEdges)HOST.renderEdges();if(FS&&FS.id===nid)fillLib(n);if(HOST.toast){HOST.toast("已加入"+(track==="audio"?"音频轨":"画面轨")+"："+(seg.name||"素材"),"ok");}
 return true;}).catch(function(e){alert("该视频源有问题，无法读取时长");return false;});}
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
 function thumb(u,w){return(typeof thumbUrl==="function")?thumbUrl(u,w):u;}
@@ -251,7 +251,7 @@ function openAddMenu(n,track,anchor,ev,opts){closeMenu();var impOnly=!!(opts&&op
 function _outside(e){if(e.target.closest&&e.target.closest(".tl-menu"))return;closeMenu();}
 function closeMenu(){var m=document.querySelector(".tl-menu");if(m)m.remove();document.removeEventListener("mousedown",_outside);}
 function landImport(n,item){if(!HOST.addAssetNode){if(HOST.toast)HOST.toast("当前版本不支持导入到画布");return false;}
-var st=HOST.snapshot?HOST.snapshot():null;var aid=HOST.addAssetNode(n.id,{url:localUrl(item.url),kind:item.kind||"image",name:item.name||"素材"},!FS);if(!aid)return false;if(HOST.linkEdge)HOST.linkEdge(aid,n.id);if(st&&HOST.push)HOST.push(st);HOST.save();if(HOST.renderEdges)HOST.renderEdges();if(FS)fillLib(n);if(HOST.toast)HOST.toast("已导入画布："+(item.name||"素材"));return true;}
+var st=HOST.snapshot?HOST.snapshot():null;var aid=HOST.addAssetNode(n.id,{url:localUrl(item.url),kind:item.kind||"image",name:item.name||"素材"},!FS);if(!aid)return false;if(HOST.linkEdge)HOST.linkEdge(aid,n.id);if(st&&HOST.push)HOST.push(st);HOST.save();if(HOST.renderEdges)HOST.renderEdges();if(FS)fillLib(n);if(HOST.toast)HOST.toast("已导入画布："+(item.name||"素材"),"ok");return true;}
 function pickUpload(n,importOnly){var inp=document.createElement("input");inp.type="file";inp.accept="image/*,audio/*,video/*";inp.onchange=function(){var f=inp.files&&inp.files[0];if(!f)return;var fd=new FormData();fd.append("file",f);fetch(API+"/api/upload",{method:"POST",body:fd}).then(function(r){return r.json();}).then(function(j){if(!j.url){alert("上传失败："+(j.error||""));return;}
 var it={url:j.url.replace(/^https?:\/\/[^/]+/,""),kind:j.kind,name:j.name};if(importOnly){landImport(n,it);return;}
 it.land=true;acceptAsset(n.id,it);}).catch(function(e){alert("上传失败："+e.message);});};inp.click();}

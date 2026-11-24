@@ -73,20 +73,35 @@
   overlay.hidden = true;
   overlay.innerHTML = `
   <div class="lv-top">
-    <button class="lv-back" id="lvBack" type="button" title="返回（退出长视频）">
-      <span class="ic ic-cancel" aria-hidden="true"></span>
-      <span>返回</span>
+    <button class="lv-back" id="lvBack" type="button" title="返回（退出长视频）" aria-label="返回（退出长视频）">
+      <span class="ic ic-arrow-left" aria-hidden="true"></span>
     </button>
+    
     <div class="lv-steps">
-      <button data-step="1" class="on">① 素材登记</button>
-      <button data-step="2">② 分镜与生成</button>
-      <button data-step="4">③ 成片预览</button>
+      <button data-step="1" class="on" type="button">
+        <span class="lv-step-dot"><span class="lv-step-no">1</span><span class="ic ic-check lv-step-tick" aria-hidden="true"></span></span>
+        <span class="lv-step-tx">素材登记</span>
+      </button>
+      <span class="lv-step-line" aria-hidden="true"><i></i></span>
+      <button data-step="2" type="button">
+        <span class="lv-step-dot"><span class="lv-step-no">2</span><span class="ic ic-check lv-step-tick" aria-hidden="true"></span></span>
+        <span class="lv-step-tx">分镜生成</span>
+      </button>
     </div>
     <div class="lv-msg" id="lvMsg"></div>
   </div>
   <div class="lv-main">
     <aside class="lv-side" id="lvSide">
-      <button class="lv-jobs-new" id="lvNewTask" type="button"><span class="ic ic-plus" aria-hidden="true"></span>新建任务</button>
+      
+      <button class="lv-side-expand" id="lvSideExpand" type="button" title="展开任务列表" aria-label="展开任务列表">
+        <span class="ic ic-panel-right" aria-hidden="true"></span>
+      </button>
+      <div class="lv-side-top">
+        <button class="lv-jobs-new" id="lvNewTask" type="button"><span class="ic ic-plus" aria-hidden="true"></span><span class="lv-jobs-new-tx">新建任务</span></button>
+        <button class="lv-side-collapse" id="lvSideCollapse" type="button" title="收起任务列表" aria-label="收起任务列表">
+          <span class="ic ic-panel-left" aria-hidden="true"></span>
+        </button>
+      </div>
       <div class="lv-jobs-h">最近任务</div>
       <div class="lv-side-bulk" id="lvSideBulk" hidden>
         <label><input type="checkbox" id="lvSelAllJobs"> 全选</label>
@@ -115,7 +130,7 @@
         <button class="lv-btn primary" id="lvTo2">下一步</button>
       </div>
     </section>
-    <section class="lv-pane" data-pane="2" hidden>
+    <section class="lv-pane lv-pane2" data-pane="2" hidden>
       
       <div class="lv-progsum" id="lvProgSum" hidden>
         <span class="ps-n" id="lvPsN">0/0</span>
@@ -126,130 +141,94 @@
         <span class="ps-k" id="lvPsCostK" hidden>累计资费</span><span class="ps-v" id="lvPsCost" hidden>—</span>
         <div class="ps-bar"><i id="lvPsBar"></i></div>
         <div class="ps-acts">
-          <button class="mini" id="lvTo4" type="button" hidden>查看成片</button>
           <button class="mini" id="lvRetry" type="button" hidden>补齐失败段</button>
           <button class="mini" id="lvResume" type="button" hidden>继续生成</button>
         </div>
         <span class="ps-hint" id="lvPsHint"></span>
       </div>
       
-      <div class="lv-shots" id="lvShots"></div>
-      
-      <div class="lv-input-bar">
-        <div class="lv-ro-hint" id="lvShotsRoHint" hidden><span class="ic ic-lock" aria-hidden="true"></span>分镜卡已锁定（生成后为只读存档）。单段修改 → 到「分镜与生成」屏逐段改提示词重提；整体重编 → <button class="mini" id="lvUnlockEdit" type="button" style="color:var(--vio);font-weight:700;text-decoration:underline">解锁编辑</button>（旧成片保留对照，改完再生成）</div>
-        <textarea id="lvScript" class="lv-script" placeholder="在这里粘贴你的脚本（对话、动作、场景都可以），点「智能分镜」自动拆成分镜；脚本不能为空。"></textarea>
+      <div class="lv-workbench">
         
-        <div class="lv-opt-hint" id="lvOptHint"></div>
-        
-        <div class="lv-opts" id="lvOpts">
-          <button class="lv-btn ghost" id="lvBack1">上一步</button>
-          <button class="lv-btn primary" id="lvOptimize"><span class="ic ic-spark" aria-hidden="true"></span>智能分镜</button>
-          <button class="mini" id="lvShotsHist" type="button" hidden title="历次分镜稿归档：可恢复/删除">分镜历史</button>
-          <span class="lv-opts-sep" aria-hidden="true"></span>
-          <div class="seg" id="lvSegModel">
-            <button type="button" class="seg-cur"><span class="seg-tx"></span><span class="seg-ar ic ic-chevron-down"></span></button>
-            <select id="lvOptModel" style="display:none">
-              <option value="agnes-video-2.5-flash"></option>
-            </select>
-            <div class="seg-pop"></div>
+        <div class="lv-col lv-col-script">
+          <div class="lv-col-h">剧本</div>
+          <textarea id="lvScript" class="lv-script" placeholder="在这里粘贴你的剧本，点「智能分镜」自动拆成分镜；没有剧本可以使用悬浮助手帮你更好创作，创作后的剧本会提交到此处。"></textarea>
+          <div class="lv-opt-hint" id="lvOptHint"></div>
+          <div class="lv-script-acts">
+            <button class="lv-btn primary" id="lvOptimize"><span class="ic ic-spark" aria-hidden="true"></span>智能分镜</button>
           </div>
-          <div class="seg" id="lvSegArRes">
-            <button type="button" class="seg-cur" id="lvArResCur" title="画幅与分辨率（合并面板）"><span class="seg-tx" id="lvArResTx">16:9 · 720P</span><span class="seg-ar ic ic-chevron-down"></span></button>
-            <select id="lvOptAspect" style="display:none">
-              <option value="16:9">16:9</option>
-              <option value="9:16">9:16</option>
-              <option value="1:1">1:1</option>
-              <option value="4:3">4:3</option>
-              <option value="3:4">3:4</option>
-              <option value="21:9">21:9</option>
-            </select>
-            <select id="lvOptRes" style="display:none" disabled>
-              <option value="720P">720P</option>
-            </select>
-            
-            <div class="seg-pop arsec-panel">
-              <div class="arsec-sec">
-                <div class="arsec-h">画幅比例</div>
-                <div class="seg-ar-grid"></div>
-              </div>
-              <div class="arsec-sec">
-                <div class="arsec-h">视频分辨率</div>
-                <div class="arsec-sizes"></div>
-              </div>
-              
-              <div class="arsec-sec">
-                <div class="arsec-h">种子（可选）</div>
-                <div class="arsec-seed">
-                  <input type="number" id="lvSeedInput" class="seed-input" min="0" step="1" placeholder="不了解用法可不填">
-                  <button type="button" id="lvSeedRand" class="seed-rand">随机</button>
+        </div>
+        
+        <div class="lv-col lv-col-shots">
+          <div class="lv-shots" id="lvShots"></div>
+          <div class="lv-opts" id="lvOpts">
+            <div class="seg" id="lvSegModel">
+              <button type="button" class="seg-cur"><span class="seg-tx"></span><span class="seg-ar ic ic-chevron-down"></span></button>
+              <select id="lvOptModel" style="display:none">
+                <option value="agnes-video-2.5-flash"></option>
+              </select>
+              <div class="seg-pop"></div>
+            </div>
+            <div class="seg" id="lvSegArRes">
+              <button type="button" class="seg-cur" id="lvArResCur" title="画幅与分辨率（合并面板）"><span class="seg-tx" id="lvArResTx">16:9 · 720P</span><span class="seg-ar ic ic-chevron-down"></span></button>
+              <select id="lvOptAspect" style="display:none">
+                <option value="16:9">16:9</option>
+                <option value="9:16">9:16</option>
+                <option value="1:1">1:1</option>
+                <option value="4:3">4:3</option>
+                <option value="3:4">3:4</option>
+                <option value="21:9">21:9</option>
+              </select>
+              <select id="lvOptRes" style="display:none" disabled>
+                <option value="720P">720P</option>
+              </select>
+              <div class="seg-pop arsec-panel">
+                <div class="arsec-sec">
+                  <div class="arsec-h">画幅比例</div>
+                  <div class="seg-ar-grid"></div>
                 </div>
+                <div class="arsec-sec">
+                  <div class="arsec-h">视频分辨率</div>
+                  <div class="arsec-sizes"></div>
+                </div>
+                <div class="arsec-sec">
+                  <div class="arsec-h">种子（可选）</div>
+                  <div class="arsec-seed">
+                    <input type="number" id="lvSeedInput" class="seed-input" min="0" step="1" placeholder="不了解用法可不填">
+                    <button type="button" id="lvSeedRand" class="seed-rand">随机</button>
+                  </div>
+                </div>
+                <div class="arsec-foot"><button type="button" class="arsec-done">完成</button></div>
               </div>
-              <div class="arsec-foot"><button type="button" class="arsec-done">完成</button></div>
+            </div>
+            <div class="lv-actions" id="lvStep2Act" hidden>
+              <button class="lv-btn primary" id="lvTo3">批量生成</button>
             </div>
           </div>
-          <div class="lv-actions" id="lvStep2Act" hidden>
-            <button class="lv-btn primary" id="lvTo3">开始生成</button>
+        </div>
+        
+        <div class="lv-col lv-col-prev">
+          <div class="lv-col-h">成片预览</div>
+          <div class="lv-video-wrap">
+            <video id="lvVideo" controls></video>
+            <div class="play-ic" id="lvPlayIc"><span class="ic ic-resume" aria-hidden="true"></span></div>
+          </div>
+          <div class="lv-prev-ctrls">
+            <button class="lv-prev-jump" id="lvJump" type="button">从该段开始播放<span class="ic ic-jump" aria-hidden="true"></span></button>
+            <button class="lv-btn ghost" id="lvPlayAll" type="button">播放全片</button>
+          </div>
+          <div class="lv-prev-line">
+            <span class="pl-seg" id="lvPrevCap"></span>
+            <span class="lv-prev-status" id="lvPrevStatus">状态：—</span>
+            <span class="lv-prev-meta" id="lvPrevMeta"></span>
+            <span class="pl-sec" id="lvPrevSec">本段时长：5s</span>
           </div>
         </div>
       </div>
     </section>
-    <section class="lv-pane lv-pane4" data-pane="4" hidden>
-      
-      <div class="lv-edit">
-        <div class="lv-edit-h">提示词可重新编辑提交</div>
-        <div class="lv-seg-cap">
-          <div class="cap-l">
-            <span class="segbadge" id="lvCapSeg">镜头 1</span>
-          </div>
-        </div>
-        <div class="lv-matrow" id="lvMatRow">
-          <span class="chip" id="lvChip1">图1 尾帧</span>
-          <span class="chip" id="lvChip2">图2 角色</span>
-          <span class="chip" id="lvChip3"><span class="ic ic-audio" aria-hidden="true"></span>音频</span>
-        </div>
-        <div class="lv-prompt-wrap">
-          <div id="lvSegPrompt" class="lv-prompt-big"></div>
-          <span class="cc" id="lvCC">0 字符</span>
-        </div>
-        <div class="lv-actionbar">
-          <button class="nav" id="lvPrev" type="button"><span class="ic ic-chevron-left" aria-hidden="true"></span>上一段</button>
-          <button class="nav" id="lvNext" type="button">下一段<span class="ic ic-chevron-right" aria-hidden="true"></span></button>
-          <span class="lv-sec-edit" id="lvSecEdit" title="调整本段时长（界随所选视频模型），改动会随「重新生成本段」一起生效">
-            <button class="lv-sec-btn" id="lvSecDown" type="button" aria-label="减少秒数"><span class="ic ic-minus" aria-hidden="true"></span></button>
-            <span class="lv-sec-val" id="lvCapSec">5s</span>
-            <button class="lv-sec-btn" id="lvSecUp" type="button" aria-label="增加秒数"><span class="ic ic-plus" aria-hidden="true"></span></button>
-          </span>
-          <button class="nav" id="lvHistory" type="button" title="查看本段提示词历史版本">历史</button>
-          <span class="sp"></span>
-          <button class="regen" id="lvRegen" type="button">重新生成本段</button>
-        </div>
-      </div>
-      
-      <div class="lv-prev">
-        <div class="lv-prev-h">片段预览</div>
-        <div class="lv-video-wrap">
-          <video id="lvVideo" controls></video>
-          <div class="play-ic" id="lvPlayIc"><span class="ic ic-resume" aria-hidden="true"></span></div>
-        </div>
-        <div class="lv-prev-ctrls">
-          <button class="lv-prev-jump" id="lvJump" type="button">从该段开始播放<span class="ic ic-jump" aria-hidden="true"></span></button>
-          <button class="lv-cont on" id="lvCont" type="button" aria-pressed="true" title="切换单段 / 全片播放模式"><span class="lv-cont-lbl">全片播放</span><span class="lv-toggle" aria-hidden="true"><span class="lv-toggle-knob"></span></span></button>
-        </div>
-        <div class="lv-prev-line">
-          <span class="pl-seg" id="lvPrevCap"></span>
-          <span class="lv-prev-status" id="lvPrevStatus">状态：—</span>
-          <span class="lv-prev-meta" id="lvPrevMeta"></span>
-          <span class="pl-sec" id="lvPrevSec">本段时长：5s</span>
-        </div>
-      </div>
-      
-      <div class="lv-strip-wrap">
-        <div class="lv-strip" id="lvStrip"></div>
-      </div>
-    </section>
-
     </div>
-  </div>`;
+  </div>
+  
+  <div class="lv-toast" id="lvToast" role="status" aria-live="polite" hidden></div>`;
   
   document.querySelector(".main-area").appendChild(overlay);
 
@@ -261,7 +240,7 @@
     _modelMismatchShown = m;
     
     const label = window.__lvVideoLabel || "当前服务商";
-    setMsg(`该任务用的是 ${m}，不属于当前生效的视频服务商「${label}」；模型下拉只列本家模型，生成前请到「服务商设置」切换到对应服务商`);
+    setMsg(`该任务用的是 ${m}，不属于当前生效的视频服务商「${label}」；模型下拉只列本家模型，生成前请到「服务商设置」切换到对应服务商`, "warn");
   }
 
   
@@ -312,6 +291,8 @@
   const mediaSel = $("media");
   const msg = $("lvMsg");
   
+  const toastEl = $("lvToast");
+  
   
   
   function _polish(t) {
@@ -324,31 +305,59 @@
                   "，服务暂时没响应，请稍后重试");
     return s;
   }
-  function setMsg(t, ico) {
-    const s = _polish(t);
-    msg.innerHTML = t ? ((ico ? '<span class="ic ic-' + ico + '" aria-hidden="true"></span>' : "") + _esc(s)) : "";
-    msg.classList.remove("error");
+  
+  function _toast(t) {
+    if (!toastEl) return;
+    clearTimeout(toastEl._t1);
+    clearTimeout(toastEl._t2);
+    if (!t) { toastEl.classList.remove("on"); toastEl._t2 = setTimeout(() => { toastEl.hidden = true; }, 220); return; }
+    toastEl.textContent = _polish(t);
+    toastEl.hidden = false;
+    toastEl.classList.remove("on");
+    void toastEl.offsetWidth;          
+    toastEl.classList.add("on");
+    toastEl._t1 = setTimeout(() => {
+      toastEl.classList.remove("on");
+      toastEl._t2 = setTimeout(() => { if (!toastEl.classList.contains("on")) toastEl.hidden = true; }, 220);
+    }, 1800);
+  }
+  
+  function _pill(t, ico, kind) {
+    msg.innerHTML = t ? ((ico ? '<span class="ic ic-' + ico + '" aria-hidden="true"></span>' : "") + _esc(_polish(t))) : "";
+    msg.classList.toggle("warn", kind === "warn");
+    msg.classList.toggle("error", kind === "error");
     clearTimeout(msg._timeout);
     if (!t) return;
+    msg._timeout = setTimeout(() => {
+      msg.textContent = "";
+      msg.classList.remove("warn", "error");
+    }, kind === "error" ? 10000 : 8000);
+  }
+  
+  function _banner(t, kind) {
+    if (typeof window.toast === "function") { window.toast(_polish(t), kind); return; }
     
-    if (/[!✗❌]/.test(t)) msg._timeout = setTimeout(() => { msg.textContent = ""; }, 10000);
-    else if (!/✓/.test(t)) msg._timeout = setTimeout(() => { msg.textContent = ""; }, 8000);
+    _pill(t, "", kind === "warn" ? "warn" : "error");
+  }
+  function setMsg(t, ico) {
+    if (!t) { _pill(""); _toast(""); return; }
+    
+    if (ico === "lock" || ico === "warn") {
+      _toast("");
+      _banner(t, "warn");
+    } else _toast(t);
   }
   function err(t) {
-    
-    setMsg(t);
-    msg.classList.add("error");
-    clearTimeout(msg._timeout);
-    msg._timeout = setTimeout(() => { msg.textContent = ""; msg.classList.remove("error"); }, 10000);
+    _toast("");                        
+    _banner(t, "err");
   }
   
   function errFold(summary, detail) {
     if (!detail) return err(summary);
-    clearTimeout(msg._timeout);
-    msg.innerHTML = _esc(_polish(summary)) +
-      '<details class="lv-msg-dt"><summary>查看明细</summary><div class="lv-msg-dtx">' +
-      _esc(detail) + "</div></details>";
-    msg.classList.add("error");
+    _toast("");
+    _banner(summary, "err");
+    if (typeof window.toast === "function") window.toast(String(detail), "err");
+    else _pill(summary + "：" + String(detail), "", "error");   
   }
 
   
@@ -480,11 +489,16 @@
     jobId: null,
     segs: [],     
     selSeg: 1,
+    
+    
+    
+    segVer: {},
     step: 1,
     jobStatus: null,  
-    shotsHist: [],    
-    curShotVer: -1,    
-    genStartTs: 0,     
+    
+    state: null,
+    _jobLabelSeen: null,   
+    
     poll: null,
     opts: { model: "agnes-video-2.5-flash", aspect_ratio: "16:9", resolution: "720P" },  
   };
@@ -501,7 +515,6 @@
         jobId: lv.jobId,
         selSeg: lv.selSeg,
         jobStatus: lv.jobStatus,
-        genStartTs: lv.genStartTs || 0,
         script: lvScript ? lvScript.value : "",
         opts: lv.opts || {},
         storyboardBasis: lv.storyboardBasis || null,   
@@ -551,8 +564,8 @@
       lv.jobId = st.jobId || null;
       lv.selSeg = st.selSeg || 1;
       lv.step = st.step || 1;
-      lv.jobStatus = st.jobStatus || null;
-      lv.genStartTs = st.genStartTs || 0;
+      
+      lv.jobStatus = null;
       lv.storyboardBasis = st.storyboardBasis || null;   
       
       if (st.opts) lv.opts = Object.assign(lv.opts, st.opts);
@@ -623,6 +636,9 @@
     const seq = ++_openSeq;   
     _cancelInFlightOptimize(jobId);   
     stopPoll();   
+    
+    if (typeof _resetJobContext === "function") _resetJobContext();
+    else if (typeof _resetPrevInfo === "function") _resetPrevInfo();
     setMsg("加载任务中…");
     try {
       
@@ -631,12 +647,12 @@
       const r = await fetch(API + "/api/jobs/" + jobId);
       const j = await r.json();
       if (seq !== _openSeq) return;   
-      
-      lv.queueState = j.queue_state || null;
-        if (!r.ok) {
+      if (!r.ok) {
         
         err("任务不存在，已重置");
-        lv.jobId = null; lv.jobStatus = null; lv.segs = []; lv.shots = []; lv.assets = [];
+        lv.jobId = null; lv.shots = []; lv.assets = [];
+        if (typeof _resetJobContext === "function") _resetJobContext();
+        else { lv.jobStatus = null; lv.segs = []; lv.state = null; }
         renderAssets();   
         clearState();
         _resetModelToProvider();
@@ -645,8 +661,11 @@
         return;
       }
       lv.jobId = jobId;
-      const st = (j.job && j.job.status) || "draft";
-      lv.jobStatus = st;
+      
+      _adoptJobState(j, { claim: true });
+      lv._jobLabelSeen = (lv.state && lv.state.label) || null;
+      
+      const st = lv.jobStatus || "draft";
       
       if (j.gen_params) { lv.opts = Object.assign(lv.opts, j.gen_params); _syncOptsToUI(); }
       
@@ -659,11 +678,6 @@
       lv.shots  = Array.isArray(j.shots) ? j.shots : [];
       lv.segs = [];   
                       
-      lv.shotsHist = Array.isArray(j.shots_history) ? j.shots_history : [];   
-      
-      const _csv = (typeof j.current_shot_ver === "number") ? j.current_shot_ver : -1;
-      lv.curShotVer = (_csv >= 0 && _csv < lv.shotsHist.length) ? _csv : (lv.shotsHist.length ? lv.shotsHist.length - 1 : -1);
-      const _shb = $("lvShotsHist"); if (_shb) _shb.hidden = lv.shotsHist.length === 0;
       if (lvScript) lvScript.value = j.script || "";
       await loadLibrary().catch(() => {});   
       renderAssets();
@@ -691,7 +705,7 @@
           const _v3Marker = /\u56fe\d+\u7684[\u4e00-\u9fa5]{2,}/;
           const hasV3Engine = lv.shots.some((s) => _v3Marker.test(s.prompt || ""));
           if (!hasV3Engine) {
-            setMsg("当前分镜为较早版本，画面细节可能不全，建议重新点「智能分镜」生成一版新的");
+            setMsg("当前分镜为较早版本，画面细节可能不全，建议重新点「智能分镜」生成一版新的", "warn");
           } else {
             setMsg(fromRestore ? "已回到分镜步骤" : "已进入分镜步骤");
           }
@@ -703,14 +717,8 @@
       } else if (st === "completed") {
         lv.segs = j.segments || [];
         lv.finalUrl = j.final_url || (j.job && j.job.final_url) || null;
-        
-        if (!lv.genStartTs) {
-          const _fs = lv.segs.filter((s) => s.started_at).sort((a, b) => a.started_at - b.started_at)[0];
-          lv.genStartTs = (_fs && _fs.started_at) || (Date.now() / 1000);
-        }
-        const step = _pick(4);
+        const step = _pick(2);   
         goStep(step);
-        if (step === 4) buildStrip();
         renderShots();   
         
         
@@ -722,17 +730,13 @@
         }
       } else if (st === "failed") {
         lv.segs = j.segments || [];
-        
-        if (!lv.genStartTs) {
-          const _fs = lv.segs.filter((s) => s.started_at).sort((a, b) => a.started_at - b.started_at)[0];
-          lv.genStartTs = (_fs && _fs.started_at) || (Date.now() / 1000);
-        }
         const step = _pick(2);   
         goStep(step);
         renderShots();
         
         if (lv.segs.some((s) => s.status === "processing")) startPoll();
-        if (step === 2) err("该任务上次失败：" + ((j.job && j.job.error) || ""));
+        
+        if (step === 2) err("该任务上次：" + ((lv.state && (lv.state.detail || lv.state.label)) || "失败"));
       } else if (st === "cancelled") {
         
         
@@ -744,17 +748,15 @@
         
         const _flying = lv.segs.some((s) => s.status === "processing");
         if (_flying) startPoll();
-        setMsg(_flying ? "任务已停止；在飞的一段会跑完保留（不再发新提交），点「继续生成」可续跑剩余段"
-                       : "任务已停止；点「继续生成」可续跑剩余段");
+        
+        if (_flying) {
+          setMsg("任务已停止；在飞的一段会跑完保留（不再发新提交），点「继续生成」可续跑剩余段", "warn");
+        } else {
+          setMsg("任务已停止；点「继续生成」可续跑剩余段");
+        }
       } else {
         lv.segs = j.segments || [];
         const step = _pick(2);   
-        
-        
-        if (!lv.genStartTs) {
-          const _fs = lv.segs.filter((s) => s.started_at).sort((a, b) => a.started_at - b.started_at)[0];
-          lv.genStartTs = (_fs && _fs.started_at) || (Date.now() / 1000);
-        }
         
         
         
@@ -765,6 +767,10 @@
       }
       
       _pinOptsToSnapshot();
+      
+      if (lv.segs.length) { try { _syncSegUI(lv.selSeg || 1); } catch (e) {} }
+      _updateProgSum();
+      _updateShotStatusLines();
       saveState();
     } catch (e) {
       err("加载任务异常：" + e.message);
@@ -783,6 +789,9 @@
     if (!lv.jobId || !lv.jobStatus || lv.jobStatus === "draft") return;
     const s0 = (lv.segs || [])[0];
     if (!s0 || !lv.opts) return;
+    
+    const _sameModel = !s0.model || !lv.opts.model || String(s0.model) === String(lv.opts.model);
+    if (!_sameModel) return;
     let changed = false;
     if (s0.aspect_ratio) { lv.opts.aspect_ratio = s0.aspect_ratio; changed = true; }
     if (s0.resolution)   { lv.opts.resolution   = s0.resolution;   changed = true; }
@@ -817,6 +826,7 @@
     
     
     _draftPending = true;
+    const _sentJobId = lv.jobId || null;   
     try {
       const r = await fetch(API + "/api/jobs/draft", {
         method: "POST",
@@ -832,8 +842,9 @@
       });
       const j = await r.json();
       if (!r.ok) { err("分镜未写入：" + (j.error || ("HTTP " + r.status))); return lv.jobId; }
-      if (j.job_id) {
-        if (!lv.jobId) lv.jobId = j.job_id;
+      
+      if (j.job_id && (lv.jobId || null) === _sentJobId) {
+        if (j.state) _adoptJobState(j, { claim: true });   
         saveState();
       }
     } catch (e) {}
@@ -856,7 +867,12 @@
         body: JSON.stringify({ job_id: null, name: _defaultName, stage: "素材登记", script: "", assets: [], shots: [], gen_params: lv.opts || {} }),
       });
       const j = await r.json();
-      if (r.ok && j.job_id) { lv.jobId = j.job_id; saveState(); loadJobs(); }
+      if (r.ok && j.job_id) {
+        lv.jobId = j.job_id;
+        
+        if (j.state) _adoptJobState(j, { claim: true });   
+        saveState(); loadJobs();
+      }
     } catch (e) {}
     return lv.jobId;
   }
@@ -955,25 +971,27 @@
       if (opt) jb.name = opt.name;
       const el = document.createElement("div");
       el.className = "lv-job" + (isCur ? " on" : "");
+      el.dataset.status = (jb.state && jb.state.status) || "draft";   
       const created = jb.created_at ? new Date(jb.created_at * 1000).toLocaleString() : "";
       
       
-      const stage = jb.status === "completed" ? "成片预览"
-        : jb.status === "failed" ? "失败"
-        : jb.status === "cancelled" ? "已停止"
-        : (jb.stage || (jb.status === "processing" ? "生成中" : "草稿"));
-      const total = jb.segment_count || 0;
-      const done  = jb.done_count || 0;
+      
+      const st = jb.state || {};
+      const stage = st.label || "—";
+      const phCls = st.phase || (jb.status === "draft" ? "draft" : "");
+      const total = (st.total != null) ? st.total : (jb.segment_count || 0);
+      const done  = (st.done != null) ? st.done : (jb.done_count || 0);
+      const detail = st.detail || "";
       const pct   = total ? Math.round(done / total * 100) : 0;
       const doneAll = total > 0 && done >= total;
       const shortDate = created ? created.replace(/^.*?\d{4}\/(\d+\/\d+).*?(\d+:\d+).*$/, "$1 $2") : "";
       el.innerHTML = `
         <input type="checkbox" class="lv-job-sel" data-id="${jb.job_id}">
+        <span class="lv-job-avatar" title="${_esc(jb.name||"未命名任务")}" data-st="${_esc(jb.status||"draft")}">${_esc((jb.name||"未命名任务").trim().charAt(0) || "任")}</span>
         <div class="lv-job-row1">
           <span class="lv-job-title${_esc(jb.name||"") ? "" : " placeholder"}" data-id="${jb.job_id}" data-ph="未命名任务">${_esc(jb.name||"") || "未命名任务"}</span>
           ${isCur ? `<span class="lv-job-cur">编辑中</span>` : ""}
-          ${jb.status === "processing" || jb.status === "pending" ? `<button class="lv-job-stop" type="button" data-id="${jb.job_id}" title="停止生成（保留已完成段）">停止</button>` : ""}
-          ${jb.status === "cancelled" ? `<span class="lv-job-stopped">已停止</span>` : ""}
+          ${st.status === "processing" || st.status === "pending" ? `<button class="lv-job-stop" type="button" data-id="${jb.job_id}" title="停止生成（保留已完成段）">停止</button>` : ""}
           <button class="sess-dots lv-job-dots" type="button" title="更多操作" aria-label="更多">⋮</button>
         </div>
         <div class="sess-menu">
@@ -982,11 +1000,11 @@
           <div class="sess-menu-item" data-act="delete"><span class="ic ic-del"></span>删除</div>
         </div>
         <div class="lv-job-row2">
-          <span class="lv-job-stage stage-${_esc(stage)}">${_esc(stage)}</span>
+          <span class="lv-job-stage ph-${_esc(phCls)}">${_esc(stage)}</span>
           <span class="lv-job-cnt">${total > 0 ? `${done}/${total} 段` : "待分镜"}</span>
           <span class="lv-job-meta">${_esc(shortDate)}</span>
         </div>
-        ${jb.error ? `<div class="lv-job-err" title="${_esc(jb.error)}"><span class="ic ic-warn" aria-hidden="true"></span>${_esc(jb.error)}</div>` : ""}
+        ${detail ? `<div class="lv-job-err" title="${_esc(st.error || detail)}"><span class="ic ic-warn" aria-hidden="true"></span>${_esc(detail)}</div>` : ""}
         <div class="lv-job-bar"><div class="lv-job-bar-fill${doneAll ? " done" : ""}" style="width:${pct}%"></div></div>`;
       
       el.addEventListener("click", () => {
@@ -1038,7 +1056,7 @@
               err("已停止本地任务，但远端取消未成功：" + (_rf[0].error || "未知原因")
                   + (_inf ? `（仍有 ${_inf} 段在远端跑，可能继续扣费）` : ""));
             } else if (_ru > 0 || _inf > 0) {
-              setMsg(`已停止：该上游无取消接口，仍有 ${_inf || _ru} 段会跑完（可能继续计费）`);
+              setMsg(`已停止：该上游无取消接口，仍有 ${_inf || _ru} 段会跑完（可能继续计费）`, "warn");
             } else {
               setMsg("已停止生成");
             }
@@ -1233,9 +1251,12 @@
       if (!r.ok) { err(j.error || "删除失败"); return; }
       
       if (lv.jobId === jobId) {
-        lv.jobId = null; lv.jobStatus = null; lv.segs = []; lv.shots = []; lv.assets = [];
+        lv.jobId = null; lv.shots = []; lv.assets = [];
+        
+        if (typeof _resetJobContext === "function") _resetJobContext();
+        else if (typeof _resetPrevInfo === "function") _resetPrevInfo();
         renderAssets();   
-        lvShots.innerHTML = "";
+        renderShots();    
         if ($("lvScript")) $("lvScript").value = "";   
         clearState();
         _resetModelToProvider();
@@ -1266,9 +1287,12 @@
       const partial = (j.total || 0) > (j.ok || 0);
       
       if (lv.jobId && ids.includes(lv.jobId)) {
-        lv.jobId = null; lv.jobStatus = null; lv.segs = []; lv.shots = []; lv.assets = [];
+        lv.jobId = null; lv.shots = []; lv.assets = [];
+        
+        if (typeof _resetJobContext === "function") _resetJobContext();
+        else if (typeof _resetPrevInfo === "function") _resetPrevInfo();
         renderAssets();   
-        lvShots.innerHTML = "";
+        renderShots();    
         if ($("lvScript")) $("lvScript").value = "";   
         clearState();
         _resetModelToProvider();
@@ -1276,7 +1300,9 @@
         _syncStartBtn();   
         goStep(1);
       }
-      setMsg(`已删除 ${j.ok || 0}/${j.total || ids.length} 个任务` + (partial ? "，部分失败" : ""));
+      
+      setMsg(`已删除 ${j.ok || 0}/${j.total || ids.length} 个任务` + (partial ? "，部分失败" : ""),
+             partial ? "warn" : "");
       
       if (!partial) setJobManage(false);
       loadJobs();
@@ -1308,15 +1334,16 @@
     clearTimeout(_draftTimer); _draftTimer = null;
     
     await saveDraftNow();   
-    lv.assets = []; lv.shots = []; lv.jobId = null; lv.jobStatus = null; lv.segs = []; lv.selSeg = 1; lv.step = 1;
-    lv.shotsHist = [];   
-    const _shb2 = $("lvShotsHist"); if (_shb2) _shb2.hidden = true;
+    lv.assets = []; lv.shots = []; lv.jobId = null; lv.selSeg = 1; lv.step = 1;
+    
+    if (typeof _resetJobContext === "function") _resetJobContext();
+    else if (typeof _resetPrevInfo === "function") _resetPrevInfo();
     if (lvScript) lvScript.value = "";   
     clearState();
     _resetModelToProvider();
     renderAssets();
-    lvShots.innerHTML = "";
-    const _rh = $("lvShotsRoHint"); if (_rh) _rh.hidden = true;
+    
+    renderShots();
     const _ps = $("lvProgSum"); if (_ps) _ps.hidden = true;   
     lvStep2Act.hidden = true;
     _syncStartBtn();   

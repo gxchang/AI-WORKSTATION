@@ -1,5 +1,6 @@
 
 
+import bisect
 import json
 import time
 
@@ -60,13 +61,24 @@ def _set_current(conn, kind, sid):
 
 
 
-def create_session(conn, kind, sid, name=None, set_current=True):
+def _ms(v):
+    
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return 0
+    if not x or x != x or abs(x) == float("inf"):
+        return 0
+    return int(x * 1000 if abs(x) < 1e12 else x)
+
+
+def create_session(conn, kind, sid, name=None, set_current=True, created_at=None):
     
     table, _ = _tables(kind)
     exists = conn.execute("SELECT 1 FROM %s WHERE id=?" % table, (sid,)).fetchone()
     if exists:
         return False, None
-    now = time.time()
+    now = _ms(created_at) or _ms(time.time())
     doc = {"id": sid, "name": (name or "").strip() or "未命名会话",
            "createdAt": now, "messages": []}
     conn.execute("INSERT INTO %s(id, name, created_at, data) VALUES(?,?,?,?)" % table,
@@ -199,6 +211,16 @@ def _key_positions(msgs, key):
     return out
 
 
+def _key_index(msgs):
+    
+    idx = {}
+    for i, m in enumerate(msgs):
+        if isinstance(m, dict):
+            for k in _msgst.msg_keys(m):
+                idx.setdefault(k, []).append(i)
+    return idx
+
+
 def upsert_message_by_key(conn, kind, sid, msg):
     
     doc = _load_doc(conn, kind, sid)
@@ -268,19 +290,41 @@ def sync_messages(conn, kind, sid, messages):
     msgs = doc.get("messages")
     if not isinstance(msgs, list):
         msgs = []
+    index = _key_index(msgs)
     added = merged = 0
+
+    def _reindex(old_keys, new_keys, pos):
+        
+        old_s, new_s = set(old_keys), set(new_keys)
+        for k in old_s - new_s:
+            lst = index.get(k)
+            if lst and pos in lst:
+                lst.remove(pos)
+                if not lst:
+                    index.pop(k, None)
+        for k in new_s - old_s:
+            bisect.insort(index.setdefault(k, []), pos)
+
     for msg in clean:
-        pos = _key_positions(msgs, _msgst.msg_key(msg))
-        if not pos:
-            for k in _msgst.msg_keys(msg):
-                pos = _key_positions(msgs, k)
-                if pos:
-                    break
-        if pos:
-            msgs[pos[0]] = _msgst.merge_msg(msgs[pos[0]], msg)
+        pos = None
+
+        for k in [_msgst.msg_key(msg)] + _msgst.msg_keys(msg):
+            idxs = index.get(k)
+            if idxs:
+                pos = idxs[0]
+                break
+        if pos is not None:
+            before = msgs[pos]
+            old_keys = _msgst.msg_keys(before) if isinstance(before, dict) else []
+            merged_msg = _msgst.merge_msg(before, msg)
+            msgs[pos] = merged_msg
+            new_keys = _msgst.msg_keys(merged_msg) if isinstance(merged_msg, dict) else []
+            _reindex(old_keys, new_keys, pos)
             merged += 1
         else:
+            pos = len(msgs)
             msgs.append(msg)
+            _reindex([], _msgst.msg_keys(msg), pos)
             added += 1
     doc["messages"] = msgs
     _write_doc(conn, kind, sid, doc)

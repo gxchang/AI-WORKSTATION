@@ -230,7 +230,12 @@ def _provider_of_model(model):
 
 
 PARAM_CAP = {
-    "size": "tiers",
+
+
+
+
+
+    "size": ("tiers", "tier_presets"),
     "aspect_ratio": "ratios",
     "ratio": "ratios",
     "seed": "seed",

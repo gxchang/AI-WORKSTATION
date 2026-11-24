@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0" data-page-node-id="eHaf3KuCAKCdvpKdQUGKmW" />
 <title>视频生成工作台</title>
 
-<link rel="stylesheet" href="/api/base_style.css?v=20261118c">
+<link rel="stylesheet" href="/api/base_style.css?v=20261124b">
 <script>
 
 try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "session") document.documentElement.classList.add("boot-defer"); } catch (e) {}
@@ -21,17 +21,17 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
   
   <div class="ws-brand" data-page-node-id="wsBrandBlk0000000000001">
     <span class="ws-mark" role="img" aria-label="AI WORKSTATION" data-page-node-id="wsBrandMark000000000002"><span class="ws-ai" data-page-node-id="wsBrandAi0000000000003">AI</span><span class="ws-word" data-page-node-id="wsBrandWord000000000004">WORKSTATION</span></span>
-    <button id="sideExpandBtn" class="side-expand-btn" type="button" title="展开侧边栏" aria-label="展开侧边栏" data-page-node-id="sideExpandBtn0000000001"><svg viewBox="0 0 24 24" width="14" height="14" class="sc-ico" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 9l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><line x1="13.5" y1="6" x2="13.5" y2="18" stroke="currentColor" stroke-width="1.8"/></svg></button>
+    <button id="sideExpandBtn" class="side-expand-btn" type="button" aria-label="展开侧边栏" data-page-node-id="sideExpandBtn0000000001"><span class="ic ic-panel-right sc-ico" aria-hidden="true"></span></button>
   </div>
-  <button id="sideCollapseBtn" class="side-collapse-btn" type="button" title="收起侧边栏" aria-label="收起侧边栏" data-page-node-id="sideCollapseBtn0000000001"><svg viewBox="0 0 24 24" width="14" height="14" class="sc-ico" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M14 9l-3 3 3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><line x1="10.5" y1="6" x2="10.5" y2="18" stroke="currentColor" stroke-width="1.8"/></svg></button>
+  <button id="sideCollapseBtn" class="side-collapse-btn" type="button" aria-label="收起侧边栏" data-page-node-id="sideCollapseBtn0000000001"><span class="ic ic-panel-left sc-ico" aria-hidden="true"></span></button>
   <div class="side-hd" data-page-node-id="sEZFHk1lfkLvbM3pWnTA73">
     
     <button class="side-entry" id="newSessBtn" data-page-node-id="FoxlSYN6ZcQLsyVsAEVpUo"><span class="ic ic-plus" aria-hidden="true"></span><span class="side-txt">新会话</span></button>
   </div>
   
   <div class="side-lib" data-page-node-id="aL1b7rArY0000000000003">
-    <button class="side-entry" id="assetLibBtn" title="打开资产库（创作资产 / 主体资产）" data-page-node-id="aL1b7rArY0000000000001"><span class="ic al-lib" aria-hidden="true" data-page-node-id="aL1b7rArIc000000000001"></span><span class="side-txt">资产库</span></button>
-    <button class="side-entry" id="canvasBtn" title="画布：可视化执行操作台（项目列表）"><span class="ic cv-canvas" aria-hidden="true"></span><span class="side-txt">画布</span></button>
+    <button class="side-entry" id="assetLibBtn" data-page-node-id="aL1b7rArY0000000000001"><span class="ic al-lib" aria-hidden="true" data-page-node-id="aL1b7rArIc000000000001"></span><span class="side-txt">资产库</span></button>
+    <button class="side-entry" id="canvasBtn"><span class="ic cv-canvas" aria-hidden="true"></span><span class="side-txt">画布</span></button>
   </div>
   <div class="sess-list" id="sessList" data-page-node-id="QWXfJ2jj7fSqgoImfqEAGI"></div>
   <div class="batch-bar" id="batchBar" data-page-node-id="kVK5X5urQnTOqf9AqSX29z">
@@ -39,7 +39,7 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
     <button class="bb-del cancel" id="batchDel" data-page-node-id="s4xcywowaimsAsw6TOwgx0"><span class="bb-cancel-t">取消</span><span class="bb-del-t">删除选中（<span class="bb-del-cnt">0</span>）</span></button>
   </div>
   <div class="side-foot" data-page-node-id="pR0v1d3rF00t000000001">
-    <button class="side-entry" id="provBtn" title="配置上游接口地址与密钥" data-page-node-id="pR0v1d3rBtN00000000001"><span class="prov-gear" aria-hidden="true" data-page-node-id="pR0v1d3rGe000000000001"></span><span class="side-txt">服务商设置</span></button>
+    <button class="side-entry" id="provBtn" data-page-node-id="pR0v1d3rBtN00000000001"><span class="prov-gear" aria-hidden="true" data-page-node-id="pR0v1d3rGe000000000001"></span><span class="side-txt">服务商设置</span></button>
   </div>
 </aside>
 
@@ -51,10 +51,10 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
   
   <div class="welcome" id="welcome" data-page-node-id="EL3QGpBvfLZJycEa0ahHas">
     <div class="wv-tools cols4">
-      <button type="button" class="wv-tool" data-tool="depth" title="逐帧估深度，输出灰阶参考视频"><span class="wv-tool-ic"><span class="ic ic-drv-depth"></span></span><span class="wv-tool-name">深度动作捕捉</span><span class="wv-tool-desc">逐帧估深度，输出灰阶参考视频</span></button>
-      <button type="button" class="wv-tool" data-tool="frame" title="取首帧、尾帧，或拖到要的那一帧"><span class="wv-tool-ic"><span class="ic ic-drv-frame"></span></span><span class="wv-tool-name">截取帧</span><span class="wv-tool-desc">取首帧、尾帧，或拖到要的那一帧</span></button>
-      <button type="button" class="wv-tool" data-tool="slice" title="切成想要的片段，各自落成素材"><span class="wv-tool-ic"><span class="ic ic-drv-slice"></span></span><span class="wv-tool-name">视频切片</span><span class="wv-tool-desc">切成想要的片段，各自落成素材</span></button>
-      <button type="button" class="wv-tool" data-tool="audio" title="抽出原音轨，输出音频素材"><span class="wv-tool-ic"><span class="ic ic-drv-audio"></span></span><span class="wv-tool-name">分离音频</span><span class="wv-tool-desc">抽出原音轨，输出音频素材</span></button>
+      <button type="button" class="wv-tool" data-tool="depth"><span class="wv-tool-ic"><span class="ic ic-drv-depth"></span></span><span class="wv-tool-name">深度动作捕捉</span><span class="wv-tool-desc">逐帧估深度，输出灰阶参考视频</span></button>
+      <button type="button" class="wv-tool" data-tool="frame"><span class="wv-tool-ic"><span class="ic ic-drv-frame"></span></span><span class="wv-tool-name">截取帧</span><span class="wv-tool-desc">取首帧、尾帧，或拖到要的那一帧</span></button>
+      <button type="button" class="wv-tool" data-tool="slice"><span class="wv-tool-ic"><span class="ic ic-drv-slice"></span></span><span class="wv-tool-name">视频切片</span><span class="wv-tool-desc">切成想要的片段，各自落成素材</span></button>
+      <button type="button" class="wv-tool" data-tool="audio"><span class="wv-tool-ic"><span class="ic ic-drv-audio"></span></span><span class="wv-tool-name">分离音频</span><span class="wv-tool-desc">抽出原音轨，输出音频素材</span></button>
     </div>
   </div>
 </div>
@@ -72,14 +72,14 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
     <div class="prov-ttl">服务商设置</div>
   </div>
 <div class="prov-tabs" id="provTabs">
-      <button class="prov-tab on" id="provTabMedia" data-tab="media" type="button" title="视频 / 生图 / 文本模型">Agnes</button>
-      <button class="prov-tab" id="provTabAudio" data-tab="audio" type="button" title="音频">OpenRouter</button>
-      <button class="prov-tab" id="provTabMimo" data-tab="mimo" type="button" title="音频">MiMo</button>
-      <button class="prov-tab" id="provTabArk" data-tab="ark" type="button" title="生图 / 视频">火山方舟</button>
-      <button class="prov-tab" id="provTabRh" data-tab="rh" type="button" title="视频">RunningHub</button>
-      <button class="prov-tab" id="provTabMs" data-tab="ms" type="button" title="生图 / 文本模型">魔搭</button>
-      <button class="prov-tab" id="provTabWan" data-tab="wan" type="button" title="视频/生图/文本模型">阿里云百炼</button>
-      <button class="prov-tab" id="provTabCustom" data-tab="custom" type="button" title="文本模型">自定义 OpenAI</button>
+      <button class="prov-tab on" id="provTabMedia" data-tab="media" type="button">Agnes</button>
+      <button class="prov-tab" id="provTabAudio" data-tab="audio" type="button">OpenRouter</button>
+      <button class="prov-tab" id="provTabMimo" data-tab="mimo" type="button">MiMo</button>
+      <button class="prov-tab" id="provTabArk" data-tab="ark" type="button">火山方舟</button>
+      <button class="prov-tab" id="provTabRh" data-tab="rh" type="button">RunningHub</button>
+      <button class="prov-tab" id="provTabMs" data-tab="ms" type="button">魔搭</button>
+      <button class="prov-tab" id="provTabWan" data-tab="wan" type="button">阿里云百炼</button>
+      <button class="prov-tab" id="provTabCustom" data-tab="custom" type="button">自定义 OpenAI</button>
     </div>
     <div class="prov-body">
       <div class="prov-pane" id="provPaneMedia">
@@ -557,8 +557,8 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
       </div>
 
       <div class="bar" data-page-node-id="Ub1gYRDRfQoU34nbqgldGj">
-        <button class="icon-btn" id="upIconBtn" title="上传素材" data-page-node-id="OchmDr4kDmEWUMOdFVzPvl"><span data-page-node-id="WbpxGfoXnt2SWyD08yCyXA">＋</span></button>
-        <button class="icon-btn" id="atChip" title="引用素材" data-page-node-id="UQTSzyYtmKLO4n3zuz7AwE"><span data-page-node-id="9xcnLaq9ICB1a5pB8WfxN8">@</span></button>
+        <button class="icon-btn" id="upIconBtn" data-page-node-id="OchmDr4kDmEWUMOdFVzPvl"><span data-page-node-id="WbpxGfoXnt2SWyD08yCyXA">＋</span></button>
+        <button class="icon-btn" id="atChip" data-page-node-id="UQTSzyYtmKLO4n3zuz7AwE"><span data-page-node-id="9xcnLaq9ICB1a5pB8WfxN8">@</span></button>
         <div class="seg" id="mediaSel" data-seg="media" data-page-node-id="lggRRtSqSfHdmzMoSTLIyg">
           <button type="button" class="seg-cur" data-page-node-id="PdAffcl1STe9tR8rJ67CzK"><span class="seg-tx" data-page-node-id="WOGAIi9eqtDSB73TAMNpaa">视频生成</span><span class="seg-ar ic ic-chevron-down" data-page-node-id="mVy2jD8BB6IcTVWtE8DWUb"></span></button>
           <select id="media" style="display:none" data-page-node-id="cK5ACMyMgdTqQtzO9hkBjp">
@@ -578,8 +578,8 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
           <div class="seg-pop"></div>
         </div>
         
-        <div class="seg" id="audioTagSel" data-seg="audioTag" style="display:none" title="点选即把语气 / 风格标签插入输入框光标处，可连续点多个；生效范围随模型能力不同">
-          <button type="button" class="seg-cur" title="点选即把语气 / 风格标签插入输入框光标处，可连续点多个；生效范围随模型能力不同"><span class="seg-tx">语气标签</span><span class="seg-ar ic ic-chevron-down"></span></button>
+        <div class="seg" id="audioTagSel" data-seg="audioTag" style="display:none">
+          <button type="button" class="seg-cur"><span class="seg-tx">语气标签</span><span class="seg-ar ic ic-chevron-down"></span></button>
         </div>
         <div class="seg" id="audioLibSel" data-seg="audioLib" style="display:none">
           <button type="button" class="seg-cur"><span class="seg-tx">音色库</span><span class="seg-ar ic ic-chevron-down"></span></button>
@@ -686,7 +686,7 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
 
 <script src="/api/waveform.js?v=20261010a"></script>
 
-<script src="/api/longvideo_ui.js?v=20261119b"></script>
+<script src="/api/longvideo_ui.js?v=20261124j"></script>
 <div class="at-pop" id="atpop" data-page-node-id="RouEFDOwMOhgyF1Ngo2Ym9">
   <div class="at-hd" id="atHead" data-page-node-id="i0vFw3jzxFqIJpw8v6A4QP">选择素材插入</div>
   <div id="atList" data-page-node-id="l2hwoVK4rSw6pEqG2URnEL"></div>
@@ -696,18 +696,18 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
 
 <div class="lightbox" id="mediaPreview">
   
-  <button class="lb-back" id="mpBack" title="返回上一件" aria-label="返回上一件" style="display:none"><span class="ic ic-chevron-left"></span></button>
+  <button class="lb-back" id="mpBack" aria-label="返回上一件" style="display:none"><span class="ic ic-chevron-left"></span></button>
   <div class="lb-acts" id="mpActs">
-    <button class="lb-btn" id="mpCopy" title="复制链接" aria-label="复制链接"><span class="ic ic-link"></span></button>
-    <a class="lb-btn" id="mpDl" href="#" download title="下载" aria-label="下载"><span class="ic ic-dl"></span></a>
-    <button class="lb-close" id="mpClose" title="关闭 (Esc)" aria-label="关闭"><span class="ic ic-cancel"></span></button>
+    <button class="lb-btn" id="mpCopy" aria-label="复制链接"><span class="ic ic-link"></span></button>
+    <a class="lb-btn" id="mpDl" href="#" download aria-label="下载"><span class="ic ic-dl"></span></a>
+    <button class="lb-close" id="mpClose" aria-label="关闭"><span class="ic ic-cancel"></span></button>
   </div>
   
   <div class="mp-main" id="mpMain">
     <div class="mp-left" id="mpLeft">
-      <button class="lb-nav lb-prev" id="mpPrev" title="上一张 (←)" aria-label="上一张"><span class="ic ic-chevron-left"></span></button>
+      <button class="lb-nav lb-prev" id="mpPrev" aria-label="上一张"><span class="ic ic-chevron-left"></span></button>
       <div class="mp-stage" id="mpStage"></div>
-      <button class="lb-nav lb-next" id="mpNext" title="下一张 (→)" aria-label="下一张"><span class="ic ic-chevron-right"></span></button>
+      <button class="lb-nav lb-next" id="mpNext" aria-label="下一张"><span class="ic ic-chevron-right"></span></button>
     </div>
     <div class="mp-info" id="mpInfo"></div>
     
@@ -721,9 +721,34 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
 
 
 
-<div class="agent-fab" id="agentFab" title="猫灵助手" role="button" tabindex="0" aria-label="猫灵助手">
+
+<svg class="cat-defs" width="0" height="0" aria-hidden="true" focusable="false"><defs>
+  <filter id="catFur" x="-35%" y="-35%" width="170%" height="170%"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="4" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="2.4" xChannelSelector="R" yChannelSelector="G"/></filter>
+  <filter id="catSoft" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="2.2"/></filter>
+  <radialGradient id="catBody" cx="34%" cy="24%" r="82%"><stop offset="0" stop-color="#645c7a"/><stop offset="52%" stop-color="#463f5b"/><stop offset="100%" stop-color="#292438"/></radialGradient>
+  <radialGradient id="catTail" cx="30%" cy="30%" r="80%"><stop offset="0" stop-color="#5a5270"/><stop offset="100%" stop-color="#2c273c"/></radialGradient>
+  <radialGradient id="catEye" cx="42%" cy="30%" r="76%"><stop offset="0" stop-color="#ffe6b8"/><stop offset="46%" stop-color="#d8a054"/><stop offset="100%" stop-color="#7c5220"/></radialGradient>
+</defs></svg>
+<div class="agent-fab" id="agentFab" role="button" tabindex="0" aria-label="猫灵助手">
   <span class="cat-orb" aria-hidden="true">
-    <i class="cat-spin"></i><i class="cat-spin2"></i><i class="cat-core"></i><i class="cat-face"></i>
+    <svg class="cat-svg" viewBox="9 6 78 78" focusable="false">
+      <path class="cat-tail" d="M64 62 Q84 66 82 44 Q81 33 73 35 Q81 43 73 53 Q68 58 62 57 Z" fill="url(#catTail)" filter="url(#catFur)"/>
+      <path class="cat-ear cat-ear-l" d="M24 33 Q20 11 33 19 Q41 24 41 34 Z" fill="url(#catBody)" filter="url(#catFur)"/>
+      <path class="cat-ear cat-ear-r" d="M64 33 Q68 11 55 19 Q47 24 47 34 Z" fill="url(#catBody)" filter="url(#catFur)"/>
+      <path class="cat-head" d="M44 15 C63 15 76 29 76 48 C76 67 63 78 44 78 C25 78 12 67 12 48 C12 29 25 15 44 15 Z" fill="url(#catBody)" filter="url(#catFur)"/>
+      <g class="cat-eyes">
+        <ellipse class="cat-eye" cx="33" cy="46" rx="8.4" ry="10" fill="url(#catEye)"/>
+        <ellipse class="cat-eye" cx="55" cy="46" rx="8.4" ry="10" fill="url(#catEye)"/>
+        <ellipse class="cat-pupil" cx="33" cy="47" rx="2.5" ry="7" fill="#332413" opacity="0.85"/>
+        <ellipse class="cat-pupil" cx="55" cy="47" rx="2.5" ry="7" fill="#332413" opacity="0.85"/>
+        <circle class="cat-shine" cx="30" cy="42" r="2.3" fill="#ffffff" opacity="0.92"/>
+        <circle class="cat-shine" cx="52" cy="42" r="2.3" fill="#ffffff" opacity="0.92"/>
+      </g>
+      <path class="cat-nose" d="M41 59 L47 59 L44 62.5 Z" fill="#d98cae"/>
+      <path class="cat-mouth" d="M44 62.5 Q40 67 36 64 M44 62.5 Q48 67 52 64" fill="none" stroke="#e7c2d3" stroke-width="1.4" stroke-linecap="round" opacity="0.7"/>
+      <ellipse class="cat-blush" cx="24" cy="60" rx="6" ry="3.5" fill="#d98cae" opacity="0.22"/>
+      <ellipse class="cat-blush" cx="64" cy="60" rx="6" ry="3.5" fill="#d98cae" opacity="0.22"/>
+    </svg>
   </span>
 </div>
 <div class="agent-panel" id="agentPanel">
@@ -741,24 +766,62 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
     </aside>
     <div class="agent-main">
       <div class="agent-hd">
-        <span class="cat-orb cat-orb-mini" aria-hidden="true"><i class="cat-spin"></i><i class="cat-spin2"></i><i class="cat-core"></i></span>
+        <span class="cat-orb cat-orb-mini" aria-hidden="true">
+          <svg class="cat-svg" viewBox="9 6 78 78" focusable="false">
+            <path class="cat-tail" d="M64 62 Q84 66 82 44 Q81 33 73 35 Q81 43 73 53 Q68 58 62 57 Z" fill="url(#catTail)" filter="url(#catFur)"/>
+            <path class="cat-ear cat-ear-l" d="M24 33 Q20 11 33 19 Q41 24 41 34 Z" fill="url(#catBody)" filter="url(#catFur)"/>
+            <path class="cat-ear cat-ear-r" d="M64 33 Q68 11 55 19 Q47 24 47 34 Z" fill="url(#catBody)" filter="url(#catFur)"/>
+            <path class="cat-head" d="M44 15 C63 15 76 29 76 48 C76 67 63 78 44 78 C25 78 12 67 12 48 C12 29 25 15 44 15 Z" fill="url(#catBody)" filter="url(#catFur)"/>
+            <g class="cat-eyes">
+              <ellipse class="cat-eye" cx="33" cy="46" rx="8.4" ry="10" fill="url(#catEye)"/>
+              <ellipse class="cat-eye" cx="55" cy="46" rx="8.4" ry="10" fill="url(#catEye)"/>
+              <ellipse class="cat-pupil" cx="33" cy="47" rx="2.5" ry="7" fill="#332413" opacity="0.85"/>
+              <ellipse class="cat-pupil" cx="55" cy="47" rx="2.5" ry="7" fill="#332413" opacity="0.85"/>
+              <circle class="cat-shine" cx="30" cy="42" r="2.3" fill="#ffffff" opacity="0.92"/>
+              <circle class="cat-shine" cx="52" cy="42" r="2.3" fill="#ffffff" opacity="0.92"/>
+            </g>
+            <path class="cat-nose" d="M41 59 L47 59 L44 62.5 Z" fill="#d98cae"/>
+            <path class="cat-mouth" d="M44 62.5 Q40 67 36 64 M44 62.5 Q48 67 52 64" fill="none" stroke="#e7c2d3" stroke-width="1.4" stroke-linecap="round" opacity="0.7"/>
+            <ellipse class="cat-blush" cx="24" cy="60" rx="6" ry="3.5" fill="#d98cae" opacity="0.22"/>
+            <ellipse class="cat-blush" cx="64" cy="60" rx="6" ry="3.5" fill="#d98cae" opacity="0.22"/>
+          </svg>
+        </span>
         <div class="agent-hd-txt">
           <span class="agent-title">猫灵助手</span>
           <span class="agent-sub">说人话，出片</span>
         </div>
-        <button class="agent-hd-btn agent-hd-ic" id="agentNewSessTop" title="新建会话" aria-label="新建会话">
+        <button class="agent-hd-btn agent-hd-ic" id="agentNewSessTop" aria-label="新建会话">
           <svg viewBox="0 0 18 18" width="15" height="15" fill="none" stroke="currentColor"
                stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M15.5 7.4c0 3-2.9 5.4-6.5 5.4-.8 0-1.6-.1-2.3-.4l-3.2 1.7.7-2.6C2.7 10.5 2 9 2 7.4 2 4.4 4.9 2 8.5 2s7 2.4 7 5.4z"/>
             <path d="M8.5 5.2v4.4M6.3 7.4h4.4"/>
           </svg>
         </button>
-        <button class="agent-hd-btn" id="agentFull" title="展开 / 还原会话列表"><span class="ic ic-max" aria-hidden="true"></span><span class="lbl">历史</span></button>
-        <button class="agent-hd-btn" id="agentClose" title="收起"><span class="ic ic-cancel" aria-hidden="true"></span></button>
+        <button class="agent-hd-btn" id="agentFull"><span class="ic ic-max" aria-hidden="true"></span><span class="lbl">历史</span></button>
+        <button class="agent-hd-btn" id="agentClose"><span class="ic ic-cancel" aria-hidden="true"></span></button>
       </div>
       <div class="agent-stream" id="agentStream">
         <div class="agent-hello" id="agentHello">
-          <span class="cat-orb agent-hello-orb" aria-hidden="true"><i class="cat-spin"></i><i class="cat-spin2"></i><i class="cat-core"></i></span>
+          <span class="cat-orb agent-hello-orb" aria-hidden="true">
+            <svg class="cat-svg" viewBox="9 6 78 78" focusable="false">
+              <path class="cat-tail" d="M64 62 Q84 66 82 44 Q81 33 73 35 Q81 43 73 53 Q68 58 62 57 Z" fill="url(#catTail)" filter="url(#catFur)"/>
+              <path class="cat-ear cat-ear-l" d="M24 33 Q20 11 33 19 Q41 24 41 34 Z" fill="url(#catBody)" filter="url(#catFur)"/>
+              <path class="cat-ear cat-ear-r" d="M64 33 Q68 11 55 19 Q47 24 47 34 Z" fill="url(#catBody)" filter="url(#catFur)"/>
+              <path class="cat-head" d="M44 15 C63 15 76 29 76 48 C76 67 63 78 44 78 C25 78 12 67 12 48 C12 29 25 15 44 15 Z" fill="url(#catBody)" filter="url(#catFur)"/>
+              <g class="cat-eyes">
+                <ellipse class="cat-eye" cx="33" cy="46" rx="8.4" ry="10" fill="url(#catEye)"/>
+                <ellipse class="cat-eye" cx="55" cy="46" rx="8.4" ry="10" fill="url(#catEye)"/>
+                <ellipse class="cat-pupil" cx="33" cy="47" rx="2.5" ry="7" fill="#332413" opacity="0.85"/>
+                <ellipse class="cat-pupil" cx="55" cy="47" rx="2.5" ry="7" fill="#332413" opacity="0.85"/>
+                <circle class="cat-shine" cx="30" cy="42" r="2.3" fill="#ffffff" opacity="0.92"/>
+                <circle class="cat-shine" cx="52" cy="42" r="2.3" fill="#ffffff" opacity="0.92"/>
+              </g>
+              <path class="cat-nose" d="M41 59 L47 59 L44 62.5 Z" fill="#d98cae"/>
+              <path class="cat-mouth" d="M44 62.5 Q40 67 36 64 M44 62.5 Q48 67 52 64" fill="none" stroke="#e7c2d3" stroke-width="1.4" stroke-linecap="round" opacity="0.7"/>
+              <ellipse class="cat-blush" cx="24" cy="60" rx="6" ry="3.5" fill="#d98cae" opacity="0.22"/>
+              <ellipse class="cat-blush" cx="64" cy="60" rx="6" ry="3.5" fill="#d98cae" opacity="0.22"/>
+            </svg>
+          </span>
           <div class="agent-hello-t">你好，今天有什么可以帮到你？</div>
           <div class="agent-hello-s">我可以帮你「生成一段 5-<span id="agentHelloMaxSec">…</span> 秒的猫在雪地里的视频」「画一张雨夜便利店的图」「用低沉老年男声念这段台词」，还可以帮你生成短剧剧本，只要你对我说【创作模式】，咱们就开始吧！</div>
         </div>
@@ -768,11 +831,11 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
         <div class="editable" id="agentPrompt" contenteditable="true"
              data-ph="你想对我说什么？"></div>
         <div class="agent-bar">
-          <button class="icon-btn" id="agentUpIcon" title="上传素材：从本地上传 / 从资产库上传（图片 / 音频 / 视频）"><span>＋</span></button>
-          <button class="icon-btn" id="agentAtChip" title="引用素材"><span>@</span></button>
-          <button class="agent-topic-btn" id="agentTopicBtn" title="从选题开始"><span>选题</span><span class="atp-ar seg-ar ic ic-chevron-down"></span></button>
+          <button class="icon-btn" id="agentUpIcon"><span>＋</span></button>
+          <button class="icon-btn" id="agentAtChip"><span>@</span></button>
+          <button class="agent-topic-btn" id="agentTopicBtn"><span>选题</span><span class="atp-ar seg-ar ic ic-chevron-down"></span></button>
           <span class="agent-up-tip" id="agentUpTip"></span>
-          <button class="agent-send" id="agentSend" title="发送" aria-label="发送"><span class="ic ic-arrow-up"></span></button>
+          <button class="agent-send" id="agentSend" aria-label="发送"><span class="ic ic-arrow-up"></span></button>
         </div>
         <input type="file" id="agentFile" accept="image/*,audio/*,video/*" multiple style="display:none">
       </div>
@@ -793,19 +856,19 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
   <div class="atp-list" id="agentTopicList"></div>
 </div>
 
-<script src="/api/base_ui.js?v=20261118c"></script>
+<script src="/api/base_ui.js?v=20261124a"></script>
 
   <script src="/api/assets_ui.js?v=20260930g"></script>
   <script src="/api/assets_picker.js?v=20261104a"></script>
   <script src="/api/imageedit_ui.js?v=20261104a"></script>
-  <link rel="stylesheet" href="/api/canvas_style.css?v=20261103o6">
+  <link rel="stylesheet" href="/api/canvas_style.css?v=20261124a">
   <script src="/api/canvas_dagre.js?v=20260930i"></script>
   <script src="/api/canvas_manager.js?v=20261104a"></script>
   
   <script src="/api/canvas_timeline.js?v=20261104c"></script>
-  <script src="/api/canvas_stage.js?v=20261113c"></script>
+  <script src="/api/canvas_stage.js?v=20261124a"></script>
 <script src="/api/tts_upload.js?v=20260918d"></script>
-<script src="/api/audio_ui.js?v=20261116i"></script>
+<script src="/api/audio_ui.js?v=20261124a"></script>
 
 </body>
 </html>

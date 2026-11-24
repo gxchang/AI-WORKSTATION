@@ -1127,10 +1127,26 @@ def _persist_generated_video(url, prefix="vid"):
 
 
 
-VIDEO_PARAM_CAP = {"size": "sizes"}
+
+
+
+
+
+VIDEO_PARAM_CAP = {
+    "size": "sizes",
+    "instance": "instance_tiers",
+    "quality_tier": "steps_by_tier",
+    "accel": "accel_sampler",
+    "refine": "post_refine",
+    "post_sample": "post_refine",
+    "face": "post_face",
+    "selflift": "selflift",
+}
 
 VIDEO_NON_PARAM_CAPS = frozenset({"label", "note", "min_seconds", "max_seconds",
-                                  "max_images", "max_audios", "allow_video"})
+                                  "max_images", "max_audios", "max_videos", "allow_video",
+                                  "seconds_step", "submit_gap_base", "modes",
+                                  "aspect_ratios", "default_aspect_ratio"})
 
 
 def _video_param_cap():
@@ -1143,6 +1159,13 @@ def _video_caps_for(model):
     m = str(model or "").strip()
     if not m:
         return {}
+    try:
+        from .video_caps import model_limits as _ml
+        caps = _ml(m) or {}
+        if caps:
+            return caps
+    except Exception:
+        pass
     return MODEL_LIMITS.get(m) or getattr(_arkprov, "VIDEO_MODEL_LIMITS", {}).get(m) or {}
 
 
@@ -1817,7 +1840,14 @@ def _load_sessions():
     sessions = []
     for r in rows:
         try:
-            sessions.append(json.loads(r["data"]))
+            s = json.loads(r["data"])
+
+
+            if isinstance(s, dict):
+                _ts = s.get("createdAt")
+                if isinstance(_ts, (int, float)) and 0 < _ts < 1e12:
+                    s["createdAt"] = int(_ts * 1000)
+            sessions.append(s)
         except Exception:
             pass
     current_id = cur["value"] if cur else None
@@ -1953,7 +1983,12 @@ def _load_agent_sessions():
     out = []
     for r in rows:
         try:
-            out.append(json.loads(r["data"]))
+            s = json.loads(r["data"])
+            if isinstance(s, dict):
+                _ts = s.get("createdAt")
+                if isinstance(_ts, (int, float)) and 0 < _ts < 1e12:
+                    s["createdAt"] = int(_ts * 1000)
+            out.append(s)
         except Exception:
             continue
     cur_id = cur["value"] if cur else None

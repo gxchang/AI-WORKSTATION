@@ -1842,6 +1842,15 @@ def _agent_tool_result_brief(item):
     out = {"kind": item.get("kind")}
     if item.get("error"):
         out["error"] = str(item["error"])[:200]
+
+
+
+    if (item.get("kind") in ("image", "video")
+            and not item.get("error")
+            and not item.get("url")
+            and (item.get("task_id") or item.get("video_id"))):
+        out["pending"] = True
+        out["stage"] = "submitted"
     assets = item.get("assets")
     if isinstance(assets, list):
         out["ok"] = len(assets)
@@ -1948,6 +1957,10 @@ AGENT_CONFIRM_TOOLS = frozenset({
     "generate_video", "generate_image", "generate_audio", "generate_multi_angle",
     "generate_longvideo_assets", "generate_longvideo_audio", "submit_longvideo_job",
 })
+
+
+
+AGENT_ASYNC_TOOLS = frozenset({"generate_video", "generate_image", "generate_multi_angle"})
 AGENT_PLAN_HEAD = "先跟你对一下，还没开始跑："
 AGENT_PLAN_ASK = "要改吗，确认就开始"
 
@@ -2001,7 +2014,12 @@ def _agent_ledger_add(ledger, name, items):
             if isinstance(f, dict):
                 err += 1
                 failed.append(str(f.get("label") or f.get("name") or "未命名")[:24])
-    ledger.append({"tool": name, "ok": ok, "err": err,
+
+
+
+    pending = ok if name in AGENT_ASYNC_TOOLS else 0
+    ledger.append({"tool": name, "ok": ok - pending, "err": err,
+                   "pending": pending,
                    "failed_labels": failed[:8], "reused": reused})
 
 
@@ -2012,6 +2030,9 @@ def _agent_ledger_text(ledger, round_no):
     lines = ["【本回合已执行】"]
     for i, e in enumerate(ledger, 1):
         bits = [e.get("tool") or "?", "成功 %d" % e.get("ok", 0)]
+        if e.get("pending"):
+
+            bits.append("已提交·生成中 %d" % e["pending"])
         if e.get("err"):
             bits.append("失败 %d" % e["err"])
         line = "%d. %s" % (i, " · ".join(bits))
@@ -2361,6 +2382,11 @@ AGENT_SYSTEM_PROMPT = (
     "3. 生成提示词扩写成具体、可拍摄的画面描述，不要照抄用户口语。\n"
     "4. 模式选择：默认 text；用户提供了参考图/音频/视频用 reference；用户明确要求首帧或尾帧用 keyframe。\n"
     "5. 不要编造素材 URL，只能使用用户提供的素材。\n"
+    "5a. 如实区分「已提交」和「已生成完成」：generate_image / generate_multi_angle / generate_video "
+    "是异步提交，工具回执里带 pending、只有任务句柄没有结果 URL，代表任务已受理、图片/视频**还在后台生成**，"
+    "并未完成。看到 pending 时收尾只能说「已提交，正在生成中，稍后自动出结果」，"
+    "严禁说「已生成完成 / 海报已生成 / 做好了」；只有回执里带最终 URL（generate_audio、长视频素材/声线）"
+    "才能说「已生成」。账本里的「已提交·生成中」同理。\n"
     "6. 用户只是闲聊、询问或做与接口无关的事，直接回文字，不要强行调用工具。\n"
     "7. 排版：正文按语义分段，段与段之间空一行；作文/文案/脚本等多段内容严禁挤成一大段。\n"
     "\n"
@@ -5724,7 +5750,10 @@ def api_agent_run_stream(run_id):
 def api_agent_runs_active():
     
     sid = request.args.get("sessionId") or ""
-    row = _runst.active_by_session(sid)
+
+
+    include_terminal = request.args.get("includeTerminal") in ("1", "true", "yes")
+    row = _runst.active_by_session(sid, include_terminal=include_terminal)
     if not row:
         return jsonify({"run": None})
     return jsonify({"run": {"id": row["id"], "status": row["status"],
@@ -6451,7 +6480,7 @@ def api_post_sessions():
         if not isinstance(s, dict) or "id" not in s:
             continue
         s.setdefault("name", "未命名会话")
-        s.setdefault("createdAt", time.time())
+        s.setdefault("createdAt", int(time.time() * 1000))
         s.setdefault("messages", [])
 
 
@@ -8206,7 +8235,8 @@ def api_scrud_create(kind):
     with _DB_LOCK:
         conn = _scrud_conn()
         try:
-            ok, doc = _scrud.create_session(conn, k, sid, data.get("name"))
+            ok, doc = _scrud.create_session(conn, k, sid, data.get("name"),
+                                            created_at=data.get("createdAt"))
             if not ok:
                 return jsonify({"error": "会话 id 已存在。"}), 409
             conn.commit()

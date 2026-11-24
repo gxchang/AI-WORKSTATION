@@ -324,18 +324,38 @@ _PROV_MODEL_KEYS = ("model", "model_id")
 _PROV_RATIO_KEYS = ("ratio", "aspect_ratio")
 
 
-def fit_payload(payload, caps, param_cap):
+def fit_payload(payload, caps, param_cap, strict=True):
     
     try:
         if not isinstance(payload, dict) or not isinstance(caps, dict) or not isinstance(param_cap, dict):
             return payload
+        if not caps:
+            return payload
         out = dict(payload)
-        for key, cap_key in param_cap.items():
-            if key not in out or cap_key not in caps:
+        for key, cap_keys in param_cap.items():
+            if key not in out:
+                continue
+
+
+            _cands = cap_keys if isinstance(cap_keys, (tuple, list)) else (cap_keys,)
+            cap_key = next((c for c in _cands if c in caps), None)
+            if cap_key is None:
+
+
+                if strict:
+                    out.pop(key, None)
                 continue
             want = caps.get(cap_key)
             if isinstance(want, (list, tuple)):
-                if not want or str(out[key]).strip() not in [str(x) for x in want]:
+                def _decl(x):
+                    
+                    if isinstance(x, dict):
+                        for k in ("v", "value", "key"):
+                            if x.get(k) not in (None, ""):
+                                return str(x.get(k)).strip()
+                        return ""
+                    return str(x)
+                if not want or str(out[key]).strip() not in [d for d in (_decl(x) for x in want) if d]:
                     out.pop(key, None)
             elif isinstance(want, dict):
 
@@ -814,6 +834,7 @@ def list_assets():
         con.close()
     pages = (total + size - 1) // size if size else 0
     items = [dict(r) for r in rows]
+
 
 
 
