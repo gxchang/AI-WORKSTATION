@@ -363,21 +363,21 @@ var h="";CVI.loc.marks.forEach(function(m,i){var c=m.color||"#ff4d4f";h+='<div c
 function cvToolLocHtml(n){var st=CVI.loc;var P=window.IE&&window.IE._pure;if(!cvToolSrcUrl(n)){return'<div class="cvt-note">这个节点还没有图片。先点节点下方的「生成」出图，'
 +'或直接选中一张图片素材节点再做局部编辑。</div>';}
 var h='<div class="cvt-tbar">';h+='<div class="cvt-tgrp">'
-+'<button class="cvt-tb'+(st.tool==="circle"?" on":"")+'" data-loctu="circle" title="标记"><span class="ic ic-mark"></span>标记</button>'
-+'<button class="cvt-tb'+(st.tool==="brush"?" on":"")+'" data-loctu="brush" title="涂抹"><span class="ic ic-pencil"></span>涂抹</button>'
++'<button class="cvt-tb'+(st.tool==="circle"?" on":"")+'" data-loctu="circle"><span class="ic ic-mark"></span>标记</button>'
++'<button class="cvt-tb'+(st.tool==="brush"?" on":"")+'" data-loctu="brush"><span class="ic ic-pencil"></span>涂抹</button>'
 +'</div><i class="cvt-tsep"></i>';h+='<div class="cvt-tgrp">';((P&&P.LE_COLORS)||[]).forEach(function(o){h+='<button class="cvt-sw'+(st.color===o.c?" on":"")+'" data-loccolor="'+o.c
-+'" style="--c:'+o.c+'" title="'+o.n+'"></button>';});h+='</div>';if(st.tool==="circle"){h+='<i class="cvt-tsep"></i><div class="cvt-tgrp">'
++'" style="--c:'+o.c+'"></button>';});h+='</div>';if(st.tool==="circle"){h+='<i class="cvt-tsep"></i><div class="cvt-tgrp">'
 +'<span class="cvt-tlab">选框</span>'
-+'<button class="cvt-tic'+(st.shape==="rect"?" on":"")+'" data-locshape="rect" title="矩形选框（拖出矩形）"><span class="ic ic-rect"></span></button>'
-+'<button class="cvt-tic'+(st.shape==="ellipse"?" on":"")+'" data-locshape="ellipse" title="自由画圆（拖出椭圆，拖多远就多大）"><span class="ic ic-ellipse"></span></button>'
++'<button class="cvt-tic'+(st.shape==="rect"?" on":"")+'" data-locshape="rect"><span class="ic ic-rect"></span></button>'
++'<button class="cvt-tic'+(st.shape==="ellipse"?" on":"")+'" data-locshape="ellipse"><span class="ic ic-ellipse"></span></button>'
 +'</div>';}else{h+='<i class="cvt-tsep"></i><div class="cvt-tgrp"><span class="cvt-tlab">笔刷</span>'
 +'<input class="cvt-rg" type="range" data-locbrush="1" min="4" max="60" step="1" value="'+Math.round(st.size)+'">'
 +'<b class="cvt-tv" id="cvtV_brush">'+Math.round(st.size)+'</b>'
 +'</div>';}
 h+='<i class="cvt-tsep"></i>';h+='<div class="cvt-tgrp">'
-+'<button class="cvt-tic" data-act="locUndo" title="撤销（Ctrl+Z）"><span class="ic ic-undo"></span></button>'
-+'<button class="cvt-tic" data-act="locRedo" title="重做（Ctrl+Shift+Z / Ctrl+Y）"><span class="ic ic-redo"></span></button>'
-+'<button class="cvt-tic" data-act="locClear" title="清除全部标注"><span class="ic ic-eraser"></span></button>'
++'<button class="cvt-tic" data-act="locUndo"><span class="ic ic-undo"></span></button>'
++'<button class="cvt-tic" data-act="locRedo"><span class="ic ic-redo"></span></button>'
++'<button class="cvt-tic" data-act="locClear"><span class="ic ic-eraser"></span></button>'
 +'</div>'
 +'<span class="cvt-tcount" id="cvtMkCount">'+CVI.loc.marks.length+' 处</span>';h+='</div>';h+='<div class="cvt-note">提示词按编号逐条组织：把标注1的区域变成…，把标注2的区域变成…，其余保持完全不变。</div>';h+='<div class="cvt-marks" id="cvtMarks">'+cvToolMarksHtml()+'</div>';h+='<div class="cvt-ft"><button class="ie-btn primary" data-act="locGo">去生成</button></div>';return h;}
 function cvToolAnnHost(n){var nodeEl=document.querySelector('[data-node="'+n.id+'"]');if(!nodeEl)return null;var img=nodeEl.querySelector("img.nd-thumb");if(!img)return null;var host=img.parentNode;if(!host)return null;if(getComputedStyle(host).position==="static")host.style.position="relative";return{nodeEl:nodeEl,img:img,host:host};}
@@ -476,15 +476,15 @@ function cvToolAngleHtml(n){var P=cvToolPure();if(!P)return"";var st=CVI.ma;var 
 +'</div>'
 +'<label class="cvt-prec"><input type="checkbox" id="cvtPrec"'+(st.precision?" checked":"")+'>预制机位</label>'
 +'</div><div class="cvt-ps">';var shotList=st.precision?P.SHOT_SIZES.filter(function(s){return(P.PRECISION_SHOT_IDS||{})[s.id];}):P.SHOT_SIZES;h+='<div class="cvt-f"><span class="cvt-lb">景别</span><div class="cvt-chips">';shotList.forEach(function(s){h+='<button class="cvt-ch'+(st.shot===s.id?" on":"")+'" data-shot="'+s.id+'">'+s.label+'</button>';});h+='</div></div>';h+='<div class="cvt-f"><span class="cvt-lb">机位</span><div class="cvt-grid3">';var tipOf=function(p){return P.buildMultiAnglePrompt({horizontal:p.horizontal,vertical:p.vertical,shotSize:p.shotSize||st.shot,preset:p.id,extra:""});};P.ANGLE_PRESETS.filter(function(p){return p.cell;}).forEach(function(p){h+='<button class="cvt-cell'+(st.preset===p.id?" on":"")+'" data-preset="'+p.id
-+'" title="'+esc(tipOf(p))+'">'+p.label+'</button>';});h+='</div></div>';h+='<div class="cvt-f"><span class="cvt-lb">其他</span><div class="cvt-chips">';P.ANGLE_PRESETS.filter(function(p){return!p.cell;}).forEach(function(p){h+='<button class="cvt-ch'+(st.preset===p.id?" on":"")+'" data-preset="'+p.id
-+'" title="'+esc(tipOf(p))+'">'+p.label+'</button>';});h+='</div></div>';h+=cvToolSlider("h","水平",st.h,0,360,"°");h+=cvToolSlider("v","俯仰",st.v,-90,90,"°");h+='</div></div>';return h;}
++'">'+p.label+'</button>';});h+='</div></div>';h+='<div class="cvt-f"><span class="cvt-lb">其他</span><div class="cvt-chips">';P.ANGLE_PRESETS.filter(function(p){return!p.cell;}).forEach(function(p){h+='<button class="cvt-ch'+(st.preset===p.id?" on":"")+'" data-preset="'+p.id
++'">'+p.label+'</button>';});h+='</div></div>';h+=cvToolSlider("h","水平",st.h,0,360,"°");h+=cvToolSlider("v","俯仰",st.v,-90,90,"°");h+='</div></div>';return h;}
 function cvToolLightHtml(n){var P=cvToolPure();if(!P)return"";var st=CVI.li;var near=(P.nearestLightDir?P.nearestLightDir(st.az,st.el,20):null);var nearId=near?((near.id!=null)?near.id:near):"";var h='<div class="cvt-cols"><div class="cvt-ball">'
 +'<div class="ie-sph cvt-sphhost" id="cvtLightHost">'
 +'<canvas id="cvtLightCv"></canvas>'
 +'</div>'
 +'<label class="cvt-prec"><input type="checkbox" id="cvtRim"'+(st.rim?" checked":"")+'>轮廓光</label>'
 +'</div><div class="cvt-ps">';h+='<div class="cvt-f"><span class="cvt-lb">光位</span><div class="cvt-chips">';P.LIGHT_DIRS.forEach(function(d){h+='<button class="cvt-ch'+(nearId===d.id?" on":"")+'" data-ldir="'+d.id
-+'" title="'+d.az+"° / "+d.el+'°">'+d.label+'</button>';});h+='</div></div>';h+=cvToolSlider("az","方位",st.az,0,360,"°");h+=cvToolSlider("el","仰角",st.el,-90,90,"°");h+='<div class="cvt-f"><span class="cvt-lb">视图</span><div class="cvt-chips">';[{id:"perspective",label:"球面"},{id:"front",label:"正视"}].forEach(function(m){h+='<button class="cvt-ch'+(st.vm===m.id?" on":"")+'" data-lvm="'+m.id+'">'+m.label+'</button>';});h+='</div></div>';h+=cvToolSlider("bright","亮度",st.bright,0,100,"%");h+='<div class="cvt-f"><span class="cvt-lb">光色</span>'
++'">'+d.label+'</button>';});h+='</div></div>';h+=cvToolSlider("az","方位",st.az,0,360,"°");h+=cvToolSlider("el","仰角",st.el,-90,90,"°");h+='<div class="cvt-f"><span class="cvt-lb">视图</span><div class="cvt-chips">';[{id:"perspective",label:"球面"},{id:"front",label:"正视"}].forEach(function(m){h+='<button class="cvt-ch'+(st.vm===m.id?" on":"")+'" data-lvm="'+m.id+'">'+m.label+'</button>';});h+='</div></div>';h+=cvToolSlider("bright","亮度",st.bright,0,100,"%");h+='<div class="cvt-f"><span class="cvt-lb">光色</span>'
 +'<input class="cvt-cl" id="cvtColor" type="color" value="'+esc(st.color||"#ffffff")+'">'
 +'<span class="cvt-v">'+esc(st.color||"#ffffff")+'</span></div>';h+='<div class="cvt-f"><span class="cvt-lb">风格</span><div class="cvt-chips">';P.LIGHT_PRESETS.forEach(function(p){h+='<button class="cvt-ch'+(st.preset===p.id?" on":"")+'" data-lpreset="'+p.id+'">'
 +(p.color?'<i class="cvt-dot" style="background:'+p.color+'"></i>':'')+p.label+'</button>';});h+='</div></div>';h+='</div></div>';return h;}

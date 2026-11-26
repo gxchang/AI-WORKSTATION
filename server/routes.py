@@ -369,6 +369,24 @@ def api_config():
             "fallbackReason": _ttsprov.active_state(key)[1],
         }
 
+
+
+
+
+    def _gen_model_effective(kind, allowed):
+        m = _provider.get_gen_model(kind)
+        if m and m in (allowed or []):
+            return m
+        if m:
+            _provider.set_gen_model(kind, "")
+        return ""
+
+    _gen_model_now = {
+        "text": _gen_model_effective("text", _llm.models_for()),
+        "image": _gen_model_effective("image", _img_models),
+        "video": _gen_model_effective("video", _vm_out),
+    }
+
     return jsonify({
         "model": _vm_out[0],
         "videoProvider": {
@@ -402,6 +420,9 @@ def api_config():
             "llmProvider": _llm_winner,
 
             "choice": {k: _provider.get_choice(k) for k in ("video", "image", "tts", "llm")},
+
+
+            "genModel": _gen_model_now,
             "llmModels": _llm.models_for(),
             "assistantLlmModels": _llm.models_for(),
             "storyboardLlmModels": _llm.models_for(),
@@ -1693,8 +1714,12 @@ def api_image_generate():
 
 
 
+
+
 def _agent_llm_model():
-    return _llm.default_model()
+    
+    pinned = _provider.get_gen_model("text")
+    return pinned if (pinned and pinned in list(_llm.models_for() or [])) else None
 
 
 
@@ -1757,6 +1782,7 @@ def _screenplay_second_pass(messages, call, stage, on_progress=None,
     if on_reasoning is None and on_delta is None:
         body, err = _llm_chat_completions(
             msgs, tools=None, tool_choice=None,
+            model=_agent_llm_model(),
             max_tokens=_max_tok,
             timeout=(60, 900))
         if err:
@@ -1769,6 +1795,7 @@ def _screenplay_second_pass(messages, call, stage, on_progress=None,
         return content, think
 
     r = _llm.chat("assistant", msgs, tools=None, tool_choice=None, stream=True,
+                  model=_agent_llm_model(),
                   max_tokens=_max_tok, timeout=(60, 900))
     if r.status_code != 200:
         try:
@@ -1883,6 +1910,7 @@ def _agent_tool_second_pass(messages, calls, items, first_content="",
     if on_reasoning is None and on_delta is None:
         body, err = _llm_chat_completions(
             msgs, tools=None, tool_choice=None,
+            model=_agent_llm_model(),
             max_tokens=_max_tok, timeout=(60, 900))
         if err:
             raise RuntimeError(err)
@@ -1893,6 +1921,7 @@ def _agent_tool_second_pass(messages, calls, items, first_content="",
             think, content = _agent_split_think(content)
         return content, think
     r = _llm.chat("assistant", msgs, tools=None, tool_choice=None, stream=True,
+                  model=_agent_llm_model(),
                   max_tokens=_max_tok, timeout=(60, 900))
     if r.status_code != 200:
         try:
@@ -2051,6 +2080,7 @@ def _agent_hop_stream(msgs, on_reasoning=None, on_delta=None, on_tool=None, tool
                    tools=(_agent_tools() if tools == "default" else tools),
                    tool_choice=("auto" if tools == "default" else None),
                    stream=True,
+                   model=_agent_llm_model(),
                    max_tokens=_llm.max_output_for("assistant", AGENT_MAX_TOKENS),
                    timeout=(60, 600))
     if _r.status_code != 200:
@@ -2703,6 +2733,37 @@ def _img_ratios_for_agent():
     return [r for r in _IMG_RATIOS_ALL if r in allowed] or list(_IMG_RATIOS_ALL)
 
 
+def _img_sizes_for_model(model):
+    
+    prov = _img_provider_now()
+    src = _IMG_PROV_SRC.get(prov, _IMG_PROV_SRC["agnes"])
+    caps = (src["limits"]() or {}).get(model) or {}
+    if prov == "ark":
+        tiers = list(caps.get("tiers") or [])
+        return sorted(tiers, key=lambda x: _imgen.PIXEL_TIERS.get(x, 0)) if tiers else list(_IMG_TIERS_ALL)
+    if prov == "ms":
+        out = _imgen.reachable_tiers("ms", {model: caps})
+        return [t for t in _IMG_TIERS_ALL if t in out] or ["1K"]
+    return list(_IMG_TIERS_ALL)
+
+
+def _img_ratios_for_model(model):
+    
+    prov = _img_provider_now()
+    if prov != "ms":
+        return list(_IMG_RATIOS_ALL)
+    src = _IMG_PROV_SRC.get("ms")
+    caps = (src["limits"]() or {}).get(model) or {}
+    ratios = list(caps.get("ratios") or [])
+    return [r for r in _IMG_RATIOS_ALL if r in ratios] or list(_IMG_RATIOS_ALL)
+
+
+def _agent_pinned_model(kind, allowed):
+    
+    m = _provider.get_gen_model(kind)
+    return m if (m and m in (allowed or [])) else ""
+
+
 
 
 
@@ -2741,7 +2802,9 @@ def _agent_video_caps():
     models, limits = _video_provider_models()
     all_limits = dict(MODEL_LIMITS)
     all_limits.update(limits or {})
-    model = ((models or [])[0]
+
+    model = (_agent_pinned_model("video", models)
+             or (models or [])[0]
              or (_provider.get("video_models") or ["agnes-video-2.5-flash"])[0])
     return model, (all_limits.get(model) or {})
 
@@ -2749,7 +2812,13 @@ def _agent_video_caps():
 def _agent_tools():
     
     tools = json.loads(json.dumps(AGENT_TOOLS, ensure_ascii=False))
-    sizes, ratios = _img_sizes_for_agent(), _img_ratios_for_agent()
+
+    _img_src = _IMG_PROV_SRC.get(_img_provider_now(), _IMG_PROV_SRC["agnes"])
+    _pinned_img = _agent_pinned_model("image", list(_img_src["models"]() or []))
+    if _pinned_img:
+        sizes, ratios = _img_sizes_for_model(_pinned_img), _img_ratios_for_model(_pinned_img)
+    else:
+        sizes, ratios = _img_sizes_for_agent(), _img_ratios_for_agent()
     for t in tools:
         fn = t.get("function") or {}
         if fn.get("name") == "generate_image":
@@ -3314,7 +3383,10 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None,
     _caps = _psrc["caps"]
     _cands = [m for m in _psrc["models"]() if (_caps(m) if _caps else {}).get("can_t2i")] if _caps \
         else list(_psrc["models"]())
-    _img_model = (_cands or _psrc["models"]() or [""])[0]
+
+
+    _pinned_img = _agent_pinned_model("image", list(_psrc["models"]() or []))
+    _img_model = _pinned_img or (_cands or _psrc["models"]() or [""])[0]
 
 
 
@@ -3447,7 +3519,8 @@ def _lv_generate_assets(assets, on_progress=None, on_item=None, session_id=None,
         if _refs and _caps:
             _ed = [m for m in _psrc["models"]() if (_caps(m) or {}).get("can_edit")]
             if _ed:
-                _model = _ed[0]
+
+                _model = (_pinned_img if _pinned_img in _ed else _ed[0])
         _payload = {"prompt": prompt, "model": _model}
         if _refs:
 
@@ -4062,6 +4135,12 @@ def _agent_run_tool(name, args, session_id, on_progress=None, on_item=None, on_d
 
             "_parent_run_id": local_tid,
         }
+
+
+        _img_src = _IMG_PROV_SRC.get(_img_provider_now(), _IMG_PROV_SRC["agnes"])
+        _pim = _agent_pinned_model("image", list(_img_src["models"]() or []))
+        if _pim:
+            payload["model"] = _pim
         body, code = _submit_image_task(payload)
         if code == 200:
             return {
@@ -5798,6 +5877,7 @@ def api_agent():
 
     body, err = _llm_chat_completions(messages, tools=_agent_tools() if _allow_tools else None,
                                       tool_choice="auto" if _allow_tools else None,
+                                      model=_agent_llm_model(),
                                       max_tokens=_llm.max_output_for("assistant", AGENT_MAX_TOKENS),
                                       timeout=(60, 900))
     if err:
@@ -7838,6 +7918,31 @@ def api_provider_select():
           "tts": _tts_provider_state(), "llm": _llm._resolve_now()}[kind]
     return jsonify({"ok": True, "kind": kind, "provider": key, "state": st,
                     "warning": st.get("note") or ""})
+
+
+
+
+
+@app.route("/api/gen_model/select", methods=["POST"])
+def api_gen_model_select():
+    data = request.get_json(silent=True) or {}
+    kind = str(data.get("kind") or "").strip().lower()
+    model = str(data.get("model") or "").strip()
+    if kind not in _provider.GEN_MODEL_KINDS:
+        return jsonify({"error": "未知的生成模型类型：%r" % kind}), 400
+    if model:
+
+        if kind == "text":
+            allowed = list(_llm.models_for() or [])
+        elif kind == "image":
+            _src = _IMG_PROV_SRC.get(_img_provider_now(), _IMG_PROV_SRC["agnes"])
+            allowed = list(_src["models"]() or [])
+        else:
+            allowed = list((_video_provider_models()[0]) or [])
+        if model not in allowed:
+            return jsonify({"error": "模型「%s」不在当前生效家清单里" % model}), 400
+    _provider.set_gen_model(kind, model)
+    return jsonify({"ok": True, "kind": kind, "model": model})
 
 
 

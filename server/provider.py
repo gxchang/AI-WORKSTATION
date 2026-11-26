@@ -200,6 +200,30 @@ def set_choice(kind, key):
 
 
 
+
+
+
+GEN_MODEL_KINDS = ("text", "image", "video")
+
+
+def get_gen_model(kind):
+    if kind not in GEN_MODEL_KINDS:
+        return ""
+    return str(_meta_get("gen_model_" + kind) or "").strip()
+
+
+def set_gen_model(kind, model):
+    if kind not in GEN_MODEL_KINDS:
+        raise ValueError("未知的生成模型类型：%r" % kind)
+    m = str(model or "").strip()
+    if m:
+        _meta_set("gen_model_" + kind, m)
+    else:
+        _meta_del("gen_model_" + kind)
+    return m
+
+
+
 def _truthy(v):
     
     return str(v or "").strip().lower() in ("1", "true", "yes", "on")

@@ -6,12 +6,15 @@
 <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" data-page-node-id="eARpX5DyCtk5eTASVAyg1G" />
 <meta http-equiv="Pragma" content="no-cache" data-page-node-id="TxqexwLIVDeqCwcgy04dJQ" />
 <meta http-equiv="Expires" content="0" data-page-node-id="eHaf3KuCAKCdvpKdQUGKmW" />
-<title>视频生成工作台</title>
+<title>AI生成工作台</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjEyIDExIDY0IDY3Ij48ZGVmcz48cmFkaWFsR3JhZGllbnQgaWQ9ImIiIGN4PSIzNCUiIGN5PSIyNCUiIHI9IjgyJSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjNjQ1YzdhIi8+PHN0b3Agb2Zmc2V0PSIuNTIiIHN0b3AtY29sb3I9IiM0NjNmNWIiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMyOTI0MzgiLz48L3JhZGlhbEdyYWRpZW50PjxyYWRpYWxHcmFkaWVudCBpZD0iZSIgY3g9IjQyJSIgY3k9IjMwJSIgcj0iNzYlIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNmZmU2YjgiLz48c3RvcCBvZmZzZXQ9Ii40NiIgc3RvcC1jb2xvcj0iI2Q4YTA1NCIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzdjNTIyMCIvPjwvcmFkaWFsR3JhZGllbnQ+PC9kZWZzPjxwYXRoIGQ9Ik0yNCAzMyBRMjAgMTEgMzMgMTkgUTQxIDI0IDQxIDM0IFoiIGZpbGw9InVybCgjYikiLz48cGF0aCBkPSJNNjQgMzMgUTY4IDExIDU1IDE5IFE0NyAyNCA0NyAzNCBaIiBmaWxsPSJ1cmwoI2IpIi8+PHBhdGggZD0iTTQ0IDE1IEM2MyAxNSA3NiAyOSA3NiA0OCBDNzYgNjcgNjMgNzggNDQgNzggQzI1IDc4IDEyIDY3IDEyIDQ4IEMxMiAyOSAyNSAxNSA0NCAxNSBaIiBmaWxsPSJ1cmwoI2IpIi8+PGVsbGlwc2UgY3g9IjMzIiBjeT0iNDYiIHJ4PSI5LjYiIHJ5PSIxMS40IiBmaWxsPSJ1cmwoI2UpIi8+PGVsbGlwc2UgY3g9IjU1IiBjeT0iNDYiIHJ4PSI5LjYiIHJ5PSIxMS40IiBmaWxsPSJ1cmwoI2UpIi8+PGVsbGlwc2UgY3g9IjMzIiBjeT0iNDciIHJ4PSIyLjkiIHJ5PSI4IiBmaWxsPSIjMzMyNDEzIiBvcGFjaXR5PSIuODUiLz48ZWxsaXBzZSBjeD0iNTUiIGN5PSI0NyIgcng9IjIuOSIgcnk9IjgiIGZpbGw9IiMzMzI0MTMiIG9wYWNpdHk9Ii44NSIvPjxjaXJjbGUgY3g9IjMwIiBjeT0iNDIiIHI9IjIuNyIgZmlsbD0iI2ZmZiIgb3BhY2l0eT0iLjkyIi8+PGNpcmNsZSBjeD0iNTIiIGN5PSI0MiIgcj0iMi43IiBmaWxsPSIjZmZmIiBvcGFjaXR5PSIuOTIiLz48cGF0aCBkPSJNNDEgNTkgTDQ3IDU5IEw0NCA2Mi41IFoiIGZpbGw9IiNkOThjYWUiLz48cGF0aCBkPSJNNDQgNjIuNSBRNDAgNjcgMzYgNjQgTTQ0IDYyLjUgUTQ4IDY3IDUyIDY0IiBmaWxsPSJub25lIiBzdHJva2U9IiNlN2MyZDMiIHN0cm9rZS13aWR0aD0iMS40IiBzdHJva2UtbGluZWNhcD0icm91bmQiIG9wYWNpdHk9Ii43Ii8+PC9zdmc+">
 
-<link rel="stylesheet" href="/api/base_style.css?v=20261124b">
+<link rel="stylesheet" href="/api/base_style.css?v=20261125e">
 <script>
 
 try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "session") document.documentElement.classList.add("boot-defer"); } catch (e) {}
+
+try { if (localStorage.getItem("wb_theme") === "dark") document.documentElement.setAttribute("data-theme","dark"); } catch (e) {}
 </script>
 </head>
 <body data-page-node-id="HsjgyXIv9KRAMASK9LZ2lp">
@@ -108,13 +111,13 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
         <div class="prov-hint">可接入：agnes-3.0-flash、agnes-2.5-flash</div>
         <div class="prov-adv" id="provChatAdv">
           <div class="adv-row">
-            <label title="不用管这个勾——Agnes 的模型本来就支持工具调用，勾不勾效果都一样"><input type="checkbox" id="provChatCapsTools" checked> 工具调用</label>
-            <label title="不用管这个勾——Agnes 的模型本来就能看图，勾不勾效果都一样"><input type="checkbox" id="provChatCapsVision" checked> 图片识别</label>
+            <label><input type="checkbox" id="provChatCapsTools" checked> 工具调用</label>
+            <label><input type="checkbox" id="provChatCapsVision" checked> 图片识别</label>
             <label><input type="checkbox" id="provChatThinking" checked> 思考模式</label>
           </div>
           <div class="adv-row" id="provChatBudgetRow" hidden>
             <span class="adv-lbl">思考强度</span>
-            <div class="seg adv-seg-dis" id="segAgnesBudget" title="Agnes 的思考是开关式（enable_thinking），接口无强度参数">
+            <div class="seg adv-seg-dis" id="segAgnesBudget">
               <select id="provChatBudget" style="display:none" disabled>
                 <option value="auto">自动</option>
                 <option value="low">低</option>
@@ -557,8 +560,8 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
       </div>
 
       <div class="bar" data-page-node-id="Ub1gYRDRfQoU34nbqgldGj">
-        <button class="icon-btn" id="upIconBtn" data-page-node-id="OchmDr4kDmEWUMOdFVzPvl"><span data-page-node-id="WbpxGfoXnt2SWyD08yCyXA">＋</span></button>
-        <button class="icon-btn" id="atChip" data-page-node-id="UQTSzyYtmKLO4n3zuz7AwE"><span data-page-node-id="9xcnLaq9ICB1a5pB8WfxN8">@</span></button>
+        <button class="icon-btn" id="upIconBtn" data-page-node-id="OchmDr4kDmEWUMOdFVzPvl"><span class="ic ic-plus" data-page-node-id="WbpxGfoXnt2SWyD08yCyXA"></span></button>
+        <button class="icon-btn" id="atChip" data-page-node-id="UQTSzyYtmKLO4n3zuz7AwE"><span class="ic ic-at" data-page-node-id="9xcnLaq9ICB1a5pB8WfxN8"></span></button>
         <div class="seg" id="mediaSel" data-seg="media" data-page-node-id="lggRRtSqSfHdmzMoSTLIyg">
           <button type="button" class="seg-cur" data-page-node-id="PdAffcl1STe9tR8rJ67CzK"><span class="seg-tx" data-page-node-id="WOGAIi9eqtDSB73TAMNpaa">视频生成</span><span class="seg-ar ic ic-chevron-down" data-page-node-id="mVy2jD8BB6IcTVWtE8DWUb"></span></button>
           <select id="media" style="display:none" data-page-node-id="cK5ACMyMgdTqQtzO9hkBjp">
@@ -831,9 +834,10 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
         <div class="editable" id="agentPrompt" contenteditable="true"
              data-ph="你想对我说什么？"></div>
         <div class="agent-bar">
-          <button class="icon-btn" id="agentUpIcon"><span>＋</span></button>
-          <button class="icon-btn" id="agentAtChip"><span>@</span></button>
+          <button class="icon-btn" id="agentUpIcon"><span class="ic ic-plus"></span></button>
+          <button class="icon-btn" id="agentAtChip"><span class="ic ic-at"></span></button>
           <button class="agent-topic-btn" id="agentTopicBtn"><span>选题</span><span class="atp-ar seg-ar ic ic-chevron-down"></span></button>
+          <button class="agent-topic-btn agent-modelpref-btn" id="agentModelPrefBtn" aria-expanded="false"><span id="agentModelPrefTx">模型：自动</span><span class="atp-ar seg-ar ic ic-chevron-down"></span></button>
           <span class="agent-up-tip" id="agentUpTip"></span>
           <button class="agent-send" id="agentSend" aria-label="发送"><span class="ic ic-arrow-up"></span></button>
         </div>
@@ -856,7 +860,19 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
   <div class="atp-list" id="agentTopicList"></div>
 </div>
 
-<script src="/api/base_ui.js?v=20261124a"></script>
+
+<div class="seg-pop agent-modelpref-pop" id="agentModelPrefPop">
+  <div class="amp-hd"><span class="amp-title">模型偏好</span></div>
+  <div class="amp-tabs" id="agentModelPrefTabs">
+    <div class="seg-it amp-tab on" data-kind="text">文本</div>
+    <div class="seg-it amp-tab" data-kind="image">图片</div>
+    <div class="seg-it amp-tab" data-kind="video">视频</div>
+    <div class="seg-it amp-tab" data-kind="audio">音频</div>
+  </div>
+  <div class="amp-list" id="agentModelPrefList"></div>
+</div>
+
+<script src="/api/base_ui.js?v=20261125e"></script>
 
   <script src="/api/assets_ui.js?v=20260930g"></script>
   <script src="/api/assets_picker.js?v=20261104a"></script>
@@ -869,6 +885,28 @@ try { var _wbv = localStorage.getItem("wb_cur_view"); if (_wbv && _wbv !== "sess
   <script src="/api/canvas_stage.js?v=20261124a"></script>
 <script src="/api/tts_upload.js?v=20260918d"></script>
 <script src="/api/audio_ui.js?v=20261124a"></script>
+
+
+<button id="themeToggle" class="theme-toggle" type="button" data-tip="切换深色主题" title="切换深色主题" aria-label="切换深色主题">
+  <span class="ic ic-moon" aria-hidden="true"></span>
+</button>
+<script>
+(function(){
+  var btn=document.getElementById("themeToggle"), root=document.documentElement;
+  function sync(){
+    var dark=root.getAttribute("data-theme")==="dark", label=dark?"切换浅色主题":"切换深色主题";
+    btn.title=label; btn.setAttribute("data-tip",label); btn.setAttribute("aria-label",label);
+    btn.querySelector(".ic").className="ic "+(dark?"ic-sun":"ic-moon");
+  }
+  function setTheme(dark){
+    if(dark) root.setAttribute("data-theme","dark"); else root.removeAttribute("data-theme");
+    try{ localStorage.setItem("wb_theme", dark?"dark":"light"); }catch(e){}
+    sync();
+  }
+  sync();
+  btn.addEventListener("click",function(){ setTheme(root.getAttribute("data-theme")!=="dark"); });
+})();
+</script>
 
 </body>
 </html>

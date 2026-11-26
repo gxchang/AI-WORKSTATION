@@ -537,7 +537,7 @@
       card.innerHTML = `
         <input type="checkbox" class="lv-i-sel" data-name="${a.name}"${_selNames.has(a.name) ? " checked" : ""}>
         ${th}
-        <input class="lv-i-label" title="${f.labelTitle}" placeholder="${f.isAudio ? "标签＝声线名（如 橘猫声线）" : (a.kind === "scene" ? "标签＝场景名（如 客厅）" : a.kind === "prop" ? "标签＝道具名（如 毛线球）" : "标签＝角色名（如 橘猫）")}" value="${esc(a.label)}">
+        <input class="lv-i-label" placeholder="${f.isAudio ? "标签＝声线名（如 橘猫声线）" : (a.kind === "scene" ? "标签＝场景名（如 客厅）" : a.kind === "prop" ? "标签＝道具名（如 毛线球）" : "标签＝角色名（如 橘猫）")}" value="${esc(a.label)}">
         ${f.typeField}
         ${f.ownerField}
         ${f.voiceField}

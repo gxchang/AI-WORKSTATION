@@ -7,12 +7,12 @@ const TABS=[["created","创作资产"],["uploaded","主体资产"]];const AXIS={
 .ap-mask{position:absolute;inset:0;background:rgba(0,0,0,.45);backdrop-filter:blur(1px)}
 .ap-modal{position:relative;display:flex;flex-direction:column;width:min(880px,92vw);max-height:84vh;background:var(--card,#fff);border:1px solid var(--line,#e3e3e8);border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,.28);overflow:hidden}
 .ap-hd{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line,#e3e3e8)}
-.ap-title{margin:0;font-size:15px;font-weight:600;color:var(--txt,#1d1d1f)}
+.ap-title{margin:0;font-size:15px;font-weight:400;color:var(--txt,#1d1d1f)}
 .ap-x{margin-left:auto;width:30px;height:30px;border:0;border-radius:8px;background:var(--card-2,#f2f2f5);color:var(--txt,#1d1d1f);font-size:20px;line-height:1;cursor:pointer}
 .ap-x:hover{background:var(--vio-soft,#ece9ff)}
 .ap-filters{display:flex;flex-direction:column;gap:10px;padding:12px 18px;border-bottom:1px solid var(--line,#e3e3e8)}
 .ap-tabs{display:flex;gap:6px}
-.ap-tab{padding:6px 14px;border:1px solid var(--line,#e3e3e8);border-radius:9px;background:var(--card,#fff);color:var(--mut,#6b6b70);font-size:13px;font-weight:600;cursor:pointer}
+.ap-tab{padding:6px 14px;border:1px solid var(--line,#e3e3e8);border-radius:9px;background:var(--card,#fff);color:var(--mut,#6b6b70);font-size:13px;font-weight:400;cursor:pointer}
 .ap-tab.on{background:var(--vio,#6b4bff);border-color:var(--vio,#6b4bff);color:#fff}
 .ap-chips{display:flex;gap:6px;flex-wrap:wrap}
 .ap-chip{padding:5px 12px;border:1px solid var(--line,#e3e3e8);border-radius:999px;background:var(--card,#fff);color:var(--mut,#6b6b70);font-size:13px;cursor:pointer}
@@ -21,7 +21,7 @@ const TABS=[["created","创作资产"],["uploaded","主体资产"]];const AXIS={
 .ap-empty{padding:40px;text-align:center;color:var(--mut,#6b6b70)}
 .ap-loading{padding:40px;color:var(--mut,#6b6b70)}
 
-.ap-day{flex:0 0 100%;font-size:13px;font-weight:600;color:var(--txt,#1d1d1f);padding:2px 2px 0}
+.ap-day{flex:0 0 100%;font-size:13px;font-weight:400;color:var(--txt,#1d1d1f);padding:2px 2px 0}
 .ap-card{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;width:110px;cursor:pointer}
 .ap-card .src-chip{position:relative;overflow:hidden;width:110px;height:110px;margin:0;border-radius:12px;box-shadow:0 0 0 2px transparent;transition:box-shadow .12s;cursor:pointer}
 .ap-card:hover .src-chip{box-shadow:0 0 0 2px var(--vio-soft,#ece9ff)}
@@ -30,7 +30,7 @@ const TABS=[["created","创作资产"],["uploaded","主体资产"]];const AXIS={
 .ap-card .al-audio-wave.pk{position:absolute;inset:0;width:100%;height:100%;display:block;background:linear-gradient(135deg,#eef0ff,#e6ecff);border-radius:12px}
 
 .ap-card .al-video-thumb{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;background:#000}
-.ap-card .al-dur{position:absolute;right:4px;bottom:4px;padding:3px;font-size:12px;line-height:1.2;font-weight:600;color:#fff;pointer-events:none;font-variant-numeric:tabular-nums;text-shadow:rgba(0,0,0,.8) 0 1px 0;z-index:2}
+.ap-card .al-dur{position:absolute;right:4px;bottom:4px;padding:3px;font-size:12px;line-height:1.2;font-weight:400;color:#fff;pointer-events:none;font-variant-numeric:tabular-nums;text-shadow:rgba(0,0,0,.8) 0 1px 0;z-index:2}
 .ap-card .ap-name{font-size:12px;color:var(--mut,#6b6b70);max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center}
 .ap-ck{position:absolute;top:6px;left:6px;width:18px;height:18px;border-radius:5px;background:rgba(255,255,255,.92);border:1px solid var(--vio,#6b4bff);display:none}
 .ap-card.sel .ap-ck{display:block;background:var(--vio,#6b4bff)}
